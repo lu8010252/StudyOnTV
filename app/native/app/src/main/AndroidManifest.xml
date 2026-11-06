@@ -104,5 +104,10 @@
                 <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
+        <!-- 自唤醒：AlarmManager 每分钟检查一次，服务被系统杀掉（电视内存太小）就重新拉起 -->
+        <receiver
+            android:name=".ReviveReceiver"
+            android:exported="false" />
     </application>
 </manifest>

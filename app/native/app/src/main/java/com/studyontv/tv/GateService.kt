@@ -32,9 +32,15 @@ class GateService : Service() {
     }
     private var anchor: View? = null
     private lateinit var overlay: GateOverlay
+    private var ticks = 0
     private val tick = object : Runnable {
         override fun run() {
             try { checkForeground() } catch (e: Exception) { android.util.Log.e("StudyOnTV", "Screen time check failed", e) }
+            // 每 5 秒落一次计时心跳：电视内存小，进程随时会被系统杀掉，重启后靠它算漏掉的时长
+            if (++ticks >= 5) {
+                ticks = 0
+                Prefs.setHeartbeat(this@GateService, System.currentTimeMillis(), wasUsing)
+            }
             handler.postDelayed(this, 1000)
         }
     }
@@ -141,16 +147,30 @@ class GateService : Service() {
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm).setContentIntent(pi).setOngoing(true).build()
         if (Build.VERSION.SDK_INT >= 34) startForeground(1001, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         else startForeground(1001, notification)
+        // 被杀期间秒表停了，先按 UsageStats 事件补记漏掉的时长（后台线程，别卡住启动）
+        Thread {
+            try { UsageBackfill.run(this) } catch (e: Exception) { android.util.Log.e("StudyOnTV", "Usage backfill failed", e) }
+        }.apply { isDaemon = true; name = "usage-backfill" }.start()
+        // 排下一次自唤醒闹钟，保证服务被系统杀掉后一分钟内还能回来
+        Revive.rearm(this)
         handler.post(tick)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
     override fun onBind(intent: Intent?): IBinder? = null
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // 被“从最近任务里划掉”时也把自唤醒闹钟续上
+        Revive.rearm(this)
+        super.onTaskRemoved(rootIntent)
+    }
     override fun onDestroy() {
         handler.removeCallbacks(tick)
         hideAll(); updateAnchor(false)
         instance = null
         Prefs.setServiceRunning(this, false)
+        // 正常停止前把心跳落准，下次启动补记不会多算
+        Prefs.setHeartbeat(this, System.currentTimeMillis(), wasUsing)
+        Revive.rearm(this)
         super.onDestroy()
     }
 
@@ -175,6 +195,7 @@ class GateService : Service() {
             val intent = Intent(context, GateService::class.java)
             if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
         }
+        fun isRunning(): Boolean = instance != null
         fun hasGate(): Boolean = WatchAccessibilityService.hasGate() || instance?.overlay?.isShowing == true
         fun hideGates() {
             Handler(Looper.getMainLooper()).post { instance?.overlay?.hide(); WatchAccessibilityService.hideGate() }
