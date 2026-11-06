@@ -67,11 +67,39 @@ class AnswerInputActivity : Activity() {
         }
         root.addView(status)
 
+        // 底部按钮先建好，把 id 交给最后一排按键做“向下焦点”目标，
+        // 否则系统按几何位置猜，焦点会跑到「取消」上（用户按完成反而取消了）
+        val doneKey = Button(this).apply {
+            id = View.generateViewId()
+            text = "完成"
+            textSize = 20f
+            applyKeyStyle()
+            setOnClickListener { deliver() }
+        }
+        val cancelKey = Button(this).apply {
+            id = View.generateViewId()
+            text = "取消"
+            textSize = 20f
+            applyKeyStyle()
+            setOnClickListener { finish() }
+        }
+        val systemKey = Button(this).apply {
+            id = View.generateViewId()
+            text = "系统键盘"
+            textSize = 14f
+            applyKeyStyle()
+            setOnClickListener { showSystemKeyboard() }
+        }
+        val actionKeys = listOf(doneKey, cancelKey, systemKey)
+
         var firstKey: Button? = null
-        for (row in rows) {
+        var lastRowKeys: List<Button> = emptyList()
+        for ((rowIndex, row) in rows.withIndex()) {
             val line = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            val built = mutableListOf<Button>()
             for (label in row) {
                 val key = Button(this).apply {
+                    id = View.generateViewId()
                     text = label
                     textSize = 18f
                     isAllCaps = false
@@ -79,33 +107,22 @@ class AnswerInputActivity : Activity() {
                     setOnClickListener { press(label) }
                 }
                 line.addView(key, LinearLayout.LayoutParams(0, dp(52), 1f).apply { setMargins(dp(2), dp(2), dp(2), dp(2)) })
+                built.add(key)
                 if (firstKey == null) firstKey = key
             }
+            if (rowIndex == rows.lastIndex) lastRowKeys = built
             root.addView(line)
+        }
+        // 最后一排按列对应到底部按钮：0-2→完成，3-6→取消，7-9→系统键盘
+        for ((index, key) in lastRowKeys.withIndex()) {
+            key.nextFocusDownId = actionKeys[minOf(actionKeys.lastIndex, index * actionKeys.size / lastRowKeys.size)].id
         }
 
         val actions = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, dp(10), 0, 0)
         }
-        actions.addView(Button(this).apply {
-            text = "完成"
-            textSize = 20f
-            applyKeyStyle()
-            setOnClickListener { deliver() }
-        }, LinearLayout.LayoutParams(0, dp(56), 1f).apply { setMargins(dp(4), 0, dp(4), 0) })
-        actions.addView(Button(this).apply {
-            text = "取消"
-            textSize = 20f
-            applyKeyStyle()
-            setOnClickListener { finish() }
-        }, LinearLayout.LayoutParams(0, dp(56), 1f).apply { setMargins(dp(4), 0, dp(4), 0) })
-        actions.addView(Button(this).apply {
-            text = "系统键盘"
-            textSize = 14f
-            applyKeyStyle()
-            setOnClickListener { showSystemKeyboard() }
-        }, LinearLayout.LayoutParams(0, dp(56), 1f).apply { setMargins(dp(4), 0, dp(4), 0) })
+        for (key in actionKeys) actions.addView(key, LinearLayout.LayoutParams(0, dp(56), 1f).apply { setMargins(dp(4), 0, dp(4), 0) })
         root.addView(actions)
 
         setContentView(root)
