@@ -2,7 +2,10 @@ package com.studyontv.tv
 
 import android.app.Activity
 import android.content.Context
+import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.StateListDrawable
 import android.os.Bundle
 import android.view.Gravity
 import android.view.inputmethod.InputMethodManager
@@ -72,6 +75,7 @@ class AnswerInputActivity : Activity() {
                     text = label
                     textSize = 18f
                     isAllCaps = false
+                    applyKeyStyle()
                     setOnClickListener { press(label) }
                 }
                 line.addView(key, LinearLayout.LayoutParams(0, dp(52), 1f).apply { setMargins(dp(2), dp(2), dp(2), dp(2)) })
@@ -86,15 +90,20 @@ class AnswerInputActivity : Activity() {
         }
         actions.addView(Button(this).apply {
             text = "完成"
+            textSize = 20f
+            applyKeyStyle()
             setOnClickListener { deliver() }
         }, LinearLayout.LayoutParams(0, dp(56), 1f).apply { setMargins(dp(4), 0, dp(4), 0) })
         actions.addView(Button(this).apply {
             text = "取消"
+            textSize = 20f
+            applyKeyStyle()
             setOnClickListener { finish() }
         }, LinearLayout.LayoutParams(0, dp(56), 1f).apply { setMargins(dp(4), 0, dp(4), 0) })
         actions.addView(Button(this).apply {
             text = "系统键盘"
             textSize = 14f
+            applyKeyStyle()
             setOnClickListener { showSystemKeyboard() }
         }, LinearLayout.LayoutParams(0, dp(56), 1f).apply { setMargins(dp(4), 0, dp(4), 0) })
         root.addView(actions)
@@ -102,6 +111,32 @@ class AnswerInputActivity : Activity() {
         setContentView(root)
         refresh()
         firstKey?.requestFocus()
+    }
+
+    // 投影上用遥控器操作，必须让用户一眼看出当前选中哪个键：选中时换成橙色底、深色字
+    private fun Button.applyKeyStyle() {
+        setBackground(keyBackground())
+        setTextColor(ColorStateList(
+            arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf(android.R.attr.state_pressed), intArrayOf()),
+            intArrayOf(0xFF08080A.toInt(), 0xFF08080A.toInt(), Color.WHITE)
+        ))
+        stateListAnimator = null
+    }
+
+    private fun keyBackground(): StateListDrawable {
+        val focused = GradientDrawable().apply {
+            setColor(0xFFFFB020.toInt())
+            cornerRadius = dp(6).toFloat()
+        }
+        val normal = GradientDrawable().apply {
+            setColor(0xFF2A2A30.toInt())
+            cornerRadius = dp(6).toFloat()
+        }
+        return StateListDrawable().apply {
+            addState(intArrayOf(android.R.attr.state_focused), focused)
+            addState(intArrayOf(android.R.attr.state_pressed), focused)
+            addState(intArrayOf(), normal)
+        }
     }
 
     private fun press(label: String) {
