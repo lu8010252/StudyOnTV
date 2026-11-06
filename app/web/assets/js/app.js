@@ -308,6 +308,8 @@
       var version = state.config.version;
       loadState(function (error) {
         if (error) return;
+        if (state.screen === 'lock' && !state.lockReason && !state.learning.reason && state.learning.remainingSeconds > 0)
+          $('lockDesc').textContent = '还可以使用 ' + Math.ceil(state.learning.remainingSeconds / 60) + ' 分钟（停在本页不计时，离开去看电视后才开始计时）';
         if (state.awaiting) { start(); return; }
         if (state.screen === 'lock' && state.lockReason !== state.learning.reason) {
           if (!state.learning.reason) start(); else lock(state.learning.reason);
