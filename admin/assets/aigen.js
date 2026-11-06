@@ -90,6 +90,12 @@
     var batch = el('input', { type: 'number', min: '5', max: '30', 'data-editing': '1', style: INP, value: String(d.batchSize) });
     var low = el('input', { type: 'number', min: '10', max: '500', 'data-editing': '1', style: INP, value: String(d.lowWater) });
     var daily = el('input', { type: 'number', min: '1', max: '30', 'data-editing': '1', style: INP, value: String(d.dailyBatches) });
+    var challenge = el('select', { 'data-editing': '1', style: INP }, [
+      el('option', { value: 'standard', text: '标准：2–3 星为主，接近课本例题' }),
+      el('option', { value: 'advanced', text: '提高：3–4 星为主，比课本略难（推荐）' }),
+      el('option', { value: 'hard', text: '挑战：4–5 星为主，多步综合、易错点多' })
+    ]);
+    challenge.value = d.challenge || 'advanced';
 
     var profBox = el('div', {});
     var profiles = JSON.parse(JSON.stringify(d.profiles || []));
@@ -113,7 +119,7 @@
     drawProfiles();
 
     var save = function (after) {
-      var body = { enabled: enabled.checked, endpoint: endpoint.value.trim(), model: model.value.trim(), batchSize: +batch.value, lowWater: +low.value, dailyBatches: +daily.value,
+      var body = { enabled: enabled.checked, endpoint: endpoint.value.trim(), model: model.value.trim(), batchSize: +batch.value, lowWater: +low.value, dailyBatches: +daily.value, challenge: challenge.value,
         profiles: profiles.map(function (p) { return { subject: p.subject, level: p.level, grade: p.grade, textbook: p.textbook, focus: p.focus }; }) };
       if (key.value) body.apiKey = key.value;
       msg.style.color = '#6b7280'; msg.textContent = '保存中…';
@@ -148,13 +154,14 @@
         el('div', { style: 'flex:1' }, [el('div', { text: '每批题数（5–30）', style: 'font-size:12px' }), batch]),
         el('div', { style: 'flex:1' }, [el('div', { text: '没做过的题少于此数就补', style: 'font-size:12px' }), low]),
         el('div', { style: 'flex:1' }, [el('div', { text: '每天最多出几批', style: 'font-size:12px' }), daily])]),
+      el('div', { text: '出题难度（只影响新生成的题）' }), challenge,
       el('div', { text: '科目与教材', style: 'font-weight:600;margin:6px 0' }), profBox,
       el('button', { text: '＋ 添加科目', style: BTN2, onclick: function () { profiles.push({ subject: '', level: 'AI 出题', grade: '', textbook: '', focus: '' }); drawProfiles(); } }),
       msg,
       el('div', {}, [el('button', { text: '保存', style: BTN, onclick: function () { save(); } }),
         el('button', { text: d.running ? '出题中…' : '保存并立即出一批', style: BTN2, onclick: d.running ? function () {} : runNow }),
         el('button', { text: '删除全部 AI 题', style: BTN3, onclick: wipe })]),
-      el('div', { text: '每批题都会让 AI 不看答案重做一遍，两次答案不一致的题会被丢弃；已有题目会去重。AI 题的星级也按答题得积分。版本 v' + (d.version || ''), style: 'margin-top:8px;font-size:12px;color:#9aa0a6' })
+      el('div', { text: '每批题都会让 AI 不看答案重做一遍，两次答案不一致的题会被丢弃；已有题目会去重；同一题型模板（只是数字不同）最多留 2 道，字面太像的也会丢掉。版本 v' + (d.version || ''), style: 'margin-top:8px;font-size:12px;color:#9aa0a6' })
     ]);
   }
 

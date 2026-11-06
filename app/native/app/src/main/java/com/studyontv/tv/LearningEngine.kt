@@ -69,6 +69,7 @@ class LearningEngine(private val store: LocalStore) {
             .put("extraPool", number("extra_pool")).put("wrongProgress", number("wrong_progress"))
             .put("nextAvailableAt", nextAt)
             .put("roundsDoneToday", rounds).put("reason", reason).put("awaitingReview", active()?.has("pendingReview") == true)
+            .put("paused", Pause.active(store)).put("pausedUntil", Pause.until(store))
             .put("points", PointsSync.brief(store)).put("version", BuildConfig.VERSION_NAME).put("monitor", GateService.monitorMode).put("diag", GateService.diag)
     }
 
@@ -91,12 +92,19 @@ class LearningEngine(private val store: LocalStore) {
     private fun active(): JSONObject? = store.get("active_round").takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
 
     private fun nextQuestion(round: JSONObject) {
-        val bank = store.questions(limit = 2, spaced = store.config().optBoolean("spacedRepetitionEnabled"))
-        require(bank.length() > 0) { "题库为空，请由家长添加题目" }
-        val last = round.optJSONObject("question")?.optString("id")
-        var question = bank.getJSONObject(0)
-        for (i in 0 until bank.length()) {
-            if (bank.getJSONObject(i).optString("id") != last) { question = bank.getJSONObject(i); break }
+        // 本轮已出过的题（最多记 30 道）不再重复；跨轮靠“没做过的优先、最久没做的优先”避免重复
+        val recent = round.optJSONArray("recent") ?: JSONArray().also { round.put("recent", it) }
+        val skip = HashSet<String>()
+        for (i in 0 until recent.length()) skip.add(recent.optString(i))
+        val last = round.optJSONObject("question")?.optString("id")?.takeIf { it.isNotEmpty() }
+        if (last != null) skip.add(last)
+        val question = store.pickQuestion(skip, last, store.config().optBoolean("spacedRepetitionEnabled"), Tune.minStar(store))
+            ?: throw IllegalArgumentException("题库为空，请由家长添加题目")
+        recent.put(question.optString("id"))
+        if (recent.length() > 30) {
+            val kept = JSONArray()
+            for (i in recent.length() - 30 until recent.length()) kept.put(recent.optString(i))
+            round.put("recent", kept)
         }
         round.put("question", question).put("nonce", UUID.randomUUID().toString())
         round.put("extra", if (round.optString("mode") == "practice") number("extra_pool") > 0 else round.optInt("answered") >= round.getInt("target"))
@@ -106,7 +114,7 @@ class LearningEngine(private val store: LocalStore) {
         val copy = JSONObject(round.toString())
         val question = copy.getJSONObject("question")
         listOf("k", "answers", "correctIndices", "tip", "modelAnswer", "rubric").forEach { question.remove(it) }
-        copy.remove("rules")
+        copy.remove("rules"); copy.remove("recent")
         return copy.put("extraPool", number("extra_pool")).put("status", status())
     }
 
@@ -245,7 +253,9 @@ class LearningEngine(private val store: LocalStore) {
                     round.put("earnedMs", round.getLong("earnedMs") + (minutes * 60000).toLong())
                 }
             }
-            store.recordProgress(question.getString("id"), quality ?: if (correct) 4 else 1)
+            val repetitions = store.recordProgress(question.getString("id"), quality ?: if (correct) 4 else 1)
+            // 同一道题连续答对多次：自动淘汰，不再出现
+            Tune.afterAnswer(store, question.getString("id"), correct, repetitions)
             store.logEvent("answer", JSONObject().put("qid", question.getString("id")).put("correct", correct)
                 .put("difficulty", question.optInt("difficulty", 2)).put("extra", wasExtra).put("mode", mode))
             val baseDone = if (mode == "streak") round.getInt("streak") >= round.getInt("target")

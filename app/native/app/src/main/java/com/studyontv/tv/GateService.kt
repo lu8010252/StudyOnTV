@@ -24,6 +24,7 @@ class GateService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var lastTick = SystemClock.elapsedRealtime()
     private var wasUsing = false
+    private var wasPaused = false
     private var lastStateText = ""
     private var lastGate = 0L
     private var lastLaunch = 0L
@@ -60,6 +61,15 @@ class GateService : Service() {
             return
         }
         if (now < settingsUntil) { wasUsing = false; hideAll(); return }
+        // 家长暂停管控（比如大人要看电视）：不弹拦截页，也不计使用时间；到点自动恢复
+        if (Pause.active(DeviceRuntime.store)) {
+            if (!wasPaused) { wasPaused = true; note("家长已暂停管控") }
+            wasUsing = false
+            hideAll()
+            diag = Pause.describe(DeviceRuntime.store)
+            return
+        }
+        if (wasPaused) { wasPaused = false; lastGate = 0L; note("暂停结束，恢复管控") }
         val power = getSystemService(POWER_SERVICE) as PowerManager
         val locked = (getSystemService(KEYGUARD_SERVICE) as KeyguardManager).isKeyguardLocked
         val awake = power.isInteractive && !locked

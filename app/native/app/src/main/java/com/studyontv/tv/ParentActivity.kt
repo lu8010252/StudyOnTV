@@ -94,6 +94,10 @@ class ParentActivity : Activity() {
         fun button(label: String, action: () -> Unit) {
             controls.addView(Button(this).apply { text = label; learningStyle(); setOnClickListener { action() } }, LinearLayout.LayoutParams(0, -2, 1f))
         }
+        // 暂停管控：大人要看电视时用，验证过家长密码才能走到这里
+        val pauseButton = Button(this).apply { text = pauseLabel(); learningStyle() }
+        pauseButton.setOnClickListener { pauseDialog(pauseButton) }
+        controls.addView(pauseButton, LinearLayout.LayoutParams(0, -2, 1f))
         button("权限设置") { startActivity(Intent(this, OnboardingActivity::class.java)) }
         button("修改密码") { form(true, true) }
         button("返回答题") { startActivity(Intent(this, MainActivity::class.java)); finish() }
@@ -103,6 +107,39 @@ class ParentActivity : Activity() {
             content.addView(it, LinearLayout.LayoutParams(-1, 0, 1f))
         }
         setContentView(content)
+    }
+
+    private fun pauseLabel(): String = if (Pause.active(DeviceRuntime.store)) "恢复管控（已暂停）" else "暂停管控"
+
+    private fun pauseDialog(button: Button) {
+        val store = DeviceRuntime.store
+        val labels = ArrayList<String>()
+        val actions = ArrayList<() -> Unit>()
+        fun add(label: String, action: () -> Unit) { labels.add(label); actions.add(action) }
+        if (Pause.active(store)) {
+            add("恢复管控") {
+                Pause.set(store, 0L)
+                button.text = pauseLabel()
+                android.widget.Toast.makeText(this, "已恢复管控", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+        add("暂停 1 小时") { startPause(System.currentTimeMillis() + 60 * 60_000L) }
+        add("暂停 2 小时") { startPause(System.currentTimeMillis() + 120 * 60_000L) }
+        add("暂停到今天 24 点") { startPause(Pause.endOfToday()) }
+        add("一直暂停（以后我手动恢复）") { startPause(Pause.FOREVER) }
+        android.app.AlertDialog.Builder(this)
+            .setTitle(if (Pause.active(store)) Pause.describe(store) else "暂停管控：期间不弹拦截页，也不计使用时间")
+            .setItems(labels.toTypedArray()) { _, index -> actions[index]() }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun startPause(until: Long) {
+        Pause.set(DeviceRuntime.store, until)
+        android.widget.Toast.makeText(this, "已暂停管控，可以自由看电视了", android.widget.Toast.LENGTH_LONG).show()
+        // 直接回桌面，免得停在答题页或拦截页
+        startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        finish()
     }
 
     override fun onStop() {

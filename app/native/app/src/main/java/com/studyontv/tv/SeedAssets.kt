@@ -10,7 +10,8 @@ import org.json.JSONObject
 
 object SeedAssets {
     fun ensureQuestions(context: Context, store: LocalStore) {
-        if (store.countQuestions() > 0) return
+        // 用总数判断：题被“自动淘汰”后 countQuestions() 会变小，不能因此重新导入一遍内置题库
+        if (store.countAllQuestions() > 0) return
         try {
             val raw = context.assets.open("questions.json").use { it.readBytes().toString(Charsets.UTF_8) }
             val arr = JSONArray(raw)

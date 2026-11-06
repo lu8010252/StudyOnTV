@@ -36,7 +36,7 @@ object AiQuestionGen {
     fun settings(store: LocalStore, includeKey: Boolean = false): JSONObject {
         val o = JSONObject().put("enabled", false).put("endpoint", "").put("apiKey", "").put("model", "")
             .put("profiles", defaultProfiles()).put("batchSize", 15).put("lowWater", 80).put("dailyBatches", 6)
-            .put("batchesToday", 0).put("day", 0L)
+            .put("challenge", "advanced").put("batchesToday", 0).put("day", 0L)
         val saved = raw(store)
         saved.keys().forEach { o.put(it, saved.get(it)) }
         if (o.optLong("day") != dayKey()) o.put("batchesToday", 0).put("day", dayKey())
@@ -67,6 +67,10 @@ object AiQuestionGen {
         if (input.has("batchSize")) cur.put("batchSize", input.optInt("batchSize").coerceIn(5, 30))
         if (input.has("lowWater")) cur.put("lowWater", input.optInt("lowWater").coerceIn(10, 500))
         if (input.has("dailyBatches")) cur.put("dailyBatches", input.optInt("dailyBatches").coerceIn(1, 30))
+        if (input.has("challenge")) {
+            require(input.optString("challenge") in listOf("standard", "advanced", "hard")) { "未知的难度档位" }
+            cur.put("challenge", input.optString("challenge"))
+        }
         if (input.has("profiles")) {
             val src = input.getJSONArray("profiles")
             require(src.length() in 0..6) { "最多配置 6 门科目" }
@@ -177,28 +181,45 @@ object AiQuestionGen {
     private fun generate(store: LocalStore, s: JSONObject, profile: JSONObject, endpoint: String, key: String, model: String): String {
         val subject = profile.optString("subject")
         val n = s.optInt("batchSize", 15).coerceIn(5, 30)
-        val topics = profile.optString("focus").split('\n', '；', ';').map { it.trim() }.filter { it.isNotEmpty() }.shuffled().take(3)
+        // 知识点轮流出（每批接着上一批往下走 3 个），不再随机抽，保证每个知识点都能轮到
+        val allTopics = profile.optString("focus").split('\n', '；', ';').map { it.trim() }.filter { it.isNotEmpty() }
+        val cursorKey = "aigen_cursor_$subject"
+        val cursor = store.get(cursorKey, "0").toIntOrNull() ?: 0
+        val topics = if (allTopics.isEmpty()) emptyList()
+            else (0 until minOf(3, allTopics.size)).map { allTopics[(cursor + it) % allTopics.size] }
+        // 已有题目（最新的在前，含已淘汰的）：既用来精确去重，也用来按“题型模板”和“字面相似度”去重
         val existing = store.stemsOf(subject, 5000)
         val seen = HashSet<String>(); existing.forEach { seen.add(normStem(it)) }
-        val avoid = existing.shuffled().take(20).joinToString("\n") { "- " + it.take(60) }
+        val sigCount = HashMap<String, Int>(); existing.forEach { val g = signature(it); sigCount[g] = (sigCount[g] ?: 0) + 1 }
+        val recentGrams = ArrayList<Set<String>>(); existing.take(1500).forEach { recentGrams.add(bigrams(it)) }
+        val avoid = (existing.take(25) + existing.drop(25).shuffled().take(15)).joinToString("\n") { "- " + it.take(60) }
+        val challenge = s.optString("challenge", "advanced")
 
         val gen = chat(endpoint, key, model, GEN_SYSTEM,
             "科目：$subject\n年级：${profile.optString("grade")}\n教材：${profile.optString("textbook")}\n" +
                 "本批请围绕这些知识点出题（可混合）：\n${topics.joinToString("\n") { "· $it" }.ifEmpty { "· 本年级常规知识点" }}\n" +
-                "出 $n 道题，题型分布：单选约 50%，填空约 25%，判断约 15%，多选约 10%；难度 1–4 星都要有，以 2–3 星为主。\n" +
+                "出 $n 道题，题型分布：单选约 50%，填空约 25%，判断约 15%，多选约 10%。\n" +
+                levelRule(challenge) + "\n" + STAR_GUIDE + "\n" + QUALITY_RULE + "\n" +
                 "随机种子：${UUID.randomUUID().toString().take(8)}（请据此换一批新的情境和数字）\n" +
-                (if (avoid.isNotEmpty()) "已有题目，不要重复，也不要只是改个数字：\n$avoid\n" else "") +
+                (if (avoid.isNotEmpty()) "已有题目，不要重复，不要只是改个数字或换个说法，要换考法、换情境：\n$avoid\n" else "") +
                 GEN_FORMAT, 0.9, 170_000)
         val raw = parseJson(gen).optJSONArray("items") ?: throw IllegalStateException("AI 返回的内容里没有题目")
 
-        // 本地规范化
+        // 本地规范化 + 去重：同一题型模板（数字不同）最多 2 道；字面相似度太高的也丢掉
         val cands = ArrayList<JSONObject>()
+        var dup = 0
         for (i in 0 until raw.length()) {
             val c = normalize(raw.optJSONObject(i) ?: continue, profile) ?: continue
-            val sn = normStem(c.optString("q"))
-            if (seen.add(sn)) cands.add(c)
+            val stem = c.optString("q")
+            val sn = normStem(stem)
+            val sig = signature(stem)
+            val grams = bigrams(stem)
+            if (sn in seen || (sigCount[sig] ?: 0) >= 2 || recentGrams.any { similar(it, grams) }) { dup++; continue }
+            seen.add(sn); sigCount[sig] = (sigCount[sig] ?: 0) + 1; recentGrams.add(grams)
+            cands.add(c)
         }
-        if (cands.isEmpty()) throw IllegalStateException("这一批题没有通过格式检查，稍后会再试")
+        if (cands.isEmpty()) throw IllegalStateException(if (dup > 0) "这一批题和已有题目太像，已全部丢弃，稍后会再试" else "这一批题没有通过格式检查，稍后会再试")
+        if (allTopics.isNotEmpty()) store.set(cursorKey, ((cursor + 3) % allTopics.size).toString())
 
         // 独立复核：不给答案，让 AI 重新做一遍
         val blind = JSONArray()
@@ -218,14 +239,14 @@ object AiQuestionGen {
             if (r == null || !agree(c, r)) { dropped++; return@forEachIndexed }
             try { store.upsertQuestion(c); ok++ } catch (e: Exception) { dropped++ }
         }
-        return "$subject：新增 $ok 题" + (if (dropped > 0) "，复核没通过丢弃 $dropped 题" else "")
+        return "$subject：新增 $ok 题" + (if (dropped > 0) "，复核没通过丢弃 $dropped 题" else "") + (if (dup > 0) "，和已有题太像丢弃 $dup 题" else "")
     }
 
     private fun normalize(src: JSONObject, profile: JSONObject): JSONObject? {
         val type = src.optString("type", "single")
         val q = src.optString("q").trim()
         if (q.isEmpty() || q.length > 400 || type !in listOf("single", "multiple", "boolean", "text")) return null
-        val d = src.optInt("difficulty", 2).coerceIn(1, 4)
+        val d = src.optInt("difficulty", 3).coerceIn(1, 5)
         val out = JSONObject().put("id", "ai-" + UUID.randomUUID().toString().replace("-", "").take(14)).put("type", type)
             .put("subject", profile.optString("subject")).put("level", profile.optString("level")).put("difficulty", d)
             .put("q", q).put("tip", src.optString("tip").take(300)).put("source", "ai")
@@ -284,6 +305,31 @@ object AiQuestionGen {
 
     private fun normStem(s: String): String = s.lowercase().filter { it.isLetterOrDigit() }
 
+    /** 题型模板：把数字都换成 #，“36÷4”和“48÷6”就是同一个模板。 */
+    private fun signature(s: String): String = s.lowercase().replace(Regex("\\d+(\\.\\d+)?"), "#").filter { it.isLetterOrDigit() || it == '#' }
+
+    /** 字符二元组集合，用来比较两道题的字面相似度。 */
+    private fun bigrams(s: String): Set<String> {
+        val t = normStem(s)
+        if (t.length < 2) return setOf(t)
+        val out = HashSet<String>()
+        for (i in 0 until t.length - 1) out.add(t.substring(i, i + 2))
+        return out
+    }
+
+    private fun similar(a: Set<String>, b: Set<String>): Boolean {
+        if (a.isEmpty() || b.isEmpty()) return false
+        var inter = 0
+        for (x in a) if (x in b) inter++
+        return inter.toDouble() / (a.size + b.size - inter) >= 0.7
+    }
+
+    private fun levelRule(challenge: String): String = when (challenge) {
+        "standard" -> "难度 1–5 星都要有，以 2–3 星为主。"
+        "hard" -> "难度要有挑战性：4 星约 40%，5 星约 40%，3 星约 20%，不要出 1–2 星的送分题。"
+        else -> "难度要比课本例题略高：3 星约 40%，4 星约 40%，5 星约 15%，2 星最多 5%，不要出 1 星的送分题。"
+    }
+
     private fun normAnswer(s: String): String {
         val t = s.trim().lowercase().filter { !it.isWhitespace() && it != '，' && it != ',' && it != '。' && it != '.' || it == '.' }
         val m = Regex("^-?\\d+(\\.\\d+)?").find(t)
@@ -321,6 +367,15 @@ object AiQuestionGen {
         "不要出需要看图、听音或实物的题；题干必须自包含。计算题请逐位认真核算，确保答案精确无误。" +
         "英语题的题干和选项用英文，必要时括号里加中文提示；不要出考察发音或音标的题。只输出 JSON，不要任何解释文字。"
 
+    private const val STAR_GUIDE = "星级含义：1 星=直接套公式或识记；2 星=一步计算或一个知识点；3 星=两步以上或需要简单推理；" +
+        "4 星=多步综合，需要分析数量关系或辨别易错点；5 星=拓展提高，需要灵活转化或严谨推理（仍限本年级知识范围，不超纲）。"
+
+    private const val QUALITY_RULE = "出题要求：① 避免“代入数字直接算”的单步送分题，多用应用情境、多步骤、易错点、逆向思考；" +
+        "② 选择题的错误选项要对应典型错误想法（漏进位、单位没换算、概念混淆等），不能一眼排除；" +
+        "③ 判断题考易混概念的辨析，不要出显然对或显然错的；④ 填空题至少要两步思考；" +
+        "⑤ 同一批里每道题的考点、情境、数字结构都不一样，不要出同一模板的变体；" +
+        "⑥ 英语题多用语境选词、改错、句型转换、情景交际，不要只考单词认读。"
+
     private const val GEN_FORMAT = "\n输出格式（只输出这个 JSON）：\n" +
         "{\"items\":[\n" +
         " {\"type\":\"single\",\"q\":\"题干\",\"a\":[\"选项1\",\"选项2\",\"选项3\",\"选项4\"],\"k\":0,\"difficulty\":2,\"tip\":\"一句话解析\"},\n" +
@@ -329,7 +384,7 @@ object AiQuestionGen {
         " {\"type\":\"text\",\"q\":\"填空题（答案用（　）表示）\",\"answers\":[\"12\",\"12个\"],\"difficulty\":2,\"tip\":\"..\"}\n" +
         "]}\n" +
         "说明：k 与 correctIndices 是正确选项的序号（从 0 开始）；boolean 的 k：0 表示“正确”，1 表示“错误”；" +
-        "text 的 answers 列出所有可接受的写法（带单位和不带单位各写一个，答案要短）；difficulty 为 1–4 的整数。"
+        "text 的 answers 列出所有可接受的写法（带单位和不带单位各写一个，答案要短）；difficulty 为 1–5 的整数。"
 
     private const val VERIFY_SYSTEM = "你是认真细致的小学老师。下面是若干道题，请你独立、认真地解答每一道，不要猜测。只输出 JSON。"
 

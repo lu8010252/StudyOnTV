@@ -79,7 +79,8 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
         return out
     }
 
-    fun recordProgress(id: String, quality: Int) {
+    /** 记录一次作答，返回这道题目前“连续答对（质量≥3）”的次数。 */
+    fun recordProgress(id: String, quality: Int): Int {
         var repetitions = 0
         var interval = 0L
         var ease = 2.5
@@ -98,6 +99,7 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
             put("qid", id); put("repetitions", repetitions); put("interval_days", interval); put("ease", ease)
             put("due_at", next); put("updated_at", now)
         }, SQLiteDatabase.CONFLICT_REPLACE)
+        return repetitions
     }
 
     fun repetitionStats(): JSONObject = readableDatabase.rawQuery(
@@ -223,20 +225,87 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
         val source = if (spaced) "questions LEFT JOIN question_progress progress ON questions.id=progress.qid" else "questions"
         val order = if (spaced) "CASE WHEN progress.due_at<=${System.currentTimeMillis()} THEN 0 WHEN progress.qid IS NULL THEN 1 ELSE 2 END, progress.due_at ASC, RANDOM()" else "RANDOM()"
         readableDatabase.rawQuery("SELECT questions.* FROM $source WHERE $where ORDER BY $order LIMIT ${limit.coerceIn(1, 5000)}", args.toTypedArray()).use { c ->
-            while (c.moveToNext()) {
-                val details = c.getString(c.getColumnIndexOrThrow("details"))
-                val item = if (details.isNullOrEmpty()) JSONObject() else JSONObject(details)
-                item.put("id", c.getString(c.getColumnIndexOrThrow("id")))
-                    .put("q", c.getString(c.getColumnIndexOrThrow("stem")))
-                    .put("a", JSONArray(c.getString(c.getColumnIndexOrThrow("options"))))
-                    .put("k", c.getInt(c.getColumnIndexOrThrow("answer")))
-                    .put("difficulty", c.getInt(c.getColumnIndexOrThrow("difficulty")))
-                    .put("tip", c.getString(c.getColumnIndexOrThrow("tip")) ?: "")
-                if (!item.has("type")) item.put("type", "single")
-                out.put(item)
-            }
+            while (c.moveToNext()) out.put(rowToItem(c))
         }
         return out
+    }
+
+    private fun rowToItem(c: android.database.Cursor): JSONObject {
+        val details = c.getString(c.getColumnIndexOrThrow("details"))
+        val item = if (details.isNullOrEmpty()) JSONObject() else JSONObject(details)
+        item.put("id", c.getString(c.getColumnIndexOrThrow("id")))
+            .put("q", c.getString(c.getColumnIndexOrThrow("stem")))
+            .put("a", JSONArray(c.getString(c.getColumnIndexOrThrow("options"))))
+            .put("k", c.getInt(c.getColumnIndexOrThrow("answer")))
+            .put("difficulty", c.getInt(c.getColumnIndexOrThrow("difficulty")))
+            .put("tip", c.getString(c.getColumnIndexOrThrow("tip")) ?: "")
+        if (!item.has("type")) item.put("type", "single")
+        return item
+    }
+
+    /**
+     * 抽下一道题：尽量不重复。
+     * - 没做过的题优先；都做过了就挑“最久没做”的（间隔重复模式则按到期顺序）
+     * - skip 里的题（本轮已出过的、上一题）先排除；实在没得选才放宽
+     * - minStar>1 时先只从这个星级以上的题里挑，挑不出来就放宽星级，不会因此没题
+     * - 题库被“自动淘汰”做空时，会把淘汰的题放回来，保证总有题可做
+     */
+    fun pickQuestion(skip: Set<String>, last: String?, spaced: Boolean, minStar: Int): JSONObject? {
+        fun query(skipIds: Collection<String>, star: Int): JSONObject? {
+            val where = StringBuilder("questions.enabled=1")
+            val args = ArrayList<String>()
+            if (star > 1) { where.append(" AND questions.difficulty>=?"); args.add(star.toString()) }
+            if (skipIds.isNotEmpty()) {
+                where.append(" AND questions.id NOT IN (").append(skipIds.joinToString(",") { "?" }).append(")")
+                args.addAll(skipIds)
+            }
+            val order = if (spaced) "CASE WHEN p.due_at<=${System.currentTimeMillis()} THEN 0 WHEN p.qid IS NULL THEN 1 ELSE 2 END, p.due_at ASC, RANDOM()"
+                else "CASE WHEN p.qid IS NULL THEN 0 ELSE 1 END, COALESCE(p.updated_at,0), RANDOM()"
+            val list = ArrayList<JSONObject>()
+            readableDatabase.rawQuery(
+                "SELECT questions.* FROM questions LEFT JOIN question_progress p ON questions.id=p.qid WHERE $where ORDER BY $order LIMIT 12",
+                args.toTypedArray()
+            ).use { c -> while (c.moveToNext()) list.add(rowToItem(c)) }
+            if (list.isEmpty()) return null
+            return if (spaced) list[0] else list[java.util.Random().nextInt(list.size)]
+        }
+        val lastOnly = if (last.isNullOrEmpty()) emptyList() else listOf(last)
+        val star = minStar.coerceIn(1, 5)
+        query(skip, star)?.let { return it }
+        if (star > 1) query(skip, 1)?.let { return it }
+        query(lastOnly, 1)?.let { return it }
+        if (restoreRetired() > 0) return query(lastOnly, 1)
+        return query(emptyList(), 1)
+    }
+
+    // ---- 自动淘汰：enabled=2 表示“答对多次，已撤下”，题目记录还在，AI 出题去重仍会参考它 ----
+    fun retireQuestion(id: String, keepAtLeast: Int): Boolean {
+        val stmt = writableDatabase.compileStatement(
+            "UPDATE questions SET enabled=2 WHERE id=? AND enabled=1 AND " +
+                "(SELECT COUNT(*) FROM questions q2 WHERE q2.enabled=1 AND q2.subject=questions.subject) > ?"
+        )
+        try {
+            stmt.bindString(1, id)
+            stmt.bindLong(2, keepAtLeast.toLong())
+            return stmt.executeUpdateDelete() > 0
+        } finally { stmt.close() }
+    }
+
+    fun countRetired(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM questions WHERE enabled=2", null).use {
+        if (it.moveToFirst()) it.getInt(0) else 0
+    }
+
+    /** 把淘汰的题全部放回题库，并清掉它们的答题进度，重新当作新题。 */
+    fun restoreRetired(): Int {
+        val db = writableDatabase
+        db.execSQL("DELETE FROM question_progress WHERE qid IN (SELECT id FROM questions WHERE enabled=2)")
+        val stmt = db.compileStatement("UPDATE questions SET enabled=1 WHERE enabled=2")
+        try { return stmt.executeUpdateDelete() } finally { stmt.close() }
+    }
+
+    /** 包含已淘汰的题；用来判断是否需要导入内置题库（淘汰完不能再重新导入一遍）。 */
+    fun countAllQuestions(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM questions", null).use {
+        if (it.moveToFirst()) it.getInt(0) else 0
     }
 
     fun countQuestions(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM questions WHERE enabled=1", null).use {
@@ -298,7 +367,8 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
 
     fun stemsOf(subject: String, limit: Int): List<String> {
         val out = ArrayList<String>()
-        readableDatabase.rawQuery("SELECT stem FROM questions WHERE subject=? LIMIT ?", arrayOf(subject, limit.toString())).use { while (it.moveToNext()) out.add(it.getString(0)) }
+        // 最新的在前（包含已淘汰的题），AI 出题据此避开重复
+        readableDatabase.rawQuery("SELECT stem FROM questions WHERE subject=? ORDER BY rowid DESC LIMIT ?", arrayOf(subject, limit.toString())).use { while (it.moveToNext()) out.add(it.getString(0)) }
         return out
     }
 

@@ -107,6 +107,20 @@
     };
     fillKids(children);
     var perStar = el('input', { type: 'number', min: '0', style: INP, value: String(d.perStar) });
+    var perQ = el('input', { type: 'number', min: '0', style: INP, value: String(d.perQuestion != null ? d.perQuestion : 1) });
+    var mode = el('select', { style: INP }, [
+      el('option', { value: 'flat', text: '每题固定加分（答对一题就加，不看星级）' }),
+      el('option', { value: 'star', text: '按星级加分（星级 × 每星积分）' })
+    ]);
+    mode.value = d.scoreMode === 'star' ? 'star' : 'flat';
+    var perQBox = el('div', {}, [el('div', { text: '每答对一题加几分' }), perQ]);
+    var perStarBox = el('div', {}, [el('div', { text: '每颗星对应积分（题目 1–5 星，答对一题得 星级 × 此值）' }), perStar]);
+    var syncMode = function () {
+      perQBox.style.display = mode.value === 'flat' ? '' : 'none';
+      perStarBox.style.display = mode.value === 'star' ? '' : 'none';
+    };
+    mode.addEventListener('change', syncMode);
+    syncMode();
     var bonus = el('input', { type: 'number', min: '0', style: INP, value: String(d.passBonus) });
     var cap = el('input', { type: 'number', min: '0', style: INP, value: String(d.dailyCap) });
 
@@ -117,7 +131,7 @@
       }).catch(function (e) { msg.style.color = '#c0392b'; msg.textContent = e.message; });
     };
     var saveBtn = function () {
-      var body = { enabled: enabled.checked, baseUrl: base.value, perStar: +perStar.value, passBonus: +bonus.value, dailyCap: +cap.value };
+      var body = { enabled: enabled.checked, baseUrl: base.value, scoreMode: mode.value, perQuestion: +perQ.value, perStar: +perStar.value, passBonus: +bonus.value, dailyCap: +cap.value };
       if (pw.value) body.password = pw.value;
       var sel = +kid.value;
       if (sel > 0) { body.childId = sel; var c = children.filter(function (x) { return x.id === sel; })[0]; if (c) body.childName = c.name; }
@@ -153,7 +167,8 @@
       el('div', { text: '绑定的孩子' }), kid,
       el('button', { text: '获取孩子列表', style: BTN2, onclick: getKids }),
       el('div', { style: 'height:10px' }),
-      el('div', { text: '每颗星对应积分（题目 1–5 星，答对一题得 星级 × 此值）' }), perStar,
+      el('div', { text: '计分方式' }), mode,
+      perQBox, perStarBox,
       el('div', { text: '通过一组任务的额外奖励积分' }), bonus,
       el('div', { text: '每天最多通过答题得多少分（0 表示不限）' }), cap,
       msg,

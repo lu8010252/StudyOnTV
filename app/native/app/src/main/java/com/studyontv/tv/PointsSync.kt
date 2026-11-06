@@ -24,7 +24,8 @@ object PointsSync {
 
     private fun withDefaults(saved: JSONObject): JSONObject {
         val o = JSONObject().put("enabled", false).put("baseUrl", "").put("token", "").put("childId", 0)
-            .put("childName", "").put("perStar", 1).put("passBonus", 5).put("dailyCap", 30).put("balance", -1)
+            .put("childName", "").put("scoreMode", "flat").put("perQuestion", 1).put("perStar", 1)
+            .put("passBonus", 5).put("dailyCap", 30).put("balance", -1)
         saved.keys().forEach { o.put(it, saved.get(it)) }
         return o
     }
@@ -41,12 +42,20 @@ object PointsSync {
 
     // ---------- 答题得分 ----------
 
-    /** 答对一题：积分 = 题目星级 × 每星积分，受每日上限约束；返回本次实际得到的积分。 */
+    /**
+     * 答对一题，受每日上限约束；返回本次实际得到的积分。计分方式可选：
+     * - flat（默认）：答对一题固定加 perQuestion 分（默认 1 分），不看星级
+     * - star：积分 = 题目星级 × 每星积分 perStar
+     */
     fun earnForAnswer(store: LocalStore, difficulty: Int): Int {
         val s = settings(store)
         if (!s.optBoolean("enabled") || s.optInt("childId") <= 0) return 0
-        val want = difficulty.coerceIn(1, 5) * s.optInt("perStar", 1).coerceIn(0, 100)
-        return grant(store, s, want, "电视答题 ${difficulty}星题")
+        return if (s.optString("scoreMode") == "star") {
+            val stars = difficulty.coerceIn(1, 5)
+            grant(store, s, stars * s.optInt("perStar", 1).coerceIn(0, 100), "电视答题 ${stars}星题")
+        } else {
+            grant(store, s, s.optInt("perQuestion", 1).coerceIn(0, 100), "电视答题 答对一题")
+        }
     }
 
     /** 通过一组任务的额外奖励。 */
@@ -121,6 +130,11 @@ object PointsSync {
         cur.put("baseUrl", base)
         if (input.has("childId")) cur.put("childId", input.optInt("childId"))
         if (input.has("childName")) cur.put("childName", input.optString("childName").take(20))
+        if (input.has("scoreMode")) {
+            require(input.optString("scoreMode") in listOf("flat", "star")) { "未知的计分方式" }
+            cur.put("scoreMode", input.optString("scoreMode"))
+        }
+        if (input.has("perQuestion")) cur.put("perQuestion", input.optInt("perQuestion").coerceIn(0, 100))
         if (input.has("perStar")) cur.put("perStar", input.optInt("perStar").coerceIn(0, 100))
         if (input.has("passBonus")) cur.put("passBonus", input.optInt("passBonus").coerceIn(0, 1000))
         if (input.has("dailyCap")) cur.put("dailyCap", input.optInt("dailyCap").coerceIn(0, 10000))
@@ -202,7 +216,8 @@ object PointsSync {
         val s = settings(store)
         return JSONObject().put("enabled", s.optBoolean("enabled")).put("baseUrl", s.optString("baseUrl"))
             .put("loggedIn", s.optString("token").isNotEmpty()).put("childId", s.optInt("childId"))
-            .put("childName", s.optString("childName")).put("perStar", s.optInt("perStar", 1))
+            .put("childName", s.optString("childName")).put("scoreMode", s.optString("scoreMode", "flat"))
+            .put("perQuestion", s.optInt("perQuestion", 1)).put("perStar", s.optInt("perStar", 1))
             .put("passBonus", s.optInt("passBonus", 5)).put("dailyCap", s.optInt("dailyCap", 30))
             .put("balance", shownBalance(store, s)).put("today", store.pointsEarnedToday())
             .put("pending", store.pendingPointsCount()).put("lastSync", lastSync).put("lastError", lastError)

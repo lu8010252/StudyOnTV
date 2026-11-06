@@ -210,6 +210,17 @@
     $('lockActions').innerHTML = reason === 'timeup' ? '<button class="btn btn-primary focusable" data-action="retry">开始答题</button>' : '';
     focusDefault();
   }
+  // 家长暂停了管控（比如大人要看电视）：拦截页换成提示，可以直接回桌面
+  function showPaused() {
+    state.lockReason = 'paused';
+    show('lock'); state.round = null;
+    $('lockIcon').textContent = '✓';
+    $('lockTitle').textContent = '家长已暂停管控';
+    $('lockDesc').textContent = '现在可以自由使用设备，到时间会自动恢复管控';
+    $('lockNote').textContent = '';
+    $('lockActions').innerHTML = '<button class="btn btn-primary focusable" data-action="home">返回桌面</button>';
+    focusDefault();
+  }
   function pair() {
     var raw = nativeCall('lanInfo'), info;
     try { info = JSON.parse(raw); } catch (e) {}
@@ -315,6 +326,10 @@
         if (error) return;
         if (state.screen === 'lock' && !state.lockReason && !state.learning.reason && state.learning.remainingSeconds > 0)
           $('lockDesc').textContent = '还可以使用 ' + Math.ceil(state.learning.remainingSeconds / 60) + ' 分钟（停在本页不计时，离开去看电视后才开始计时）';
+        if (state.screen === 'lock' && state.learning.paused) {
+          if (state.lockReason !== 'paused') showPaused();
+          return;
+        }
         if (state.awaiting) { start(); return; }
         if (state.screen === 'lock' && state.lockReason !== state.learning.reason) {
           if (!state.learning.reason) start(); else lock(state.learning.reason);
@@ -331,7 +346,7 @@
     renderQuestion();
   };
   window.SOTV_UPDATE = function (info) { if (!info || !info.latest) return; window.currentUpdate = info; $('updateText').textContent = '发现新版本 v' + info.latest; $('updateTip').className = 'update-tip show'; };
-  window.TV = { move: move, select: function () { activate(); }, back: function () { if (!state.learning.reason && state.learning.remainingSeconds > 0) nativeCall('exitToLauncher'); else toast('现在暂不可用'); }, state: state };
+  window.TV = { move: move, select: function () { activate(); }, back: function () { if (state.learning.paused || (!state.learning.reason && state.learning.remainingSeconds > 0)) nativeCall('exitToLauncher'); else toast('现在暂不可用'); }, state: state };
   // 从「填写答案」页回来时不要重新拉一轮题，否则刚填的答案会被清掉；只按当前题目重绘即可
   window.SOTV_RESUME = function () {
     if (document.readyState !== 'complete' || state.busy || state.screen === 'pair') return;

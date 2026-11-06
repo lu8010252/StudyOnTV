@@ -199,6 +199,11 @@ class LanServer(
                 catch (e: java.io.IOException) { json(out, 200, JSONObject().put("error", "network").put("message", "连不上星星屋：" + (e.message ?: ""))) }
             }
             path == "/api/points/sync" && method == "POST" -> { PointsSync.syncNow(store); return json(out, 200, PointsSync.summary(store)) }
+            path == "/api/tune" && method == "GET" -> return json(out, 200, Tune.summary(store))
+            path == "/api/tune/settings" && method == "PUT" -> return json(out, 200, Tune.save(store, JSONObject(body)))
+            path == "/api/tune/restore" && method == "POST" -> { store.restoreRetired(); return json(out, 200, Tune.summary(store)) }
+            path == "/api/pause" && method == "GET" -> return json(out, 200, Pause.status(store))
+            path == "/api/pause" && method == "PUT" -> return json(out, 200, Pause.apply(store, JSONObject(body)))
             path == "/api/grading" && method == "GET" -> return json(out, 200, GradingService.settings(store))
             path == "/api/grading" && method == "PUT" -> return json(out, 200, GradingService.save(store, JSONObject(body)))
             path == "/api/reviews" && method == "GET" -> return json(out, 200, JSONObject().put("items", store.reviews(q["state"] ?: "pending")))

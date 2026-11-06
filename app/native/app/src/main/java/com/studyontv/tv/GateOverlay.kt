@@ -101,7 +101,7 @@ class GateOverlay(
         }
         @JavascriptInterface fun exitToLauncher() {
             val status = DeviceRuntime.learning.status()
-            if (status.getString("reason").isNotEmpty() || status.optLong("remainingSeconds") <= 0) return
+            if (!status.optBoolean("paused") && (status.getString("reason").isNotEmpty() || status.optLong("remainingSeconds") <= 0)) return
             handler.post {
                 hide()
                 if (goHome?.invoke() != true) context.startActivity(Intent(Intent.ACTION_MAIN)
