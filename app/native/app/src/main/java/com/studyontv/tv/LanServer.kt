@@ -185,6 +185,8 @@ class LanServer(
             }
             path == "/api/aigen/run" && method == "POST" -> { AiQuestionGen.runNowAsync(store); return json(out, 200, AiQuestionGen.summary(store)) }
             path == "/api/aigen/questions" && method == "DELETE" -> { AiQuestionGen.deleteAll(store); return json(out, 200, AiQuestionGen.summary(store)) }
+            path == "/api/grant" && method == "GET" -> return json(out, 200, SelfGrant.status(context))
+            path == "/api/grant/run" && method == "POST" -> { SelfGrant.runAsync(context); return json(out, 200, SelfGrant.status(context)) }
             path == "/api/points" && method == "GET" -> return json(out, 200, PointsSync.summary(store))
             path == "/api/points/settings" && method == "PUT" -> {
                 return try { json(out, 200, PointsSync.save(store, JSONObject(body))) }

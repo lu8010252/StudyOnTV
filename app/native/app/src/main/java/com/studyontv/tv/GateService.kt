@@ -104,7 +104,10 @@ class GateService : Service() {
     private fun exempt(pkg: String, includeLauncher: Boolean = true): Boolean {
         if (pkg == packageName || pkg == "com.android.systemui" || pkg == "android" || pkg.contains("packageinstaller")) return true
         if (pkg.contains("permissioncontroller") || pkg.contains("inputmethod") || pkg.contains("keyboard")) return true
-        if (pkg == systemSettingsPackage || pkg in setOf("com.android.settings", "com.android.tv.settings", "com.google.android.tv.settings", "com.google.android.dialer", "com.android.dialer", "com.android.phone", "com.android.server.telecom", "com.android.emergency")) return true
+        if (pkg in setOf("com.google.android.dialer", "com.android.dialer", "com.android.phone", "com.android.server.telecom", "com.android.emergency")) return true
+        // 系统设置：计时时不算使用（includeLauncher=true）；但锁屏判断时（includeLauncher=false）不能当作安全区，
+        // 否则孩子按遥控器“设置”键进系统设置，就能关掉无障碍或强行停止本应用。家长要进设置，走家长设置页里的入口（会放行 2 分钟）。
+        if (includeLauncher && (pkg == systemSettingsPackage || pkg in setOf("com.android.settings", "com.android.tv.settings", "com.google.android.tv.settings"))) return true
         if (!includeLauncher) return false
         val launcher = packageManager.resolveActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), 0)?.activityInfo?.packageName
         return pkg == launcher || Foreground.isLauncher(pkg)
