@@ -94,14 +94,19 @@ class GateService : Service() {
             lastGate = now
             val shown = WatchAccessibilityService.showGate(reason) || (canOverlay && overlay.show(reason))
             // 电视/投影上看视频时画面常走硬件图层，悬浮窗会被盖在下面看不见（截屏都是空的），
-            // 所以到点后直接把拦截页作为 Activity 拉到前台，悬浮窗只作为拉不起来时的兜底
+            // 所以到点后直接把拦截页作为 Activity 拉到前台，悬浮窗只作为拉不起来时的兜底。
+            // 等悬浮窗挂上去 1.5 秒再拉：有可见窗口时系统才允许从后台启动 Activity
             if (now - lastLaunch > 5000) {
                 lastLaunch = now
-                try {
-                    startActivity(Intent(this, GateActivity::class.java)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                        .putExtra("reason", reason))
-                } catch (_: Exception) { }
+                handler.postDelayed({
+                    try {
+                        if (DeviceRuntime.learning.status().optString("reason").isNotEmpty()) {
+                            startActivity(Intent(this@GateService, GateActivity::class.java)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                .putExtra("reason", reason))
+                        }
+                    } catch (_: Exception) { }
+                }, 1500)
             }
             if (!shown && Build.VERSION.SDK_INT < 29) {
                 try {
@@ -146,6 +151,8 @@ class GateService : Service() {
     override fun onCreate() {
         super.onCreate()
         DeviceRuntime.ensure(this)
+        // 第一件事就把自唤醒闹钟续上：后面任何一步出错也不能断链
+        Revive.rearm(this)
         overlay = GateOverlay(this, GateOverlay.applicationWindowType())
         instance = this
         Prefs.setServiceRunning(this, true)
@@ -160,10 +167,8 @@ class GateService : Service() {
         else startForeground(1001, notification)
         // 被杀期间秒表停了，先按 UsageStats 事件补记漏掉的时长（后台线程，别卡住启动）
         Thread {
-            try { UsageBackfill.run(this) } catch (e: Exception) { android.util.Log.e("StudyOnTV", "Usage backfill failed", e) }
+            try { UsageBackfill.run(this) } catch (e: Exception) { android.util.Log.e("StudyOnTV", "UsageBackfill failed", e) }
         }.apply { isDaemon = true; name = "usage-backfill" }.start()
-        // 排下一次自唤醒闹钟，保证服务被系统杀掉后一分钟内还能回来
-        Revive.rearm(this)
         handler.post(tick)
     }
 
