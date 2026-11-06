@@ -263,7 +263,7 @@
       });
     }
     if (action === 'voice' || action === 'handwrite') nativeCall('answerInput', [action === 'voice']);
-    if (action === 'answer') nativeCall('answerInput', [false]);
+    if (action === 'answer') { state.enteringAnswer = true; nativeCall('answerInput', [false]); }
     if (action === 'clear-drawing') { state.draft.drawing = ''; renderQuestion(); }
     if (action === 'retry') start();
     if (action === 'home') nativeCall('exitToLauncher');
@@ -332,7 +332,16 @@
   };
   window.SOTV_UPDATE = function (info) { if (!info || !info.latest) return; window.currentUpdate = info; $('updateText').textContent = '发现新版本 v' + info.latest; $('updateTip').className = 'update-tip show'; };
   window.TV = { move: move, select: function () { activate(); }, back: function () { if (!state.learning.reason && state.learning.remainingSeconds > 0) nativeCall('exitToLauncher'); else toast('现在暂不可用'); }, state: state };
-  window.SOTV_RESUME = function () { if (document.readyState === 'complete' && !state.busy && state.screen !== 'pair') route(); };
+  // 从「填写答案」页回来时不要重新拉一轮题，否则刚填的答案会被清掉；只按当前题目重绘即可
+  window.SOTV_RESUME = function () {
+    if (document.readyState !== 'complete' || state.busy || state.screen === 'pair') return;
+    if (state.enteringAnswer) {
+      state.enteringAnswer = false;
+      if (state.round) renderQuestion(); else route();
+      return;
+    }
+    route();
+  };
   window.addEventListener('hashchange', route);
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 })();

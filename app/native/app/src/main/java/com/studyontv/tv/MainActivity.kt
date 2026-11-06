@@ -51,7 +51,7 @@ open class MainActivity : Activity() {
     override fun onStop() {
         super.onStop()
         // 遥控器填写答案时，输入页盖在我们上面，别把 WebView 销毁，否则填好的字回不来
-        if (DeviceBridge.isTv(this) && !InputSupport.active && ::web.isInitialized && !webReleased) {
+        if (DeviceBridge.isTv(this) && !InputSupport.active && !InputSupport.recentlyCompleted() && ::web.isInitialized && !webReleased) {
             (web.parent as? android.view.ViewGroup)?.removeView(web)
             web.destroy()
             webReleased = true

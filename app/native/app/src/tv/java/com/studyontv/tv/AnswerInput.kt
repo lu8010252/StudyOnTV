@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.View
 import android.webkit.WebView
 import org.json.JSONObject
@@ -18,8 +19,12 @@ import java.util.UUID
 object AnswerInput {
     private var target = WeakReference<WebView>(null)
     private var requestId = ""
+    private var completedAt = 0L
     var active = false
         private set
+
+    // 刚填完答案、页面正在切回主界面：这段时间别销毁 WebView，否则填好的字就丢了
+    fun recentlyCompleted(): Boolean = SystemClock.elapsedRealtime() - completedAt in 1..4000
 
     fun open(context: Context, web: WebView, voice: Boolean) {
         if (active) return
@@ -48,6 +53,7 @@ object AnswerInput {
             val view = target.get()
             view?.visibility = View.VISIBLE
             if (result != null) view?.evaluateJavascript("window.SOTV_INPUT&&SOTV_INPUT(" + result.toString() + ")", null)
+            completedAt = SystemClock.elapsedRealtime()
             active = false
             requestId = ""
             target.clear()
