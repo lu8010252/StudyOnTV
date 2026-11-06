@@ -26,6 +26,7 @@ class GateService : Service() {
     private var wasUsing = false
     private var lastStateText = ""
     private var lastGate = 0L
+    private var lastLaunch = 0L
     @Volatile private var settingsUntil = 0L
     private val systemSettingsPackage by lazy {
         packageManager.resolveActivity(Intent(android.provider.Settings.ACTION_SETTINGS), 0)?.activityInfo?.packageName
@@ -92,6 +93,16 @@ class GateService : Service() {
         if (protecting && reason.isNotEmpty() && now - lastGate > 1800 && !hasGate()) {
             lastGate = now
             val shown = WatchAccessibilityService.showGate(reason) || (canOverlay && overlay.show(reason))
+            // 电视/投影上看视频时画面常走硬件图层，悬浮窗会被盖在下面看不见（截屏都是空的），
+            // 所以到点后直接把拦截页作为 Activity 拉到前台，悬浮窗只作为拉不起来时的兜底
+            if (now - lastLaunch > 5000) {
+                lastLaunch = now
+                try {
+                    startActivity(Intent(this, GateActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        .putExtra("reason", reason))
+                } catch (_: Exception) { }
+            }
             if (!shown && Build.VERSION.SDK_INT < 29) {
                 try {
                     startActivity(Intent(this, GateActivity::class.java)

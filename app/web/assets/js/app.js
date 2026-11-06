@@ -99,7 +99,11 @@
       input.oninput = function () { state.draft.text = input.value; };
       options.appendChild(input);
       var tools = document.createElement('div'); tools.className = 'input-tools';
-      if (!document.documentElement.classList.contains('tv-device')) {
+      if (document.documentElement.classList.contains('tv-device')) {
+        // 电视/投影上遥控器没法直接在输入框里打字，走原生输入页（系统电视输入法）
+        tools.innerHTML = '<button class="btn btn-ghost focusable" data-action="answer">' + (state.draft.text ? '修改答案' : '填写答案') + '</button>';
+        options.appendChild(tools);
+      } else {
         tools.innerHTML = '<button class="btn btn-ghost focusable" data-action="voice">语音输入</button><button class="btn btn-ghost focusable" data-action="handwrite">手写作答</button>';
         options.appendChild(tools);
       }
@@ -259,6 +263,7 @@
       });
     }
     if (action === 'voice' || action === 'handwrite') nativeCall('answerInput', [action === 'voice']);
+    if (action === 'answer') nativeCall('answerInput', [false]);
     if (action === 'clear-drawing') { state.draft.drawing = ''; renderQuestion(); }
     if (action === 'retry') start();
     if (action === 'home') nativeCall('exitToLauncher');

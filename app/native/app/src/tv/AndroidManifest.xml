@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- TV 版遥控器填写答案页 -->
+        <activity
+            android:name=".AnswerInputActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden|navigation"
+            android:exported="false"
+            android:screenOrientation="landscape"
+            android:windowSoftInputMode="stateVisible|adjustResize" />
+    </application>
+</manifest>
