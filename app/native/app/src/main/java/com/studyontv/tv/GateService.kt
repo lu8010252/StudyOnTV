@@ -56,6 +56,12 @@ class GateService : Service() {
         val locked = (getSystemService(KEYGUARD_SERVICE) as KeyguardManager).isKeyguardLocked
         val awake = power.isInteractive && !locked
         val monitoring = canOverlay || WatchAccessibilityService.connected || Foreground.hasUsageAccess(this)
+        monitorMode = when {
+            WatchAccessibilityService.connected -> "无障碍"
+            Foreground.hasUsageAccess(this) -> "使用情况"
+            canOverlay -> "仅悬浮窗"
+            else -> "未监控"
+        }
         val pkg = Foreground.current(this)
         // With only overlay permission, use awake time outside our own activities.
         val active = awake && monitoring && if (pkg == null) canOverlay else !exempt(pkg)
@@ -134,6 +140,8 @@ class GateService : Service() {
 
     companion object {
         private var instance: GateService? = null
+        /** 当前识别前台应用的方式：无障碍 / 使用情况 / 仅悬浮窗（只能按亮屏时间粗略计时）/ 未监控 */
+        @Volatile var monitorMode: String = ""
         fun start(context: Context) {
             val intent = Intent(context, GateService::class.java)
             if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)

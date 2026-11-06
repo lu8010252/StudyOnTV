@@ -69,7 +69,7 @@ class LearningEngine(private val store: LocalStore) {
             .put("extraPool", number("extra_pool")).put("wrongProgress", number("wrong_progress"))
             .put("nextAvailableAt", nextAt)
             .put("roundsDoneToday", rounds).put("reason", reason).put("awaitingReview", active()?.has("pendingReview") == true)
-            .put("points", PointsSync.brief(store)).put("version", BuildConfig.VERSION_NAME)
+            .put("points", PointsSync.brief(store)).put("version", BuildConfig.VERSION_NAME).put("monitor", GateService.monitorMode)
     }
 
     @Synchronized

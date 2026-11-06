@@ -39,7 +39,7 @@ object Foreground {
         return try {
             val manager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
             val now = System.currentTimeMillis()
-            val events = manager.queryEvents(now - 86400000, now)
+            val events = manager.queryEvents(now - 600000, now)
             val event = UsageEvents.Event()
             var latest: String? = null
             while (events.hasNextEvent()) {
