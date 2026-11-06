@@ -69,6 +69,7 @@ class LearningEngine(private val store: LocalStore) {
             .put("extraPool", number("extra_pool")).put("wrongProgress", number("wrong_progress"))
             .put("nextAvailableAt", nextAt)
             .put("roundsDoneToday", rounds).put("reason", reason).put("awaitingReview", active()?.has("pendingReview") == true)
+            .put("points", PointsSync.brief(store)).put("version", BuildConfig.VERSION_NAME)
     }
 
     @Synchronized
@@ -219,6 +220,7 @@ class LearningEngine(private val store: LocalStore) {
             val rules = round.getJSONObject("rules")
             val wasExtra = round.optBoolean("extra")
             val mode = round.getString("mode")
+            var pointsEarned = 0
             if (!correct && rules.optBoolean("extraEnabled")) {
                 var wrong = number("wrong_progress") + 1
                 if (wrong >= rules.getInt("wrongThreshold")) {
@@ -233,7 +235,10 @@ class LearningEngine(private val store: LocalStore) {
             if (mode == "streak" && !correct && !wasExtra) round.put("earnedMs", 0)
             if (!wasExtra || mode == "practice") {
                 round.put("answered", round.getInt("answered") + 1)
-                if (correct) round.put("correct", round.getInt("correct") + 1)
+                if (correct) {
+                    round.put("correct", round.getInt("correct") + 1)
+                    pointsEarned += PointsSync.earnForAnswer(store, question.optInt("difficulty", 2))
+                }
                 round.put("streak", if (correct) round.getInt("streak") + 1 else 0)
                 if (correct && rules.optBoolean("difficultyRewardEnabled")) {
                     val minutes = rules.getJSONObject("difficultyRewards").getDouble(question.optInt("difficulty", 2).toString())
@@ -257,6 +262,7 @@ class LearningEngine(private val store: LocalStore) {
                     val budget = store.config().getLong("dailyMinutes") * 60000 - number("used_ms") - number("credit_ms")
                     grant = min(requested, budget.coerceAtLeast(0))
                     put("credit_ms", number("credit_ms") + grant)
+                    pointsEarned += PointsSync.earnForPass(store)
                     store.logEvent("quiz_pass", JSONObject().put("roundId", round.getString("id")).put("minutes", grant / 60000.0))
                 }
                 store.logEvent("quiz", JSONObject().put("native", true).put("total", round.getInt("answered"))
@@ -271,6 +277,8 @@ class LearningEngine(private val store: LocalStore) {
                 store.set("active_round", round.toString())
                 result.put("next", publicRound(round))
             }
+            result.put("pointsEarned", pointsEarned)
+            if (pointsEarned > 0) PointsSync.kick(store)
             result.put("status", status())
             store.set("last_answer", JSONObject().put("nonce", input.getString("nonce")).put("result", result).toString())
             db.setTransactionSuccessful()

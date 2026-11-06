@@ -33,6 +33,13 @@ object DeviceRuntime {
             Prefs.setLocalPort(app, it.boundPort)
         }
         WebShell.PrefsHolder.baseUrl = Prefs.localBase(app)
+        // 积分同步：断网期间攒下的账本定时补传，同时刷新星星屋里的最新余额（家长加扣分、兑换后这里也会变）
+        Thread {
+            while (true) {
+                try { Thread.sleep(120_000) } catch (e: InterruptedException) { break }
+                try { PointsSync.syncNow(store) } catch (e: Exception) { }
+            }
+        }.apply { isDaemon = true; name = "points-sync" }.start()
         if (GradingService.settings(store).optString("mode") == "ai") {
             val pending = store.reviews("pending")
             for (i in 0 until pending.length()) GradingService.enqueue(store, learning, pending.getJSONObject(i).getString("id"))

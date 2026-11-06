@@ -18,8 +18,8 @@ android {
         applicationId = "com.studyontv.tv"
         minSdk = 21          // Android 5.0
         targetSdk = 34
-        versionCode = 4
-        versionName = "0.2.1"
+        versionCode = 5
+        versionName = "0.3.0"
     }
 
     flavorDimensions += "device"
@@ -35,6 +35,16 @@ android {
     }
 
     signingConfigs {
+        // 固定调试签名：每次构建签名一致，新版才能直接覆盖安装（不用先卸载）
+        getByName("debug") {
+            val ks = file("debug.keystore")
+            if (ks.exists()) {
+                storeFile = ks
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
         create("release") {
             val ks = localProps.getProperty("KEYSTORE_PATH", "")
             if (ks.isNotEmpty()) {

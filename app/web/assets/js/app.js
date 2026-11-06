@@ -43,7 +43,9 @@
   function pill() {
     var c = state.config, st = state.learning;
     var left = Math.max(0, (c.roundsPerDay || 3) - (st.roundsDoneToday || 0));
-    $('topPill').textContent = (st.remainingSeconds > 0 ? '可用 ' + Math.ceil(st.remainingSeconds / 60) + ' 分钟 · ' : '') + '还剩 ' + left + ' 组' + (st.extraPool > 0 ? ' · 加练池 ' + st.extraPool + ' 题' : '');
+    $('topPill').textContent = (st.remainingSeconds > 0 ? '可用 ' + Math.ceil(st.remainingSeconds / 60) + ' 分钟 · ' : '') + '还剩 ' + left + ' 组' + (st.extraPool > 0 ? ' · 加练池 ' + st.extraPool + ' 题' : '') +
+      (st.points && st.points.enabled && st.points.balance >= 0 ? ' · ⭐ ' + st.points.balance : '');
+    if ($('ver') && st.version) $('ver').textContent = 'v' + st.version;
   }
   function loadState(callback) {
     request('/api/state', null, function (error, result) {
@@ -148,8 +150,10 @@
         if (result.correctIndices.indexOf(i) >= 0) el.className += ' right';
         else if (state.selected.indexOf(i) >= 0) el.className += ' wrong';
       });
-      if (written && !result.correct) toast('答案：' + result.answerText);
-      else if (result.tip) toast(result.tip);
+      var gain = result.pointsEarned > 0 ? '  +' + result.pointsEarned + ' ⭐' : '';
+      if (written && !result.correct) toast('答案：' + result.answerText + gain);
+      else if (result.tip) toast(result.tip + gain);
+      else if (gain) toast('答对了' + gain);
       nextTimer = window.setTimeout(function () {
         state.busy = false;
         if (state.screen !== 'quiz') return;
@@ -158,7 +162,9 @@
           if (result.passed) {
             if (result.status.reason) { lock(result.status.reason); toast('奖励已保存，达到可用时段后使用'); return; }
             show('lock'); $('lockTitle').textContent = '任务完成'; $('lockIcon').textContent = '✓';
-            $('lockDesc').textContent = '已解锁 ' + result.rewardMinutes + ' 分钟'; $('lockNote').textContent = '';
+            $('lockDesc').textContent = '已解锁 ' + result.rewardMinutes + ' 分钟';
+            var pb = result.status.points;
+            $('lockNote').textContent = pb && pb.enabled && pb.balance >= 0 ? '星星屋积分 ' + pb.balance + '（今天已得 ' + pb.today + '）' : '';
             $('lockActions').innerHTML = '<button class="btn btn-primary focusable" data-action="home">返回桌面</button>';
             focusDefault();
             window.setTimeout(function () { nativeCall('exitToLauncher'); }, 1300);

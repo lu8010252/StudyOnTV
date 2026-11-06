@@ -1,0 +1,46 @@
+name: Build APK
+
+# 触发方式：① 手动运行  ② 推送 v* 标签（如 git tag v0.3.1 && git push --tags）
+# 版本号取自 app/native/app/build.gradle.kts 的 versionName，APK 文件名和 Release 标题都带版本号
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - uses: android-actions/setup-android@v3
+      - name: 安装 SDK 平台
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: 8.14.3 }
+      - name: 读取版本号
+        id: ver
+        run: echo "name=$(grep -oP 'versionName = "\K[^"]+' app/native/app/build.gradle.kts)" >> "$GITHUB_OUTPUT"
+      - name: 构建 TV 版和手机/平板版
+        working-directory: app/native
+        run: gradle --no-daemon assembleTvDebug assembleMobileDebug
+      - name: 重命名（带版本号）
+        run: |
+          V="${{ steps.ver.outputs.name }}"
+          mkdir -p out
+          cp app/native/app/build/outputs/apk/tv/debug/*.apk "out/StudyOnTV-Android-TV-v$V.apk"
+          cp app/native/app/build/outputs/apk/mobile/debug/*.apk "out/StudyOnTV-Mobile-v$V.apk"
+      - name: 发布到 Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.name }}
+          name: StudyOnTV v${{ steps.ver.outputs.name }}
+          body: |
+            **版本 v${{ steps.ver.outputs.name }}**（应用内「积分同步」面板和电视页右上角也能看到版本号）
+
+            · 答题积分同步到星星屋，两边都能看到
+          files: out/*.apk

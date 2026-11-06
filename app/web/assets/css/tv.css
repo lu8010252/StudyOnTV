@@ -446,3 +446,5 @@ html:not(.tv-device) .qr-box { box-shadow:none;border:1px solid #edece6; }
 .tv-device .glow,.tv-device .grain{display:none}.tv-device .bg{background:#08080a}
 
 #lockDesc{white-space:pre-line;max-height:32vh;overflow-y:auto}
+.ver { font-size: 1.1rem; color: #B5B5BC; margin-left: 1.2rem; }
+html:not(.tv-device) .ver { font-size: 11px; margin-left: 8px; }

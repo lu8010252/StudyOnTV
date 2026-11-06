@@ -178,6 +178,18 @@ class LanServer(
             path == "/api/events" && method == "GET" -> {
                 return json(out, 200, JSONObject().put("items", store.recentEvents(q["limit"]?.toIntOrNull() ?: 50)))
             }
+            path == "/api/points" && method == "GET" -> return json(out, 200, PointsSync.summary(store))
+            path == "/api/points/settings" && method == "PUT" -> {
+                return try { json(out, 200, PointsSync.save(store, JSONObject(body))) }
+                catch (e: IllegalArgumentException) { json(out, 200, JSONObject().put("error", "bad_settings").put("message", e.message ?: "")) }
+                catch (e: java.io.IOException) { json(out, 200, JSONObject().put("error", "network").put("message", "连不上星星屋：" + (e.message ?: ""))) }
+            }
+            path == "/api/points/children" && method == "POST" -> {
+                return try { json(out, 200, PointsSync.listChildren(store, JSONObject(body))) }
+                catch (e: IllegalArgumentException) { json(out, 200, JSONObject().put("error", "bad_settings").put("message", e.message ?: "")) }
+                catch (e: java.io.IOException) { json(out, 200, JSONObject().put("error", "network").put("message", "连不上星星屋：" + (e.message ?: ""))) }
+            }
+            path == "/api/points/sync" && method == "POST" -> { PointsSync.syncNow(store); return json(out, 200, PointsSync.summary(store)) }
             path == "/api/grading" && method == "GET" -> return json(out, 200, GradingService.settings(store))
             path == "/api/grading" && method == "PUT" -> return json(out, 200, GradingService.save(store, JSONObject(body)))
             path == "/api/reviews" && method == "GET" -> return json(out, 200, JSONObject().put("items", store.reviews(q["state"] ?: "pending")))

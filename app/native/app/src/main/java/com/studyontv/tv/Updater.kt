@@ -19,7 +19,7 @@ import java.net.URL
 
 object Updater {
 
-    private const val DEFAULT_API = "https://api.github.com/repos/chadyi/StudyOnTV/releases/latest"
+    private const val DEFAULT_API = "https://api.github.com/repos/lu8010252/StudyOnTV/releases/latest"
     private const val CACHE_MS = 6L * 60 * 60 * 1000
 
     data class Info(

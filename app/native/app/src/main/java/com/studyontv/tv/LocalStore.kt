@@ -9,7 +9,7 @@ import org.json.JSONObject
 import java.util.Calendar
 import java.util.UUID
 
-class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", null, 4) {
+class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", null, 5) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE questions(id TEXT PRIMARY KEY, subject TEXT, level TEXT, difficulty INTEGER, stem TEXT NOT NULL, options TEXT NOT NULL, answer INTEGER NOT NULL, tip TEXT, enabled INTEGER DEFAULT 1, created_at INTEGER, details TEXT)")
         db.execSQL("CREATE TABLE kv(k TEXT PRIMARY KEY, v TEXT)")
@@ -17,17 +17,66 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
         db.execSQL("CREATE INDEX idx_events_ts ON events(ts)")
         createReviews(db)
         createProgress(db)
+        createPoints(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) db.execSQL("ALTER TABLE questions ADD COLUMN details TEXT")
         if (oldVersion < 3) createReviews(db)
         if (oldVersion < 4) createProgress(db)
+        if (oldVersion < 5) createPoints(db)
     }
 
     private fun createProgress(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE question_progress(qid TEXT PRIMARY KEY, repetitions INTEGER NOT NULL, interval_days INTEGER NOT NULL, ease REAL NOT NULL, due_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)")
         db.execSQL("CREATE INDEX idx_question_due ON question_progress(due_at)")
+    }
+
+    // ---- 积分账本：id 同时作为星星屋的幂等键 extId，synced=0 表示还没同步到星星屋 ----
+    private fun createPoints(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE points_ledger(id TEXT PRIMARY KEY, ts INTEGER NOT NULL, delta INTEGER NOT NULL, reason TEXT NOT NULL, synced INTEGER NOT NULL DEFAULT 0)")
+        db.execSQL("CREATE INDEX idx_points_ts ON points_ledger(ts)")
+    }
+
+    fun addPoints(delta: Int, reason: String): String {
+        val id = UUID.randomUUID().toString()
+        writableDatabase.insert("points_ledger", null, ContentValues().apply {
+            put("id", id); put("ts", System.currentTimeMillis()); put("delta", delta); put("reason", reason.take(40)); put("synced", 0)
+        })
+        return id
+    }
+
+    fun pointsEarnedToday(): Int = readableDatabase.rawQuery(
+        "SELECT COALESCE(SUM(delta),0) FROM points_ledger WHERE ts>=?", arrayOf(startOfToday().toString())
+    ).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+
+    fun pendingPoints(limit: Int = 50): List<Triple<String, Int, String>> {
+        val out = ArrayList<Triple<String, Int, String>>()
+        readableDatabase.rawQuery("SELECT id,delta,reason FROM points_ledger WHERE synced=0 ORDER BY ts LIMIT ?", arrayOf(limit.toString())).use {
+            while (it.moveToNext()) out.add(Triple(it.getString(0), it.getInt(1), it.getString(2)))
+        }
+        return out
+    }
+
+    fun pendingPointsCount(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM points_ledger WHERE synced=0", null).use {
+        if (it.moveToFirst()) it.getInt(0) else 0
+    }
+
+    fun pendingPointsSum(): Int = readableDatabase.rawQuery("SELECT COALESCE(SUM(delta),0) FROM points_ledger WHERE synced=0", null).use {
+        if (it.moveToFirst()) it.getInt(0) else 0
+    }
+
+    fun markPointsSynced(id: String) {
+        writableDatabase.execSQL("UPDATE points_ledger SET synced=1 WHERE id=?", arrayOf(id))
+    }
+
+    fun recentPoints(limit: Int = 20): JSONArray {
+        val out = JSONArray()
+        readableDatabase.rawQuery("SELECT ts,delta,reason,synced FROM points_ledger ORDER BY ts DESC LIMIT ?", arrayOf(limit.toString())).use {
+            while (it.moveToNext()) out.put(JSONObject().put("ts", it.getLong(0)).put("delta", it.getInt(1))
+                .put("reason", it.getString(2)).put("synced", it.getInt(3) == 1))
+        }
+        return out
     }
 
     fun recordProgress(id: String, quality: Int) {
