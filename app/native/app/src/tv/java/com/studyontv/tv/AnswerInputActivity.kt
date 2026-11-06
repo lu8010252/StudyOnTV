@@ -7,24 +7,28 @@ import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
 import android.os.Bundle
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import org.json.JSONObject
 
 /**
  * TV 版填写答案页。
- * 投影的电视输入法（com.lu.tvime）在应用里调不出来（showSoftInput 请求不生效），
- * 所以这里自带一个遥控器可操作的大按钮键盘：方向键移动、OK 输入，输完选「完成」。
+ * 输入框是真正的 EditText：焦点在输入框上时按 OK，投影自带的电视输入法（com.lu.tvime）
+ * 就能弹出来，可以输入中文；下面还有一套遥控器大按钮键盘，数字/字母/符号不用开输入法。
  */
 class AnswerInputActivity : Activity() {
-    private lateinit var display: TextView
+    private lateinit var input: EditText
     private lateinit var status: TextView
     private var delivered = false
-    private val answer = StringBuilder()
+    // 自带键盘改输入框时也会触发 TextWatcher，用这个标记避免两边互相回写
+    private var syncing = false
 
     private val rows = listOf(
         listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0"),
@@ -36,7 +40,6 @@ class AnswerInputActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (savedInstanceState != null) answer.append(savedInstanceState.getString("answer", ""))
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(36), dp(20), dp(36), dp(20))
@@ -48,19 +51,31 @@ class AnswerInputActivity : Activity() {
             setTextColor(Color.WHITE)
         })
         root.addView(TextView(this).apply {
-            text = "方向键移动，OK 键输入；数字/字母/符号都可以，输完选「完成」"
+            text = "焦点在输入框时按 OK 打开系统输入法（可输中文）；或用下面的按键输入数字/字母/符号"
             textSize = 13f
             setTextColor(0xFFB5B5BC.toInt())
             setPadding(0, dp(4), 0, dp(10))
         })
-        display = TextView(this).apply {
+        input = EditText(this).apply {
             textSize = 24f
             setBackgroundColor(0xFF16161A.toInt())
             setPadding(dp(20), dp(10), dp(20), dp(10))
             minLines = 2
             gravity = Gravity.TOP or Gravity.START
+            hint = "请输入答案"
+            setHintTextColor(0xFF6E6E76.toInt())
+            setTextColor(Color.WHITE)
+            setSingleLine(false)
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) { }
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { }
+                override fun afterTextChanged(s: Editable?) {
+                    if (!syncing) status.text = ""
+                }
+            })
         }
-        root.addView(display, LinearLayout.LayoutParams(-1, -2))
+        root.addView(input, LinearLayout.LayoutParams(-1, -2))
+        savedInstanceState?.getString("answer")?.let { input.setText(it); input.setSelection(it.length) }
         status = TextView(this).apply {
             textSize = 13f
             setTextColor(0xFFFFB020.toInt())
@@ -127,7 +142,6 @@ class AnswerInputActivity : Activity() {
         root.addView(actions)
 
         setContentView(root)
-        refresh()
         firstKey?.requestFocus()
     }
 
@@ -157,36 +171,36 @@ class AnswerInputActivity : Activity() {
         }
     }
 
+    // 自带键盘按键：直接编辑输入框内容（和系统输入法改的是同一份文本）
     private fun press(label: String) {
-        when (label) {
-            "⌫" -> if (answer.isNotEmpty()) answer.deleteCharAt(answer.length - 1)
-            "清空" -> answer.setLength(0)
-            "空格" -> answer.append(' ')
-            else -> if (answer.length < 200) answer.append(label)
+        syncing = true
+        try {
+            val text = input.text
+            val cursor = input.selectionEnd.coerceIn(0, text.length)
+            when (label) {
+                "⌫" -> if (cursor > 0) text.delete(cursor - 1, cursor)
+                "清空" -> text.clear()
+                "空格" -> if (text.length < 200) text.insert(cursor, " ")
+                else -> if (text.length < 200) text.insert(cursor, label)
+            }
+            input.setSelection(input.selectionEnd.coerceIn(0, input.text.length))
+        } finally {
+            syncing = false
         }
         status.text = ""
-        refresh()
-    }
-
-    private fun refresh() {
-        if (answer.isEmpty()) {
-            display.text = "请输入答案"
-            display.setTextColor(0xFF6E6E76.toInt())
-        } else {
-            display.text = answer
-            display.setTextColor(Color.WHITE)
-        }
     }
 
     private fun showSystemKeyboard() {
         try {
+            input.requestFocus()
+            input.setSelection(input.text.length)
             val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-            imm.toggleSoftInput(InputMethodManager.SHOW_FORCED, 0)
+            imm.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
         } catch (_: Exception) { }
     }
 
     private fun deliver() {
-        val value = answer.toString().trim()
+        val value = input.text.toString().trim()
         if (value.isEmpty()) { status.text = "请先输入答案"; return }
         delivered = true
         AnswerInput.complete(intent.getStringExtra("requestId") ?: "", JSONObject().put("text", value))
@@ -194,7 +208,7 @@ class AnswerInputActivity : Activity() {
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
-        outState.putString("answer", answer.toString())
+        outState.putString("answer", input.text.toString())
         super.onSaveInstanceState(outState)
     }
 
