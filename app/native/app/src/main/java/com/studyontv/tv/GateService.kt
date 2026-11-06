@@ -69,6 +69,16 @@ class GateService : Service() {
         val reason = DeviceRuntime.learning.status().getString("reason")
         val feedbackVisible = hasGate() && DeviceRuntime.store.get("review_feedback").isNotEmpty()
         wasUsing = active && reason.isEmpty() && !feedbackVisible
+        val why = when {
+            !awake -> "息屏或锁屏"
+            !monitoring -> "无监控权限"
+            pkg == null -> if (canOverlay) "" else "无前台信息"
+            exempt(pkg) -> if (pkg == packageName) "在本应用内" else if (exempt(pkg, false)) "系统应用" else "在桌面"
+            reason.isNotEmpty() -> "需要先答题"
+            feedbackVisible -> "答题反馈页"
+            else -> ""
+        }
+        diag = (pkg ?: "未知") + if (wasUsing) " · 计时中" else " · 暂停（" + why + "）"
         if (!awake || !monitoring || (reason.isEmpty() && !feedbackVisible) || (pkg != null && exempt(pkg, false))) hideAll()
         if (protecting && reason.isNotEmpty() && now - lastGate > 1800 && !hasGate()) {
             lastGate = now
@@ -145,6 +155,8 @@ class GateService : Service() {
         private var instance: GateService? = null
         /** 当前识别前台应用的方式：无障碍 / 使用情况 / 仅悬浮窗（只能按亮屏时间粗略计时）/ 未监控 */
         @Volatile var monitorMode: String = ""
+        /** 诊断：当前前台应用和是否在计时，显示在电视页右上角，方便排查计时不动的原因 */
+        @Volatile var diag: String = ""
         fun start(context: Context) {
             val intent = Intent(context, GateService::class.java)
             if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)

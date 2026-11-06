@@ -9,6 +9,8 @@ object Foreground {
     @Volatile var lastPackage: String? = null
         private set
     private var ownActivity: java.lang.ref.WeakReference<android.app.Activity>? = null
+    private var usageLast: String? = null
+    private var usageCheckedAt = 0L
 
     fun resumeOwn(activity: android.app.Activity) {
         ownActivity = java.lang.ref.WeakReference(activity)
@@ -39,14 +41,17 @@ object Foreground {
         return try {
             val manager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
             val now = System.currentTimeMillis()
-            val events = manager.queryEvents(now - 600000, now)
+            // 第一次读最近 24 小时，之后只读上次之后的新事件，并记住最近一次进入前台的应用：
+            // 应用连续用了很久没有新事件时，也不会误判成别的应用
+            val from = if (usageCheckedAt == 0L) now - 86400000 else usageCheckedAt - 3000
+            val events = manager.queryEvents(from, now)
             val event = UsageEvents.Event()
-            var latest: String? = null
             while (events.hasNextEvent()) {
                 events.getNextEvent(event)
-                if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) latest = event.packageName
+                if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) usageLast = event.packageName
             }
-            latest ?: manager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, now - 86400000, now)
+            usageCheckedAt = now
+            usageLast ?: manager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, now - 86400000, now)
                 ?.filter { it.lastTimeUsed > 0 }?.maxByOrNull { it.lastTimeUsed }?.packageName
         } catch (_: Exception) { null }
     }

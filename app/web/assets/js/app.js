@@ -45,7 +45,7 @@
     var left = Math.max(0, (c.roundsPerDay || 3) - (st.roundsDoneToday || 0));
     $('topPill').textContent = (st.remainingSeconds > 0 ? '可用 ' + Math.ceil(st.remainingSeconds / 60) + ' 分钟 · ' : '') + '还剩 ' + left + ' 组' + (st.extraPool > 0 ? ' · 加练池 ' + st.extraPool + ' 题' : '') +
       (st.points && st.points.enabled && st.points.balance >= 0 ? ' · ⭐ ' + st.points.balance : '');
-    if ($('ver') && st.version) $('ver').textContent = 'v' + st.version + (st.monitor ? ' · 计时：' + st.monitor : '');
+    if ($('ver') && st.version) $('ver').textContent = 'v' + st.version + (st.monitor ? ' · 计时：' + st.monitor : '') + (st.diag ? ' · ' + st.diag : '');
   }
   function loadState(callback) {
     request('/api/state', null, function (error, result) {
