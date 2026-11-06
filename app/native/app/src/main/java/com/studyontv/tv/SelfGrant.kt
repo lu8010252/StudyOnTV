@@ -78,12 +78,25 @@ object SelfGrant {
             sh("悬浮窗", "appops set $pkg SYSTEM_ALERT_WINDOW allow")
             val current = sh("读取已有无障碍服务", "settings get secure enabled_accessibility_services")
             val list = if (current.isEmpty() || current == "null") emptyList() else current.split(':')
-            if (list.none { it.startsWith("$pkg/") }) {
-                sh("开启无障碍服务", "settings put secure enabled_accessibility_services '" + (list + service).joinToString(":") + "'")
+            // 应用被更新或强行停止后，系统不会自动重新连接已启用的无障碍服务，所以先从列表里拿掉再加回来，
+            // 让系统感知到设置变化、重新绑定服务（只在列表里“已有”时才需要，没有就直接加）
+            val others = list.filter { !it.startsWith("$pkg/") }
+            if (others.size != list.size) {
+                if (others.isEmpty()) sh("重置无障碍服务", "settings delete secure enabled_accessibility_services")
+                else sh("重置无障碍服务", "settings put secure enabled_accessibility_services '" + others.joinToString(":") + "'")
+                Thread.sleep(800)
             }
+            sh("开启无障碍服务", "settings put secure enabled_accessibility_services '" + (others + service).joinToString(":") + "'")
             sh("无障碍总开关", "settings put secure accessibility_enabled 1")
             sh("后台运行（省电白名单）", "dumpsys deviceidle whitelist +$pkg")
         }
+        // 等服务真正连上（最多 8 秒），连不上就如实告诉家长
+        var waited = 0
+        while (!WatchAccessibilityService.connected && waited < 8000) { Thread.sleep(500); waited += 500 }
+        val connected = WatchAccessibilityService.connected
+        if (!connected) allOk = false
+        steps.put(JSONObject().put("step", "无障碍服务连接").put("ok", connected)
+            .put("out", if (connected) "" else "命令已执行，但系统没有启动无障碍服务。请把电视关机再开机一次试试（无障碍服务开机时由系统自动启动）。"))
         return JSONObject().put("ok", allOk).put("steps", steps)
             .put("message", if (allOk) "授权完成。几秒后下面的状态会刷新，如果无障碍还没变绿，强行停止应用再打开一次。" else "有几步没有成功，详情见下方。")
     }
