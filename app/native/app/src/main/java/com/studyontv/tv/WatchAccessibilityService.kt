@@ -11,6 +11,8 @@ class WatchAccessibilityService : AccessibilityService() {
         if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             val pkg = event.packageName?.toString()
             if (pkg != null && (pkg.contains("inputmethod") || pkg.contains("keyboard"))) return
+            // 系统栏、音量条、投影自带的悬浮菜单都会弹出临时窗口，真正的前台应用并没有变，不能当成切换
+            if (pkg == "com.android.systemui") return
             if (!GateService.hasGate() || pkg != packageName) Foreground.update(pkg)
             GateService.onForegroundChanged(this, pkg)
         }
@@ -19,6 +21,7 @@ class WatchAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         instance = this
         connected = true
+        GateService.note("无障碍服务已连接")
         gate = GateOverlay(this, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY) {
             performGlobalAction(GLOBAL_ACTION_HOME)
         }
@@ -28,6 +31,7 @@ class WatchAccessibilityService : AccessibilityService() {
         gate?.hide(); gate = null
         instance = null
         connected = false
+        GateService.note("无障碍服务已断开")
         Foreground.clearExternal()
         super.onDestroy()
     }

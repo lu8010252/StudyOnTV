@@ -28,6 +28,11 @@ object SelfGrant {
             .put("accessibility", WatchAccessibilityService.connected).put("background", idle)
             .put("running", running.get()).put("monitor", GateService.monitorMode)
         last?.let { o.put("last", it) }
+        try {
+            val st = DeviceRuntime.learning.status()
+            o.put("remainingSeconds", st.optLong("remainingSeconds")).put("usedMinutes", st.optDouble("usedMinutes")).put("reason", st.optString("reason"))
+        } catch (_: Exception) { }
+        o.put("diag", GateService.diag).put("history", GateService.historyJson())
         return o
     }
 

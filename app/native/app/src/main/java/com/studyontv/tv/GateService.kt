@@ -24,6 +24,7 @@ class GateService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var lastTick = SystemClock.elapsedRealtime()
     private var wasUsing = false
+    private var lastStateText = ""
     private var lastGate = 0L
     @Volatile private var settingsUntil = 0L
     private val systemSettingsPackage by lazy {
@@ -79,6 +80,8 @@ class GateService : Service() {
             else -> ""
         }
         diag = (pkg ?: "未知") + if (wasUsing) " · 计时中" else " · 暂停（" + why + "）"
+        val stateText = monitorMode + " · " + diag
+        if (stateText != lastStateText) { lastStateText = stateText; note(stateText) }
         if (!awake || !monitoring || (reason.isEmpty() && !feedbackVisible) || (pkg != null && exempt(pkg, false))) hideAll()
         if (protecting && reason.isNotEmpty() && now - lastGate > 1800 && !hasGate()) {
             lastGate = now
@@ -157,6 +160,17 @@ class GateService : Service() {
         @Volatile var monitorMode: String = ""
         /** 诊断：当前前台应用和是否在计时，显示在电视页右上角，方便排查计时不动的原因 */
         @Volatile var diag: String = ""
+        private val history = java.util.ArrayDeque<Pair<Long, String>>()
+        /** 记一条状态变化（前台应用、计时/暂停、无障碍连接/断开），给家长后台“计时诊断”看，最多留 60 条 */
+        @Synchronized fun note(text: String) {
+            history.addFirst(System.currentTimeMillis() to text)
+            while (history.size > 60) history.removeLast()
+        }
+        @Synchronized fun historyJson(): org.json.JSONArray {
+            val a = org.json.JSONArray()
+            for ((t, x) in history) a.put(org.json.JSONObject().put("ts", t).put("text", x))
+            return a
+        }
         fun start(context: Context) {
             val intent = Intent(context, GateService::class.java)
             if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)

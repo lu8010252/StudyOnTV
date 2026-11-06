@@ -54,8 +54,7 @@
   function load() {
     api('GET', '/api/grant').then(function (j) {
       data = j;
-      if (j.running && !timer) timer = setInterval(load, 2000);
-      if (!j.running && timer) stopPoll();
+      if (!timer) timer = setInterval(load, 3000);   // 面板开着就每 3 秒刷新，方便在手机上实时看电视的计时状态
       view();
     }).catch(function (e) { stopPoll(); if (e.message === 'unauthorized') login('登录已失效，请重新输入'); else frame('一键授权', [el('p', { text: e.message })]); });
   }
@@ -83,6 +82,17 @@
         kids.push(el('div', { text: (s.ok ? '✓ ' : '✗ ') + s.step + (s.ok || !s.out ? '' : '：' + s.out), style: 'font-size:12px;color:' + (s.ok ? '#6b7280' : '#c0392b') }));
       });
     }
+    var rem = d.remainingSeconds || 0;
+    kids.push(el('div', { text: '计时诊断（电视在别的 App 里时，这里能实时看到）', style: 'margin:14px 0 6px;font-weight:600' }));
+    kids.push(el('div', { text: '剩余 ' + Math.floor(rem / 60) + ' 分 ' + (rem % 60) + ' 秒　·　已用 ' + (d.usedMinutes || 0).toFixed(1) + ' 分钟' + (d.reason ? '　·　锁定原因：' + d.reason : ''), style: 'font-size:13px' }));
+    kids.push(el('div', { text: '现在：' + (d.monitor || '') + ' · ' + (d.diag || '暂无'), style: 'font-size:13px;color:#0b6bcb;margin:2px 0 6px;word-break:break-all' }));
+    var hist = el('div', { style: 'max-height:180px;overflow:auto;font-size:12px;color:#4b5563;border:1px solid #eee;border-radius:8px;padding:6px 8px' });
+    (d.history || []).forEach(function (h) {
+      var t = new Date(h.ts), p2 = function (n) { return n < 10 ? '0' + n : '' + n; };
+      hist.appendChild(el('div', { text: p2(t.getHours()) + ':' + p2(t.getMinutes()) + ':' + p2(t.getSeconds()) + '  ' + h.text, style: 'word-break:break-all' }));
+    });
+    if (!(d.history || []).length) hist.appendChild(el('div', { text: '还没有记录' }));
+    kids.push(hist);
     kids.push(el('div', { style: 'margin-top:14px' }, [
       el('button', { text: d.running ? '授权中…' : '一键授权', style: BTN + (d.running ? ';opacity:.6' : ''), onclick: d.running ? function () {} : run }),
       el('button', { text: '刷新状态', style: BTN + ';background:#fff;color:#333;border:1px solid #c9cec6', onclick: load })]));
