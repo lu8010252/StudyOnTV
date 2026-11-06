@@ -287,6 +287,25 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
         return items.length()
     }
 
+    // ---- AI 出题用的查询 ----
+    fun unseenCount(subject: String): Int = readableDatabase.rawQuery(
+        "SELECT COUNT(*) FROM questions LEFT JOIN question_progress p ON questions.id=p.qid WHERE questions.enabled=1 AND questions.subject=? AND p.qid IS NULL", arrayOf(subject)
+    ).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+
+    fun countSubject(subject: String): Int = readableDatabase.rawQuery(
+        "SELECT COUNT(*) FROM questions WHERE enabled=1 AND subject=?", arrayOf(subject)
+    ).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+
+    fun stemsOf(subject: String, limit: Int): List<String> {
+        val out = ArrayList<String>()
+        readableDatabase.rawQuery("SELECT stem FROM questions WHERE subject=? LIMIT ?", arrayOf(subject, limit.toString())).use { while (it.moveToNext()) out.add(it.getString(0)) }
+        return out
+    }
+
+    fun countAiQuestions(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM questions WHERE id LIKE 'ai-%'", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+
+    fun deleteAiQuestions(): Int = writableDatabase.delete("questions", "id LIKE ?", arrayOf("ai-%"))
+
     fun deleteQuestion(id: String): Boolean = writableDatabase.delete("questions", "id=?", arrayOf(id)) > 0
 
     fun logEvent(type: String, payload: JSONObject) {

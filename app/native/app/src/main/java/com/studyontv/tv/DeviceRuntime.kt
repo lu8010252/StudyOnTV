@@ -40,6 +40,14 @@ object DeviceRuntime {
                 try { PointsSync.syncNow(store) } catch (e: Exception) { }
             }
         }.apply { isDaemon = true; name = "points-sync" }.start()
+        // AI 出题：开机一分钟后检查一次，之后每 10 分钟检查题库“没做过的题”是否低于阈值
+        Thread {
+            try { Thread.sleep(60_000) } catch (e: InterruptedException) { return@Thread }
+            while (true) {
+                try { AiQuestionGen.tick(store) } catch (e: Exception) { }
+                try { Thread.sleep(600_000) } catch (e: InterruptedException) { break }
+            }
+        }.apply { isDaemon = true; name = "ai-question-gen" }.start()
         if (GradingService.settings(store).optString("mode") == "ai") {
             val pending = store.reviews("pending")
             for (i in 0 until pending.length()) GradingService.enqueue(store, learning, pending.getJSONObject(i).getString("id"))

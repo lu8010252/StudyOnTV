@@ -178,6 +178,13 @@ class LanServer(
             path == "/api/events" && method == "GET" -> {
                 return json(out, 200, JSONObject().put("items", store.recentEvents(q["limit"]?.toIntOrNull() ?: 50)))
             }
+            path == "/api/aigen" && method == "GET" -> return json(out, 200, AiQuestionGen.summary(store))
+            path == "/api/aigen/settings" && method == "PUT" -> {
+                return try { json(out, 200, AiQuestionGen.save(store, JSONObject(body))) }
+                catch (e: Exception) { json(out, 200, JSONObject().put("error", "bad_settings").put("message", e.message ?: "设置有误")) }
+            }
+            path == "/api/aigen/run" && method == "POST" -> { AiQuestionGen.runNowAsync(store); return json(out, 200, AiQuestionGen.summary(store)) }
+            path == "/api/aigen/questions" && method == "DELETE" -> { AiQuestionGen.deleteAll(store); return json(out, 200, AiQuestionGen.summary(store)) }
             path == "/api/points" && method == "GET" -> return json(out, 200, PointsSync.summary(store))
             path == "/api/points/settings" && method == "PUT" -> {
                 return try { json(out, 200, PointsSync.save(store, JSONObject(body))) }
