@@ -497,9 +497,6 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
         return out
     }
 
-    fun countAiQuestions(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM questions WHERE id LIKE 'ai-%'", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
-
-    fun deleteAiQuestions(): Int = writableDatabase.delete("questions", "id LIKE ?", arrayOf("ai-%"))
 
     fun deleteQuestions(ids: List<String>): Int {
         val db = writableDatabase

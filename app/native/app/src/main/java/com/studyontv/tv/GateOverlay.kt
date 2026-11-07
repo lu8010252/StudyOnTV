@@ -136,9 +136,9 @@ class GateOverlay(
             val status = DeviceRuntime.learning.status()
             if (status.getString("reason").isNotEmpty() || (status.optLong("remainingSeconds") <= 0 && !status.optBoolean("free"))) return
             handler.post {
+                // 悬浮窗盖在视频软件上面，视频软件一直没离开前台：收起悬浮窗就回到视频了，
+                // 不要再发“回桌面”，否则视频软件会被压到桌面后面而被系统回收。
                 hide()
-                if (goHome?.invoke() != true) context.startActivity(Intent(Intent.ACTION_MAIN)
-                    .addCategory(Intent.CATEGORY_HOME).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }
         }
     }

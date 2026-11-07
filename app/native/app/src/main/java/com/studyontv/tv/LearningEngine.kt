@@ -160,8 +160,10 @@ class LearningEngine(private val store: LocalStore) {
             free -> ""
             freeQuota > 0 -> ""   // 每日默认免费时长还有余额，放行
             used >= c.getLong("dailyMinutes") * 60000 -> "quota"
-            remaining <= 0 && rounds >= c.getInt("roundsPerDay") -> "rounds"
             c.optString("scheduleMode", "allow") != "control" && !inWindow(c) -> "schedule"
+            // 已达组数上限：用完最后一组的奖励时间再锁，但不再允许继续答题卷得更多时间
+            rounds >= c.getInt("roundsPerDay") && remaining <= 0 -> "rounds"
+            rounds >= c.getInt("roundsPerDay") -> ""   // 达组但还有剩余时间，用完才锁
             remaining > 0 -> ""
             else -> "timeup"
         }
