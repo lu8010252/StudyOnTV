@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        拦截/答题页专用主题：窗口声明为“透明”，但内容（WebView）是不透明的深色，看起来和全屏一样。
+        目的：不透明的全屏页会把下面的视频软件压成“已停止的后台应用”，内存紧张时它是第一个被系统回收的；
+        透明主题下视频软件只是被暂停、仍算“可见应用”，系统最后才会回收它，答完题回去还能接着看。
+    -->
+    <style name="GateTheme" parent="@android:style/Theme.Material.NoActionBar.Fullscreen">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
+</resources>

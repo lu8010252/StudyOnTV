@@ -54,7 +54,7 @@
             android:launchMode="singleInstance"
             android:screenOrientation="unspecified"
             android:taskAffinity="com.studyontv.tv.gate"
-            android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen" />
+            android:theme="@style/GateTheme" />
 
         <activity
             android:name=".UpdateActivity"

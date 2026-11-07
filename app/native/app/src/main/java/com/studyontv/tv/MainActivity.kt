@@ -25,7 +25,8 @@ open class MainActivity : Activity() {
         }
         DeviceRuntime.ensure(this)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        if (DeviceBridge.isTv(this)) requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        // 透明主题的拦截页在安卓 8.0 上不允许设置方向（会直接崩溃），电视本来就是横屏，跳过
+        if (DeviceBridge.isTv(this) && this !is GateActivity) requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
         val reason = intent.getStringExtra("reason")
         page = if (this is GateActivity && reason != null && reason != "timeup") "lock?reason=$reason" else "quiz"
         createWeb()
