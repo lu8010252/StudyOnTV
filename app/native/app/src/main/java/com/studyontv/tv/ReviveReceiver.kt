@@ -24,6 +24,8 @@ class ReviveReceiver : BroadcastReceiver() {
         if (!GateService.isRunning()) {
             try { GateService.start(app) } catch (_: Exception) { }
         }
+        // 无障碍被杀/被系统关掉后自己写回去（需一键授权时授予的 WRITE_SECURE_SETTINGS）
+        try { AccessibilityHeal.ensure(app) } catch (_: Exception) { }
     }
 
     /** 留一点持久日志，设备日志被厂商关了，排查自唤醒有没有触发只能靠它 */

@@ -27,6 +27,7 @@ object SelfGrant {
         val o = JSONObject().put("overlay", GateOverlay.canDraw(context)).put("usage", Foreground.hasUsageAccess(context))
             .put("accessibility", WatchAccessibilityService.connected).put("background", idle)
             .put("running", running.get()).put("monitor", GateService.monitorMode)
+            .put("heal", AccessibilityHeal.canHeal(context))
         last?.let { o.put("last", it) }
         try {
             val st = DeviceRuntime.learning.status()
@@ -72,15 +73,20 @@ object SelfGrant {
         val steps = JSONArray()
         var allOk = true
         Dadb.create("127.0.0.1", 5555, keys).use { adb ->
-            fun sh(label: String, cmd: String): String {
+            // optional=true：个别安卓版本没有这个命令/操作项，失败了不影响整体结果
+            fun sh(label: String, cmd: String, optional: Boolean = false): String {
                 val r = adb.shell(cmd)
-                val ok = r.exitCode == 0 && !r.allOutput.contains("Exception")
-                if (!ok) allOk = false
+                val ok = r.exitCode == 0 && !r.allOutput.contains("Exception") && !r.allOutput.contains("Unknown operation")
+                if (!ok && !optional) allOk = false
                 steps.put(JSONObject().put("step", label).put("ok", ok).put("out", r.allOutput.trim().take(160)))
                 return r.output.trim()
             }
             sh("使用情况访问", "appops set $pkg GET_USAGE_STATS allow")
             sh("悬浮窗", "appops set $pkg SYSTEM_ALERT_WINDOW allow")
+            // 授予“修改安全设置”：之后无障碍被杀/被关，应用能自己写回去（见 AccessibilityHeal）
+            sh("无障碍自愈授权", "pm grant $pkg android.permission.WRITE_SECURE_SETTINGS")
+            sh("允许后台运行", "appops set $pkg RUN_IN_BACKGROUND allow", optional = true)
+            sh("允许后台长时间运行", "appops set $pkg RUN_ANY_IN_BACKGROUND allow", optional = true)
             val current = sh("读取已有无障碍服务", "settings get secure enabled_accessibility_services")
             val list = if (current.isEmpty() || current == "null") emptyList() else current.split(':')
             // 应用被更新或强行停止后，系统不会自动重新连接已启用的无障碍服务，所以先从列表里拿掉再加回来，

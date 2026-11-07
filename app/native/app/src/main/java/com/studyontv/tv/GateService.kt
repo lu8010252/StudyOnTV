@@ -42,6 +42,8 @@ class GateService : Service() {
             if (++ticks >= 5) {
                 ticks = 0
                 Prefs.setHeartbeat(this@GateService, System.currentTimeMillis(), wasUsing)
+                // 顺带自检无障碍：断了就写回去（内部有 20 秒节流，没授权时直接跳过）
+                try { AccessibilityHeal.ensure(this@GateService) } catch (_: Exception) { }
             }
             handler.postDelayed(this, 1000)
         }
