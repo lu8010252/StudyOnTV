@@ -36,35 +36,34 @@ class AnswerInputActivity : Activity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(24), dp(20), dp(24))
-            setBackgroundColor(0xFFF8F9F6.toInt())
+            setBackgroundColor(TvUi.background(this@AnswerInputActivity))
         }
-        root.addView(TextView(this).apply { text = "填写答案"; textSize = 26f; setTextColor(0xFF303B31.toInt()) })
+        root.addView(TvUi.text(this, "填写答案", 26f, bold = true).apply { paint.isFakeBoldText = true })
         text = EditText(this).apply {
-            hint = "键盘、输入法手写，或语音转文字"; minLines = 3; learningField()
+            hint = "键盘、输入法手写，或语音转文字"; minLines = 3; TvUi.field(this)
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
             if (Build.VERSION.SDK_INT >= 33) isAutoHandwritingEnabled = true
         }
-        if (savedInstanceState != null) text.setText(savedInstanceState.getString("draft", ""))
-        root.addView(text, LinearLayout.LayoutParams(-1, -2))
-        status = TextView(this).apply { setTextColor(0xFFFFB020.toInt()); textSize = 14f }
+        text.setText(savedInstanceState?.getString("draft") ?: intent.getStringExtra("draft").orEmpty())
+        root.addView(text, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(14) })
+        status = TextView(this).apply { setTextColor(TvUi.palette(this@AnswerInputActivity).warn); textSize = 14f; setPadding(0, dp(8), 0, dp(4)) }
         root.addView(status)
         val row = LinearLayout(this)
-        row.addView(Button(this).apply { text = "语音输入"; learningStyle(); setOnClickListener { voice() } }, LinearLayout.LayoutParams(0, -2, 1f))
-        row.addView(Button(this).apply { text = "清空手写"; learningStyle(); setOnClickListener { ink.clear() } }, LinearLayout.LayoutParams(0, -2, 1f))
+        row.addView(TvUi.button(this, "语音输入") { voice() }, LinearLayout.LayoutParams(0, dp(48), 1f))
+        row.addView(TvUi.button(this, "清空手写") { ink.clear() }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(10) })
         root.addView(row)
-        root.addView(TextView(this).apply { text = "手写作答（含公式、图形）"; textSize = 16f; setTextColor(0xFF303B31.toInt()) })
+        root.addView(TvUi.text(this, "手写作答（含公式、图形）", 15f, TvUi.muted(this)).apply { setPadding(0, dp(18), 0, dp(8)) })
         ink = InkView(this)
         root.addView(ink, LinearLayout.LayoutParams(-1, dp(300)))
-        root.addView(Button(this).apply {
-            text = "使用此答案"
-            learningStyle(true)
-            setOnClickListener {
+        lateinit var use: Button
+        use = TvUi.button(this, "使用此答案", true) {
+            run {
                 if (this@AnswerInputActivity.text.text.isBlank() && !ink.hasInk) {
-                    status.text = "请先填写或手写答案"; return@setOnClickListener
+                    status.text = "请先填写或手写答案"; return@run
                 }
                 val draft = this@AnswerInputActivity.text.text.toString()
                 val bitmap = ink.snapshot()
-                isEnabled = false
+                use.isEnabled = false
                 Thread {
                     val drawing = if (bitmap == null) "" else {
                         val bytes = ByteArrayOutputStream()
@@ -80,9 +79,10 @@ class AnswerInputActivity : Activity() {
                     }
                 }.start()
             }
-        })
-        root.addView(Button(this).apply { text = "取消"; learningStyle(); setOnClickListener { finish() } })
-        setContentView(ScrollView(this).apply { isFillViewport = true; setBackgroundColor(0xFFF8F9F6.toInt()); addView(root) })
+        }
+        root.addView(use, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(18) })
+        root.addView(TvUi.button(this, "取消") { finish() }, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(10) })
+        setContentView(ScrollView(this).apply { isFillViewport = true; setBackgroundColor(TvUi.background(this@AnswerInputActivity)); addView(root) })
         if (intent.getBooleanExtra("voice", false) && savedInstanceState == null) voice()
     }
 
@@ -130,7 +130,7 @@ class AnswerInputActivity : Activity() {
     class InkView(context: Context) : View(context) {
         private val path = Path()
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.BLACK; strokeWidth = 5f; style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
+            color = Color.BLACK; strokeWidth = 3f * context.resources.displayMetrics.density; style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
         }
         var hasInk = false
             private set

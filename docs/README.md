@@ -26,5 +26,6 @@ node scripts/gen-how-it-works.mjs
 
 - [安装指南](./install.md)
 - [让 AI 加题（局域网接口）](./ai-api.md)
+- [与 Home Assistant 联动](./home-assistant.md)
 - [埋点说明](./analytics.md)
 - [版本更新机制](./update.md)

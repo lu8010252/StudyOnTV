@@ -32,6 +32,13 @@ object Prefs {
     fun setUpdateCheckedAt(c: Context, v: Long) = sp(c).edit().putLong("update_checked_at", v).apply()
     fun updateApi(c: Context): String = sp(c).getString("update_api", "") ?: ""
     fun setUpdateApi(c: Context, v: String) = sp(c).edit().putString("update_api", v).apply()
+    /** null 表示使用默认镜像列表 */
+    fun updateMirrors(c: Context): String? = sp(c).getString("update_mirrors", null)
+    fun setUpdateMirrors(c: Context, v: String?) = sp(c).edit().apply { if (v == null) remove("update_mirrors") else putString("update_mirrors", v) }.apply()
+    fun updateLastSource(c: Context): String = sp(c).getString("update_last_source", "") ?: ""
+    fun setUpdateLastSource(c: Context, v: String) = sp(c).edit().putString("update_last_source", v).apply()
+    fun updateLog(c: Context): String = sp(c).getString("update_log", "") ?: ""
+    fun setUpdateLog(c: Context, v: String) = sp(c).edit().putString("update_log", v).apply()
 
     
     fun updateInProgress(c: Context): Boolean = sp(c).getLong("update_started_at", 0L).let { it > 0 && System.currentTimeMillis() - it < 10 * 60 * 1000 }
@@ -46,4 +53,9 @@ object Prefs {
     fun heartbeatCounting(c: Context): Boolean = sp(c).getBoolean("heartbeat_counting", false)
     fun setHeartbeat(c: Context, at: Long, counting: Boolean) =
         sp(c).edit().putLong("heartbeat_at", at).putBoolean("heartbeat_counting", counting).apply()
+    /** null = 未表态（尚未被问过）, true = 同意, false = 拒绝 */
+    fun buglyConsent(c: Context): Boolean = sp(c).getBoolean("bugly_consent", false)
+    fun setBuglyConsent(c: Context, v: Boolean) = sp(c).edit().putBoolean("bugly_consent", v).apply()
+    fun buglyConsentAsked(c: Context): Boolean = sp(c).getBoolean("bugly_consent_asked", false)
+    fun setBuglyConsentAsked(c: Context, v: Boolean) = sp(c).edit().putBoolean("bugly_consent_asked", v).apply()
 }

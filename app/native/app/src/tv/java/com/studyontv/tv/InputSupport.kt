@@ -3,11 +3,12 @@ package com.studyontv.tv
 import android.content.Context
 import android.webkit.WebView
 
-/**
- * TV 版输入：遥控器没法在网页输入框里打字，交给原生输入页（AnswerInputActivity）。
- */
 object InputSupport {
     val active: Boolean get() = AnswerInput.active
-    fun recentlyCompleted(): Boolean = AnswerInput.recentlyCompleted()
-    fun open(context: Context, web: WebView, voice: Boolean) = AnswerInput.open(context, web, voice)
+    // 电视版没有手写 / 语音页，统一走遥控器友好的文字输入页
+    fun open(context: Context, web: WebView, voice: Boolean) = openText(context, web, "", "")
+    fun openText(context: Context, web: WebView, draft: String, prompt: String) =
+        AnswerInput.open(context, web, TvTextInputActivity::class.java) {
+            putExtra("draft", draft); putExtra("prompt", prompt)
+        }
 }

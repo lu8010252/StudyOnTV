@@ -1,4 +1,4 @@
-/* 管控与题库面板：右下角「🎛 管控」按钮 + 弹层。管理令牌与积分、AI 出题面板共用（sessionStorage）。
+/* 抽题与题库面板：右下角「🎛 管控」按钮 + 弹层。管理令牌与积分、AI 出题面板共用（sessionStorage）。
  * ① 暂停管控（大人要看电视）② 抽题最低星级 ③ 答对多次自动淘汰。 */
 (function () {
   'use strict';
@@ -61,38 +61,16 @@
         .catch(function (e) { tip.textContent = e.message === 'unauthorized' ? '管理密码错误' : e.message; });
     };
     pw.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
-    frame('管控与题库 · 验证管理密码', [pw, tip, el('button', { text: '进入', style: BTN, onclick: go })]);
+    frame('抽题与题库 · 验证管理密码', [pw, tip, el('button', { text: '进入', style: BTN, onclick: go })]);
     pw.focus();
   }
   function load() {
     api('GET', '/api/tune').then(function (j) { data = j; view(); })
-      .catch(function (e) { if (e.message === 'unauthorized') login('登录已失效，请重新输入'); else frame('管控与题库', [el('p', { text: e.message })]); });
-  }
-
-  function pauseText(p) {
-    if (!p || !p.active) return '当前：管控中（正常拦截、计时）';
-    if (p.forever) return '当前：已暂停，直到你手动恢复';
-    var left = Math.max(1, Math.ceil((p.until - Date.now()) / 60000));
-    return '当前：已暂停到 ' + fmt(p.until) + '（还剩约 ' + left + ' 分钟），到点自动恢复';
+      .catch(function (e) { if (e.message === 'unauthorized') login('登录已失效，请重新输入'); else frame('抽题与题库', [el('p', { text: e.message })]); });
   }
 
   function view() {
     var d = data, msg = el('div', { style: 'min-height:18px;margin:4px 0;color:#c0392b' });
-    var p = d.pause || {};
-
-    var setPause = function (body, okText) {
-      api('PUT', '/api/pause', body).then(function (j) { data.pause = j; toast(okText); view(); })
-        .catch(function (e) { msg.textContent = e.message; });
-    };
-    var pauseState = el('div', { text: pauseText(p), style: 'font-weight:600;margin-bottom:8px;color:' + (p.active ? '#c77700' : '#2e7d32') });
-    var pauseBtns = el('div', {}, [
-      el('button', { text: '暂停 1 小时', style: BTN, onclick: function () { setPause({ minutes: 60 }, '已暂停 1 小时'); } }),
-      el('button', { text: '暂停 2 小时', style: BTN, onclick: function () { setPause({ minutes: 120 }, '已暂停 2 小时'); } }),
-      el('button', { text: '暂停到今天 24 点', style: BTN, onclick: function () { setPause({ today: true }, '已暂停到今天 24 点'); } }),
-      el('button', { text: '一直暂停', style: BTN2, onclick: function () { setPause({ forever: true }, '已暂停，记得之后恢复'); } }),
-      p.active ? el('button', { text: '恢复管控', style: BTN, onclick: function () { setPause({ off: true }, '已恢复管控'); } }) : null
-    ]);
-
     var star = el('select', { style: INP }, [
       el('option', { value: '1', text: '不限（1 星起）' }),
       el('option', { value: '2', text: '2 星及以上（默认）' }),
@@ -116,14 +94,7 @@
     };
 
     stopTick();
-    if (p.active && !p.forever) timer = setInterval(function () { pauseState.textContent = pauseText(data.pause); if (Date.now() > data.pause.until) { stopTick(); load(); } }, 15000);
-
-    frame('管控与题库', [
-      el('div', { style: SEC }, [
-        el('b', { text: '⏸ 暂停管控（大人要看电视时）' }),
-        el('div', { text: '暂停期间不弹拦截页、不计使用时间；到点自动恢复。电视上也可以：遥控器连按 ↑ 5 次 → 输入管理密码 → 暂停管控。', style: 'font-size:12px;color:#6d776f;margin:4px 0 8px' }),
-        pauseState, pauseBtns
-      ]),
+    frame('抽题与题库', [
       el('div', { style: SEC }, [
         el('b', { text: '🎯 抽题偏好' }),
         el('div', { text: '最低星级：先从这个星级以上的题里抽（题库里没有时会自动放宽，不会没题做）。没做过的题优先，做过的优先出最久没做的，本轮不会出重复题。', style: 'font-size:12px;color:#6d776f;margin:4px 0 8px' }),

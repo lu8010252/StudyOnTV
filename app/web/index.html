@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<meta name="theme-color" content="#08080A">
+<meta name="theme-color" content="#141414">
 <title>题了个题 · 先学再看</title>
 <link rel="stylesheet" href="assets/css/tv.css">
 </head>
@@ -13,7 +13,7 @@
   <div class="brand"><span class="logo"><i></i></span><span class="brand-text">题了个题</span></div>
   <div class="topright"><span class="pill" id="topPill">正在连接…</span><span class="clock" id="clock"></span><span class="ver" id="ver"></span></div>
 </header>
-<div class="update-tip" id="updateTip"><span class="update-text" id="updateText"></span><button class="update-btn" id="updateGo">更新</button><button class="update-close" id="updateClose">×</button></div>
+<div class="update-tip" id="updateTip"><span class="update-text" id="updateText"></span><button class="update-btn focusable" id="updateGo" data-action="update-go">更新</button><button class="update-close focusable" id="updateClose" data-action="update-close" aria-label="关闭">×</button></div>
 <main id="stage">
   <section class="screen" id="screen-quiz">
     <div class="quiz-wrap">
@@ -21,14 +21,27 @@
       <h1 class="question" id="qText">加载中…</h1>
       <div class="options" id="qOptions"></div>
       <div class="pool-status" id="qPool"></div>
-      <div class="quiz-foot"><div class="dots-progress" id="qDots"></div><div class="hint">方向键选择 · OK 确认</div></div>
+      <div class="feedback" id="qFeedback" role="status" aria-live="polite"><div class="fb-icon" id="fbIcon"></div><div class="fb-body"><div class="fb-title" id="fbTitle"></div><div class="fb-answer" id="fbAnswer"></div><div class="fb-tip" id="fbTip"></div></div><button class="btn btn-primary focusable" id="fbNext" data-action="next">继续</button></div>
+      <div class="quiz-foot"><div class="dots-progress" id="qDots"></div><div class="hint"><span class="kbd">◀ ▶ ▲ ▼</span><span class="hint-text">选择</span><span class="kbd">OK</span><span class="hint-text">确认</span><span class="kbd">返回</span><span class="hint-text">回到桌面</span></div></div>
     </div>
   </section>
   <section class="screen" id="screen-lock">
     <div class="lock-wrap"><div class="lock-badge" id="lockIcon"></div><h1 class="lock-title" id="lockTitle"></h1><p class="lock-desc" id="lockDesc"></p><div class="lock-actions" id="lockActions"></div><p class="lock-note" id="lockNote"></p></div>
   </section>
   <section class="screen" id="screen-pair">
-    <div class="lock-wrap"><div class="qr-box" id="pairQr"></div><h1 class="lock-title">扫码<em>管理这台设备</em></h1><p class="lock-desc">家长设备连接同一 WiFi<br><b id="pairUrl"></b><br>打开后输入管理密码</p><button class="btn btn-primary focusable" data-action="quiz">返回答题</button></div>
+    <div class="pair-wrap">
+      <div class="pair-copy">
+        <p class="pair-eyebrow">家长管理</p>
+        <h1 class="pair-title">用手机管理这台设备</h1>
+        <ol class="pair-steps">
+          <li><b>1</b>手机连接与这台设备相同的 WiFi</li>
+          <li><b>2</b>用相机扫描二维码，或在浏览器打开<br><span class="pair-url" id="pairUrl"></span></li>
+          <li><b>3</b>输入管理密码，即可设置规则、题库与批改</li>
+        </ol>
+        <div class="lock-actions"><button class="btn btn-primary focusable" data-action="quiz">返回答题</button><button class="btn btn-ghost focusable" data-action="permissions">权限设置</button><button class="btn btn-ghost focusable" data-action="password">修改密码</button></div>
+      </div>
+      <div class="qr-box" id="pairQr"></div>
+    </div>
   </section>
 </main>
 <script src="assets/js/qrcode.min.js"></script>

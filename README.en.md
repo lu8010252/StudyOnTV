@@ -4,7 +4,9 @@ An Android learning and screen-time app for tablets, phones and TVs. Tablets and
 
 This project is linked with and endorses the [LINUX DO](https://linux.do) community.
 
-[Mobile / tablet APK](https://www.pgyer.com/StudyOnTVMobile) · [TV APK](https://www.pgyer.com/StudyOnTVTV) · [GitHub downloads](https://github.com/chadyi/StudyOnTV/releases) · [中文说明](./README.md) · [Installation](./docs/install.md)
+[Download from GitHub Release](https://github.com/chadyi/StudyOnTV/releases/latest) · [中文说明](./README.md) · [Installation](./docs/install.md)
+
+If GitHub is unavailable, use the Pgyer backup: [Mobile / tablet](https://www.pgyer.com/StudyOnTVMobile) · [TV](https://www.pgyer.com/StudyOnTVTV).
 
 ## Learning
 
@@ -32,7 +34,10 @@ Subjective submissions can be graded by a parent, an authenticated Agent, or an 
 
 ![Tablet learning](./docs/screenshots/v0.3.0/tablet-quiz.png)
 ![Tablet handwriting](./docs/screenshots/v0.3.0/tablet-handwriting.png)
-![Parent review](./docs/screenshots/v0.3.0/parent-review.png)
+<table><tr>
+<td align="center"><img src="./docs/screenshots/v0.3.0/phone-quiz.png" width="280" alt="Phone learning"><br><sub>Phone learning</sub></td>
+<td align="center"><img src="./docs/screenshots/v0.3.0/parent-review.png" width="280" alt="Parent review"><br><sub>Parent review and AI settings</sub></td>
+</tr></table>
 ![Parent dashboard](./docs/screenshots/v0.3.0/parent-desktop.png)
 ![TV learning](./docs/screenshots/v0.3.0/tv-quiz.png)
 

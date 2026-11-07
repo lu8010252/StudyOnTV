@@ -2,7 +2,7 @@
 
 ## 安装到手机或平板
 
-从蒲公英下载 [手机 / 平板 APK](https://www.pgyer.com/StudyOnTVMobile) 或 [TV APK](https://www.pgyer.com/StudyOnTVTV)，按设备选择对应版本。[GitHub 下载](https://github.com/chadyi/StudyOnTV/releases)作为备用。手机和平板直接打开 APK 安装，允许当前下载工具安装应用。手机默认竖屏，平板支持横竖屏；电视支持遥控器。
+优先从 [GitHub Release](https://github.com/chadyi/StudyOnTV/releases/latest) 下载对应设备的正式 APK。无法访问 GitHub 时，可使用蒲公英备用入口：[手机 / 平板](https://www.pgyer.com/StudyOnTVMobile)、[TV](https://www.pgyer.com/StudyOnTVTV)。手机和平板直接打开 APK 安装，允许当前下载工具安装应用。手机默认竖屏，平板支持横竖屏；电视支持遥控器。
 
 首次打开先设置管理密码，随后可按需开启权限；不开权限也能进入家长设置或学习。电视无法开启无障碍时，可以使用悬浮窗管理。在另一台家长设备上扫码，输入管理密码连接。受控设备本身也可以通过连续点击标题 5 次，或短按遥控器「上」5 次，再输入密码重新打开连接页。
 
@@ -58,7 +58,7 @@
 帮我在这台电视上安装 StudyOnTV。ADB 调试已经开好了。
 电视 IP：<填>
 
-1. 从 https://www.pgyer.com/StudyOnTVTV 下载 TV APK；备用地址为 https://github.com/chadyi/StudyOnTV/releases
+1. 优先从 https://github.com/chadyi/StudyOnTV/releases/latest 下载 TV APK；无法访问时再从 https://www.pgyer.com/StudyOnTVTV 下载
 2. adb connect <IP>:5555，然后 adb devices 确认设备出现；
    没出现就等我到电视上点「允许」，还是不行再告诉我怎么处理
 3. adb install -r <刚下载的 apk>
@@ -114,6 +114,14 @@ adb shell monkey -p com.studyontv.tv -c android.intent.category.LAUNCHER 1
 | 防卸载（可选） | App 权限页 → 防卸载 → 系统设备管理员授权 | 支持的系统可要求先解除管理员再卸载；家长可从设置中解除 |
 
 只开启悬浮窗、未提供应用识别权限时，按离开学习页后的亮屏时间计时，包含桌面停留时间。未开启任何权限时，可以学习和管理题库，暂不拦截其他应用。
+
+部分电视（如创维酷开）在系统设置里精简了「显示在其他应用上层」入口，可以用 ADB 授权：
+
+```bash
+adb shell appops set com.studyontv.tv SYSTEM_ALERT_WINDOW allow
+```
+
+调试包把包名换成 `com.studyontv.tv.debug`。授权后重新打开一次 App，家长面板「设置 → 设备 → 管控能力」会列出服务、悬浮窗、使用情况和无障碍状态；如果没在计时，先看这里。Android 10+ 上如果悬浮窗被系统拒绝，App 会再尝试打开全屏学习页，并发送一条「到学习时间了」的通知作为兜底。
 
 在家长设备上扫码并输入首次安装时设置的管理密码。权限入口始终保留在家长设置中。
 

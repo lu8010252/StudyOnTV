@@ -28,7 +28,7 @@ object AdminAuth {
         val salt = ByteArray(16).also { random.nextBytes(it) }
         prefs(context).edit().putString("salt", Base64.encodeToString(salt, Base64.NO_WRAP))
             .putString("hash", Base64.encodeToString(hash(value, salt), Base64.NO_WRAP))
-            .remove("failures").remove("blocked_until").commit()
+            .remove("failures").remove("blocked_until").remove("remembered").commit()
         sessions.clear()
     }
 
@@ -49,12 +49,48 @@ object AdminAuth {
     }
 
     @Synchronized
-    fun login(context: Context, value: String): String? {
+    fun login(context: Context, value: String, remember: Boolean = false): String? {
         if (!verify(context, value)) return null
         sessions.entries.removeAll { it.value < System.currentTimeMillis() }
-        return randomToken().also { sessions[it] = System.currentTimeMillis() + 12 * 60 * 60 * 1000L }
+        val token = randomToken()
+        if (!remember) { sessions[token] = System.currentTimeMillis() + 12 * 60 * 60 * 1000L; return token }
+        // 「记住这台手机」：30 天内免密码，设备重启后仍有效（只保存令牌的 SHA-256）；修改管理密码后全部失效
+        val saved = remembered(context)
+        saved.put(digest(token), System.currentTimeMillis() + REMEMBER_MS)
+        val keys = saved.keys().asSequence().toList().sortedBy { saved.optLong(it) }
+        keys.take((keys.size - 8).coerceAtLeast(0)).forEach { saved.remove(it) }   // 最多记住 8 台
+        prefs(context).edit().putString("remembered", saved.toString()).commit()
+        return token
+    }
+
+    private const val REMEMBER_MS = 30L * 24 * 60 * 60 * 1000
+    private fun digest(token: String) = MessageDigest.getInstance("SHA-256").digest(token.toByteArray())
+        .joinToString("") { "%02x".format(it) }
+    private fun remembered(context: Context): org.json.JSONObject {
+        val all = try { org.json.JSONObject(prefs(context).getString("remembered", "{}") ?: "{}") } catch (_: Exception) { org.json.JSONObject() }
+        val now = System.currentTimeMillis()
+        all.keys().asSequence().toList().forEach { if (all.optLong(it) < now) all.remove(it) }
+        return all
     }
 
     @Synchronized
-    fun valid(token: String?): Boolean = token != null && (sessions[token] ?: 0) > System.currentTimeMillis()
+    fun forget(context: Context, token: String?) {
+        if (token == null) return
+        sessions.remove(token)
+        val saved = remembered(context)
+        if (saved.remove(digest(token)) != null) prefs(context).edit().putString("remembered", saved.toString()).commit()
+    }
+
+    @Volatile private var verifiedAt = 0L
+
+    /** 刚在本机设置或验证过密码（2 分钟内）：从权限引导页进入家长设置时不必再输一次 */
+    fun markVerified() { verifiedAt = android.os.SystemClock.elapsedRealtime() }
+    fun recentlyVerified(): Boolean = verifiedAt > 0 && android.os.SystemClock.elapsedRealtime() - verifiedAt < 120000
+
+    @Synchronized
+    fun valid(token: String?): Boolean {
+        if (token == null || token.length != 64) return false
+        if ((sessions[token] ?: 0) > System.currentTimeMillis()) return true
+        return try { remembered(DeviceRuntime.appContext).has(digest(token)) } catch (_: Throwable) { false }
+    }
 }

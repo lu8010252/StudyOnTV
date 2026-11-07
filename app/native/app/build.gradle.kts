@@ -18,8 +18,8 @@ android {
         applicationId = "com.studyontv.tv"
         minSdk = 21          // Android 5.0
         targetSdk = 34
-        versionCode = 24
-        versionName = "0.6.2"
+        versionCode = 25
+        versionName = "0.7.0"
     }
 
     flavorDimensions += "device"
@@ -88,6 +88,8 @@ android {
 dependencies {
     // 一键授权用：通过本机 ADB（5555）给自己开无障碍/使用情况等权限
     implementation("dev.mobile:dadb:1.2.10")
+    // Bugly 崩溃上报（用户同意后才初始化，见 BuglyInit.kt）
+    implementation(files("libs/bugly-crashreport.aar"))
 }
 
 // 把网页和题库同步进 assets（仓库里只维护 app/web、admin、data/seed.json 三份源）
@@ -98,6 +100,7 @@ val syncWebAssets by tasks.registering(Sync::class) {
     from(File(repoRoot, "data/seed.json")) { rename { "questions.json" } }
     from(File(repoRoot, "shared/katex")) { into("web/assets/vendor/katex") }
     from(File(repoRoot, "shared/math.js")) { into("web/assets/js") }
+    from(File(repoRoot, "data/holidays")) { into("holidays") }
     into(layout.projectDirectory.dir("src/main/assets"))
 }
 

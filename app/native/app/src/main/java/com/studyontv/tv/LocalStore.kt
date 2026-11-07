@@ -9,7 +9,12 @@ import org.json.JSONObject
 import java.util.Calendar
 import java.util.UUID
 
-class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", null, 5) {
+class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", null, 6) {
+    companion object {
+        val DEFAULT_PRAISE = listOf("太棒了！", "答对啦！", "完全正确！", "真厉害！", "好样的，继续保持！", "漂亮！你越来越熟练了")
+        val DEFAULT_ENCOURAGE = listOf("没关系，记住正确答案就好", "差一点点，下一题加油！", "错误也是学习的一部分", "别灰心，再接再厉！")
+    }
+
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE questions(id TEXT PRIMARY KEY, subject TEXT, level TEXT, difficulty INTEGER, stem TEXT NOT NULL, options TEXT NOT NULL, answer INTEGER NOT NULL, tip TEXT, enabled INTEGER DEFAULT 1, created_at INTEGER, details TEXT)")
         db.execSQL("CREATE TABLE kv(k TEXT PRIMARY KEY, v TEXT)")
@@ -25,6 +30,30 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
         if (oldVersion < 3) createReviews(db)
         if (oldVersion < 4) createProgress(db)
         if (oldVersion < 5) createPoints(db)
+        if (oldVersion < 6) compactUsage(db)
+    }
+
+    /**
+     * 旧版本每秒写一条 usage 事件，一天可达上万行，导致 /api/state、成长记录越来越慢（Issue #2：后台加载卡）。
+     * 升级时按小时合并成一条。
+     */
+    private fun compactUsage(db: SQLiteDatabase) {
+        val buckets = LinkedHashMap<Long, Long>()
+        db.rawQuery("SELECT payload,ts FROM events WHERE type='usage'", null).use { c ->
+            while (c.moveToNext()) {
+                val ms = try { JSONObject(c.getString(0)).optLong("milliseconds") } catch (_: Exception) { 0L }
+                val hour = c.getLong(1) / 3600000 * 3600000
+                buckets[hour] = (buckets[hour] ?: 0L) + ms
+            }
+        }
+        db.beginTransaction()
+        try {
+            db.execSQL("DELETE FROM events WHERE type='usage'")
+            buckets.forEach { (hour, ms) ->
+                if (ms > 0) db.execSQL("INSERT INTO events(type,payload,ts) VALUES(?,?,?)", arrayOf("usage", JSONObject().put("milliseconds", ms).toString(), hour))
+            }
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
     }
 
     private fun createProgress(db: SQLiteDatabase) {
@@ -151,28 +180,78 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
     }
 
     fun config(): JSONObject {
-        val defaults = JSONObject().put("dailyMinutes", 40).put("sessionMinutes", 10)
+        val defaults = JSONObject().put("dailyMinutes", 40).put("dailyFreeMinutes", 0).put("sessionMinutes", 10)
             .put("questionsPerRound", 5).put("roundsPerDay", 3).put("passRatio", 0.6)
-            .put("windowStart", "18:30").put("windowEnd", "20:00").put("allDay", false).put("spacedRepetitionEnabled", false)
+            .put("windowStart", "18:30").put("windowEnd", "20:00").put("allDay", true).put("spacedRepetitionEnabled", false)
             .put("playMode", "round").put("extraEnabled", true)
             .put("wrongThreshold", 3).put("extraQuestions", 2)
             .put("difficultyRewardEnabled", false)
             .put("difficultyRewards", JSONObject().put("1", 1).put("2", 2).put("3", 3).put("4", 4).put("5", 5))
+            .put("praisePhrases", JSONArray(DEFAULT_PRAISE)).put("encouragePhrases", JSONArray(DEFAULT_ENCOURAGE))
+            .put("autoNextSeconds", 0).put("scheduleMode", "allow").put("blockSettingsDuringControl", true).put("theme", if (BuildConfig.FLAVOR == "tv") "dark" else "system")
+            .put("holidayMode", "sunday")
+            .put("quizSubjects", JSONArray()).put("quizLevels", JSONArray())
             .put("version", 1)
         val saved = try { JSONObject(get("config", "{}")) } catch (e: Exception) { JSONObject() }
         saved.keys().forEach { defaults.put(it, saved.get(it)) }
+        // 旧版的四种配色主题合并为深色 / 浅色
+        defaults.put("theme", when (defaults.optString("theme")) { "light", "daylight" -> "light"; "system" -> "system"; "dark", "midnight", "nord", "amber" -> "dark"; else -> if (BuildConfig.FLAVOR == "tv") "dark" else "system" })
         val timePattern = Regex("([01][0-9]|2[0-3]):[0-5][0-9]")
         val validStart = timePattern.matches(defaults.optString("windowStart"))
         val validEnd = timePattern.matches(defaults.optString("windowEnd"))
         if (!validStart) defaults.put("windowStart", "18:30")
         if (!validEnd) defaults.put("windowEnd", "20:00")
         if (!saved.has("allDay") && validStart && validEnd && saved.optString("windowStart") == saved.optString("windowEnd")) defaults.put("allDay", true)
+        // 旧版的单个时段自动迁移成一周七天；新版按 30 分钟格子保存
+        val migrated = normalizeWeek(saved.optJSONArray("weekSlots"))
+            ?: if (saved.has("allDay") || saved.has("windowStart") || saved.has("windowEnd")) {
+                val oldDefault = !defaults.optBoolean("allDay") &&
+                    defaults.optString("windowStart") == "18:30" && defaults.optString("windowEnd") == "20:00"
+                if (oldDefault) { defaults.put("allDay", true); fullWeek() }
+                else weekFromWindow(defaults.optBoolean("allDay"), defaults.optString("windowStart"), defaults.optString("windowEnd"))
+            } else fullWeek()
+        defaults.put("weekSlots", migrated)
+        if (defaults.optString("holidayMode") !in listOf("sunday", "normal")) defaults.put("holidayMode", "sunday")
+            .put("quizSubjects", JSONArray()).put("quizLevels", JSONArray())
         return defaults
+    }
+
+    private fun weekFromWindow(allDay: Boolean, start: String, end: String): JSONArray {
+        fun minutes(value: String): Int? = try { value.split(":").let { it[0].toInt() * 60 + it[1].toInt() } } catch (_: Exception) { null }
+        val from = minutes(start) ?: 18 * 60 + 30
+        val to = minutes(end) ?: 20 * 60
+        val chars = CharArray(48) { index ->
+            val minute = index * 30
+            val on = allDay || if (from < to) minute in from until to else minute >= from || minute < to
+            if (on) '1' else '0'
+        }
+        val day = String(chars)
+        return JSONArray().apply { repeat(7) { put(day) } }
+    }
+
+    private fun fullWeek(): JSONArray = JSONArray().apply { repeat(7) { put("1".repeat(48)) } }
+
+    /** 旧版默认周末时段，仅用于迁移判断 */
+    private fun weekendDefault(): JSONArray {
+        val empty = "0".repeat(48)
+        val weekend = weekFromWindow(false, "09:00", "20:00").optString(0)
+        return JSONArray().apply { repeat(5) { put(empty) }; put(weekend); put(weekend) }
+    }
+
+    private fun normalizeWeek(raw: JSONArray?): JSONArray? {
+        if (raw == null || raw.length() != 7) return null
+        val out = JSONArray()
+        for (i in 0 until 7) {
+            val day = raw.optString(i)
+            if (day.length != 48 || day.any { it != '0' && it != '1' }) return null
+            out.put(day)
+        }
+        return out
     }
 
     fun saveConfig(input: JSONObject): JSONObject {
         val next = config()
-        val ranges = mapOf("dailyMinutes" to 1..480, "sessionMinutes" to 1..120,
+        val ranges = mapOf("dailyMinutes" to 1..480, "dailyFreeMinutes" to 0..120, "sessionMinutes" to 1..120,
             "questionsPerRound" to 1..100, "roundsPerDay" to 1..100,
             "wrongThreshold" to 1..100, "extraQuestions" to 1..100)
         ranges.forEach { (key, range) ->
@@ -199,8 +278,47 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
             require(input.getString("playMode") in listOf("round", "streak", "practice")) { "未知玩法" }
             next.put("playMode", input.getString("playMode"))
         }
-        listOf("extraEnabled", "difficultyRewardEnabled", "allDay", "spacedRepetitionEnabled").forEach {
+        listOf("extraEnabled", "difficultyRewardEnabled", "allDay", "spacedRepetitionEnabled", "blockSettingsDuringControl").forEach {
             if (input.has(it)) next.put(it, input.getBoolean(it))
+        }
+        for (key in listOf("praisePhrases", "encouragePhrases")) if (input.has(key)) {
+            val raw = input.getJSONArray(key)
+            val clean = JSONArray()
+            for (i in 0 until raw.length()) raw.optString(i).trim().takeIf { it.isNotEmpty() }?.let {
+                require(it.length <= 40) { "每句鼓励语不超过 40 个字" }
+                clean.put(it)
+            }
+            require(clean.length() <= 30) { "鼓励语最多 30 句" }
+            next.put(key, if (clean.length() == 0) JSONArray(if (key == "praisePhrases") DEFAULT_PRAISE else DEFAULT_ENCOURAGE) else clean)
+        }
+        if (input.has("scheduleMode")) {
+            require(input.getString("scheduleMode") in listOf("allow", "control")) { "未知的时段用途" }
+            next.put("scheduleMode", input.getString("scheduleMode"))
+        }
+        for (key in listOf("quizSubjects", "quizLevels")) if (input.has(key)) {
+            val raw = input.optJSONArray(key) ?: JSONArray()
+            val clean = JSONArray()
+            for (i in 0 until minOf(raw.length(), 50)) raw.optString(i).trim().takeIf { it.isNotEmpty() && it.length <= 32 }?.let { value ->
+                if (!(0 until clean.length()).any { clean.optString(it) == value }) clean.put(value)
+            }
+            next.put(key, clean)
+        }
+        if (input.has("weekSlots")) {
+            val clean = normalizeWeek(input.optJSONArray("weekSlots")) ?: throw IllegalArgumentException("可用时段格式不正确")
+            next.put("weekSlots", clean)
+        }
+        if (input.has("holidayMode")) {
+            require(input.getString("holidayMode") in listOf("sunday", "normal")) { "未知的节假日规则" }
+            next.put("holidayMode", input.getString("holidayMode"))
+        }
+        if (input.has("theme")) {
+            require(input.getString("theme") in listOf("dark", "light", "system")) { "外观需要为深色、浅色或跟随系统" }
+            next.put("theme", input.getString("theme"))
+        }
+        if (input.has("autoNextSeconds")) {
+            val value = input.getInt("autoNextSeconds")
+            require(value in 0..30) { "自动下一题需要为 0–30 秒，0 表示手动" }
+            next.put("autoNextSeconds", value)
         }
         if (input.has("difficultyRewards")) {
             val rewards = input.getJSONObject("difficultyRewards")
@@ -210,20 +328,21 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
             }
             next.put("difficultyRewards", rewards)
         }
-        require(next.optBoolean("allDay") || next.getString("windowStart") != next.getString("windowEnd")) { "开始与结束时间不能相同；全天请开启全天可用" }
         next.put("version", next.optInt("version", 1) + 1)
         set("config", next.toString())
         return next
     }
 
-    fun questions(subject: String? = null, level: String? = null, limit: Int = 200, spaced: Boolean = false): JSONArray {
-        val where = StringBuilder("enabled=1")
+    fun questions(subject: String? = null, level: String? = null, limit: Int = 200, spaced: Boolean = false,
+                   enabledOnly: Boolean = true, sortBy: String = "random"): JSONArray {
+        val where = StringBuilder(if (enabledOnly) "enabled=1" else "1=1")
         val args = mutableListOf<String>()
         if (!subject.isNullOrEmpty()) { where.append(" AND subject=?"); args.add(subject) }
         if (!level.isNullOrEmpty()) { where.append(" AND level=?"); args.add(level) }
         val out = JSONArray()
         val source = if (spaced) "questions LEFT JOIN question_progress progress ON questions.id=progress.qid" else "questions"
-        val order = if (spaced) "CASE WHEN progress.due_at<=${System.currentTimeMillis()} THEN 0 WHEN progress.qid IS NULL THEN 1 ELSE 2 END, progress.due_at ASC, RANDOM()" else "RANDOM()"
+        val order = if (spaced) "CASE WHEN progress.due_at<=${System.currentTimeMillis()} THEN 0 WHEN progress.qid IS NULL THEN 1 ELSE 2 END, progress.due_at ASC, RANDOM()"
+            else when (sortBy) { "newest" -> "questions.created_at DESC, questions.rowid DESC"; "oldest" -> "questions.created_at ASC, questions.rowid ASC"; else -> "RANDOM()" }
         readableDatabase.rawQuery("SELECT questions.* FROM $source WHERE $where ORDER BY $order LIMIT ${limit.coerceIn(1, 5000)}", args.toTypedArray()).use { c ->
             while (c.moveToNext()) out.put(rowToItem(c))
         }
@@ -239,6 +358,8 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
             .put("k", c.getInt(c.getColumnIndexOrThrow("answer")))
             .put("difficulty", c.getInt(c.getColumnIndexOrThrow("difficulty")))
             .put("tip", c.getString(c.getColumnIndexOrThrow("tip")) ?: "")
+            .put("subject", c.getString(c.getColumnIndexOrThrow("subject")) ?: "")
+            .put("level", c.getString(c.getColumnIndexOrThrow("level")) ?: "")
         if (!item.has("type")) item.put("type", "single")
         return item
     }
@@ -250,11 +371,15 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
      * - minStar>1 时先只从这个星级以上的题里挑，挑不出来就放宽星级，不会因此没题
      * - 题库被“自动淘汰”做空时，会把淘汰的题放回来，保证总有题可做
      */
-    fun pickQuestion(skip: Set<String>, last: String?, spaced: Boolean, minStar: Int): JSONObject? {
+    fun pickQuestion(skip: Set<String>, last: String?, spaced: Boolean, minStar: Int,
+                     subjects: List<String> = emptyList(), levels: List<String> = emptyList()): JSONObject? {
         fun query(skipIds: Collection<String>, star: Int): JSONObject? {
             val where = StringBuilder("questions.enabled=1")
             val args = ArrayList<String>()
             if (star > 1) { where.append(" AND questions.difficulty>=?"); args.add(star.toString()) }
+            // 答题范围（上游功能）：家长限定科目 / 年级后只从范围内抽题
+            if (subjects.isNotEmpty()) { where.append(" AND questions.subject IN (").append(subjects.joinToString(",") { "?" }).append(")"); args.addAll(subjects) }
+            if (levels.isNotEmpty()) { where.append(" AND questions.level IN (").append(levels.joinToString(",") { "?" }).append(")"); args.addAll(levels) }
             if (skipIds.isNotEmpty()) {
                 where.append(" AND questions.id NOT IN (").append(skipIds.joinToString(",") { "?" }).append(")")
                 args.addAll(skipIds)
@@ -376,7 +501,30 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
 
     fun deleteAiQuestions(): Int = writableDatabase.delete("questions", "id LIKE ?", arrayOf("ai-%"))
 
+    fun deleteQuestions(ids: List<String>): Int {
+        val db = writableDatabase
+        var count = 0
+        db.beginTransaction()
+        try {
+            ids.forEach { count += db.delete("questions", "id=?", arrayOf(it)) }
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+        return count
+    }
+
     fun deleteQuestion(id: String): Boolean = writableDatabase.delete("questions", "id=?", arrayOf(id)) > 0
+
+    fun setEnabled(ids: List<String>, enabled: Boolean): Int {
+        val db = writableDatabase; var count = 0
+        db.beginTransaction()
+        try {
+            ids.forEach { id ->
+                count += db.update("questions", android.content.ContentValues().apply { put("enabled", if (enabled) 1 else 0) }, "id=?", arrayOf(id))
+            }
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+        return count
+    }
 
     fun logEvent(type: String, payload: JSONObject) {
         writableDatabase.execSQL("INSERT INTO events(type,payload,ts) VALUES(?,?,?)", arrayOf(type, payload.toString(), System.currentTimeMillis()))
@@ -412,7 +560,10 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
     }
 
     fun todayStats(): JSONObject = stats(startOfToday(), Long.MAX_VALUE)
-    fun roundsDoneToday(): Int = todayStats().optInt("rounds")
+    // status() 每秒都会调用，这里直接计数，不再解析今天的全部事件
+    fun roundsDoneToday(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM events WHERE type='quiz_pass' AND ts>=?", arrayOf(startOfToday().toString())).use {
+        if (it.moveToFirst()) it.getInt(0) else 0
+    }
 
     fun historyDays(days: Int = 7): JSONArray {
         val out = JSONArray()

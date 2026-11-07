@@ -19,10 +19,12 @@
 
 Android 平板、手机和电视使用同一套规则，分别安装对应版本：
 
-- [**手机/平板/TV GitHub 下载**](https://github.com/chadyi/StudyOnTV/releases)
+- [**手机/平板/TV GitHub 下载（首选）**](https://github.com/chadyi/StudyOnTV/releases/latest)
 
-- **[手机 / 平板版 · 蒲公英下载](https://www.pgyer.com/StudyOnTVMobile)**
-- **[TV 版 · 蒲公英下载](https://www.pgyer.com/StudyOnTVTV)**
+如果无法访问 GitHub，可使用蒲公英备用下载：
+
+- **[手机 / 平板版 · 蒲公英备用下载](https://www.pgyer.com/StudyOnTVMobile)**
+- **[TV 版 · 蒲公英备用下载](https://www.pgyer.com/StudyOnTVTV)**
 
 手机和平板直接下载安装；电视可通过 U 盘或 ADB 安装。首次打开设置管理密码，权限可以按需开启，也可以稍后再设置。
 
@@ -48,7 +50,7 @@ Android 平板、手机和电视使用同一套规则，分别安装对应版本
 - **开机恢复**：接收 Android 开机、部分系统快速开机和覆盖升级广播，尝试恢复管理服务；厂商自启动及遥控器待机清后台场景见安装指南。
 - **密码管理**：首次设置管理密码，扫码面板和 API 都要验证。学习页标题连点 5 次，或焦点在最上方时遥控器「上」短按 5 次，可重新打开家长验证入口；面板里也可以修改密码。
 
-[玩法说明](./docs/gameplay.md) · [暂停管控与自动淘汰](./docs/pause-and-tune.md) · [题库与批改 API](./docs/ai-api.md) · [示例题库](./data/banks/open-play.json)
+[玩法说明](./docs/gameplay.md) · [抽题偏好与自动淘汰](./docs/pause-and-tune.md) · [题库与批改 API](./docs/ai-api.md) · [家庭自动化联动](./docs/integration.md) · [与 Home Assistant 联动](./docs/home-assistant.md) · [示例题库](./data/banks/open-play.json)
 
 管理页面由被控设备在局域网内提供。离线题目直接在设备上完成；AI 批改需要网络和家长配置的服务。
 
@@ -59,8 +61,13 @@ Android 平板、手机和电视使用同一套规则，分别安装对应版本
 <div align="center">
 <img src="./docs/screenshots/v0.3.0/tablet-quiz.png" width="780" alt="平板公式与主观题作答"><br><sub>平板学习 · 公式、文字与手写作答</sub><br><br>
 <img src="./docs/screenshots/v0.3.0/tablet-handwriting.png" width="780" alt="平板手写作答"><br><sub>手写过程可提交家长、Agent 或图像模型批改</sub><br><br>
-<img src="./docs/screenshots/v0.3.0/phone-quiz.png" width="280" alt="手机公式与主观题作答"><br><sub>手机学习 · 与平板共用题库和规则</sub><br><br>
-<img src="./docs/screenshots/v0.3.0/parent-review.png" width="280" alt="家长批改与 AI 设置"><br><sub>家长批改与 AI 设置</sub><br><br>
+<table><tr>
+<td align="center"><img src="./docs/screenshots/v0.3.0/phone-quiz.png" width="280" alt="手机公式与主观题作答"><br><sub>手机学习 · 与平板共用题库和规则</sub></td>
+<td align="center"><img src="./docs/screenshots/v0.3.0/parent-review.png" width="280" alt="家长批改与 AI 设置"><br><sub>家长批改与 AI 设置</sub></td>
+</tr></table>
+
+<br>
+
 <img src="./docs/screenshots/v0.3.0/tv-quiz.png" width="780" alt="电视端答题">
 <br><sub>遥控器选题，答完在下方显示对错、正确答案与解析</sub>
 
@@ -77,8 +84,8 @@ Android 平板、手机和电视使用同一套规则，分别安装对应版本
 <br><br>
 
 <table><tr>
-<td align="center"><img src="./docs/screenshots/v0.3.0/parent-rules.png" width="220" alt="规则设置"><br><sub>规则设置</sub></td>
-<td align="center"><img src="./docs/screenshots/v0.3.0/parent-bank.png" width="220" alt="题库管理"><br><sub>题库管理</sub></td>
+<td align="center"><img src="./docs/screenshots/v0.3.0/parent-rules.png" width="220" alt="按周设置可用时间"><br><sub>按周设置可用时间，节假日可同步</sub></td>
+<td align="center"><img src="./docs/screenshots/v0.3.0/parent-bank.png" width="220" alt="题库表格与 AI 出题"><br><sub>题库表格 · AI 出题</sub></td>
 <td align="center"><img src="./docs/screenshots/v0.3.0/parent-log.png" width="220" alt="使用记录"><br><sub>7天使用记录</sub></td>
 </tr></table>
 
@@ -97,7 +104,7 @@ Android 平板、手机和电视使用同一套规则，分别安装对应版本
 | 每组题量 | 一组几道题 |
 | 答对比例 | 答对多少题才算通过（百分比） |
 | 每天最多答几组 | 答完上限即锁定 |
-| 时段用途 | 仅时段内可用 / 仅时段内需要答题；独立全天开关，支持跨午夜 |
+| 时段用途 | 仅时段内可用 / 仅时段内需要答题；按周设置，半小时一格，可选节假日按周日 |
 | 系统设置保护 | 管控期间拦截，家长验证后临时放行；需无障碍或悬浮窗配合使用情况访问 |
 | 间隔重复 | 开启后优先抽取到期复习题，再补新题 |
 | 玩法 | 按组闯关、连续答对、自由练习 |
@@ -165,14 +172,14 @@ A：题库可以在手机管理页导出 JSON，换电视后重新导入。
 
 ## 社区建议与致谢
 
--  [LINUX DO](https://linux.do) **xiuweng**：支持手机管控、通过隐藏手势重新打开管理入口，以及答错后累计加练、重启保留加练池。
--  [LINUX DO](https://linux.do) **free-swimming**：设置题目星级难度，并为不同难度配置不同的时长奖励。
+- [LINUX DO](https://linux.do) **xiuweng**：支持手机管控、通过隐藏手势重新打开管理入口，以及答错后累计加练、重启保留加练池。
+- [LINUX DO](https://linux.do) **free-swimming**：设置题目星级难度，并为不同难度配置不同的时长奖励。
 - **[Issue #2](https://github.com/chadyi/StudyOnTV/issues/2)**：补充修改密码、AI 服务预设与连接测试，改进题库管理，图表与公式按需加载。
 - **[Issue #3](https://github.com/chadyi/StudyOnTV/issues/3)**：答题结果放在题目下方，显示正确答案、解析与鼓励语，由孩子手动继续；加强后台音频处理。
 - **[Issue #4](https://github.com/chadyi/StudyOnTV/issues/4)**：区分可用时段与答题管控时段，增加自由时段、可选防卸载和音频静音兜底。
 - **[Issue #5](https://github.com/chadyi/StudyOnTV/issues/5)**：补充开机启动说明。
 
-这些建议也延伸到其他端端，欢迎反馈使用体验。
+这些建议也延伸到其他端，欢迎反馈使用体验。
 
 ---
 
