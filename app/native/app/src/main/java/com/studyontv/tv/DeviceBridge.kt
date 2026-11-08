@@ -32,6 +32,20 @@ open class DeviceBridge(protected val activity: Activity, private val connection
         activity.runOnUiThread { activity.startActivity(Intent(activity, OnboardingActivity::class.java)) }
     }
 
+    /** 网页在 HTTP 局域网 / WebView 里的 Clipboard API 会“假成功”，交给原生写剪贴板最稳 */
+    @JavascriptInterface
+    fun copyText(value: String): Boolean {
+        if (!connectionAllowed) return false
+        return try {
+            val manager = activity.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager ?: return false
+            manager.setPrimaryClip(android.content.ClipData.newPlainText("题了个题", value))
+            true
+        } catch (e: Exception) {
+            Diag.warn("UI", "copyText failed: ${e.message}")
+            false
+        }
+    }
+
     @JavascriptInterface
     fun changePassword() {
         if (!connectionAllowed) return

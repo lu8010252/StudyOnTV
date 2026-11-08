@@ -102,7 +102,7 @@
   function mount() {
     if (document.getElementById('stv-grant-fab')) return;
     document.body.appendChild(el('button', { id: 'stv-grant-fab', text: '🔐 授权', title: '一键授权',
-      style: 'position:fixed;right:224px;bottom:16px;z-index:9999;padding:10px 16px;border:0;border-radius:24px;background:#c0713a;color:#fff;font-size:14px;box-shadow:0 3px 12px rgba(0,0,0,.25);cursor:pointer', onclick: open }));
+      style: 'position:fixed;right:14px;bottom:112px;z-index:9999;padding:10px 16px;border:0;border-radius:24px;background:#c0713a;color:#fff;font-size:14px;box-shadow:0 3px 12px rgba(0,0,0,.25);cursor:pointer', onclick: open }));
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount); else mount();
 })();
