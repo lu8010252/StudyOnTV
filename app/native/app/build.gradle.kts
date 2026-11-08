@@ -18,8 +18,8 @@ android {
         applicationId = "com.studyontv.tv"
         minSdk = 21          // Android 5.0
         targetSdk = 34
-        versionCode = 29
-        versionName = "0.7.4"
+        versionCode = 30
+        versionName = "0.7.5"
     }
 
     flavorDimensions += "device"

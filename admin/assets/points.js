@@ -187,7 +187,7 @@
   function mount() {
     if (document.getElementById('stv-points-fab')) return;
     var fab = el('button', { id: 'stv-points-fab', text: '⭐ 积分', title: '星星屋积分同步',
-      style: 'position:fixed;right:14px;bottom:16px;z-index:9999;padding:10px 16px;border:0;border-radius:24px;background:#5b8c5a;color:#fff;font-size:14px;box-shadow:0 3px 12px rgba(0,0,0,.25);cursor:pointer', onclick: open });
+      style: 'position:fixed;right:14px;bottom:64px;z-index:9999;padding:10px 16px;border:0;border-radius:24px;background:#5b8c5a;color:#fff;font-size:14px;box-shadow:0 3px 12px rgba(0,0,0,.25);cursor:pointer', onclick: open });
     document.body.appendChild(fab);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount); else mount();

@@ -116,7 +116,7 @@
   function mount() {
     if (document.getElementById('stv-tune-fab')) return;
     document.body.appendChild(el('button', { id: 'stv-tune-fab', text: '🎛 管控', title: '暂停管控 / 抽题与淘汰',
-      style: 'position:fixed;right:14px;bottom:64px;z-index:9999;padding:10px 16px;border:0;border-radius:24px;background:#b5703a;color:#fff;font-size:14px;box-shadow:0 3px 12px rgba(0,0,0,.25);cursor:pointer', onclick: open }));
+      style: 'position:fixed;right:14px;bottom:112px;z-index:9999;padding:10px 16px;border:0;border-radius:24px;background:#b5703a;color:#fff;font-size:14px;box-shadow:0 3px 12px rgba(0,0,0,.25);cursor:pointer', onclick: open }));
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount); else mount();
 })();
