@@ -44,19 +44,61 @@ class LanServer(
 
     fun start() {
         if (running) return
-        boundPort = tryBind(port) ?: tryBind(8090) ?: return
         running = true
+        if (!open()) Diag.error("Server", "无法监听 $port / 8090，稍后自动重试")
+        // 守护线程：端口被旧进程占着时抢回默认端口；监听挂死（进程被冻结、网络切换后）时重新监听
         Thread {
+            var bad = 0
             while (running) {
+                try { Thread.sleep(5000) } catch (e: InterruptedException) { break }
                 try {
-                    val client = socket!!.accept()
+                    val s = socket
+                    var needOpen = s == null || s.isClosed
+                    if (!needOpen && boundPort != port) {
+                        // 现在在备用端口上：默认端口能绑了就换回去（家长收藏的地址是默认端口）
+                        val tmp = try { ServerSocket(port) } catch (e: Exception) { null }
+                        if (tmp != null) { tmp.close(); needOpen = true }
+                    }
+                    if (!needOpen) {
+                        bad = if (probe(boundPort)) 0 else bad + 1
+                        if (bad >= 2) needOpen = true
+                    }
+                    if (needOpen) { bad = 0; if (open()) Diag.info("Server", "重新监听 端口=$boundPort") }
+                } catch (e: Exception) { }
+            }
+        }.apply { isDaemon = true; name = "lan-watch" }.start()
+    }
+
+    /** 关掉旧的、重新绑端口并起接收线程。 */
+    @Synchronized
+    private fun open(): Boolean {
+        try { socket?.close() } catch (e: Exception) { }
+        socket = null
+        val p = tryBind(port) ?: tryBind(8090) ?: return false
+        boundPort = p
+        try {
+            Prefs.setLocalPort(context, p)
+            WebShell.PrefsHolder.baseUrl = Prefs.localBase(context)
+        } catch (e: Exception) { }
+        val s = socket!!
+        Thread {
+            while (running && s === socket && !s.isClosed) {
+                try {
+                    val client = s.accept()
                     pool.execute { handle(client) }
                 } catch (e: Exception) {
-                    if (running) Thread.sleep(50)
+                    if (s.isClosed || s !== socket) break
+                    try { Thread.sleep(50) } catch (_: InterruptedException) { break }
                 }
             }
-        }.apply { isDaemon = true }.start()
+        }.apply { isDaemon = true; name = "lan-accept" }.start()
+        return true
     }
+
+    private fun probe(p: Int): Boolean = try {
+        Socket().use { it.connect(java.net.InetSocketAddress("127.0.0.1", p), 1500) }
+        true
+    } catch (e: Exception) { false }
 
     fun stop() {
         running = false

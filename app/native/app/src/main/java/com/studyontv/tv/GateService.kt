@@ -56,6 +56,7 @@ class GateService : Service() {
     private var anchor: View? = null
     private lateinit var overlay: GateOverlay
     private var ticks = 0
+    private var cpuLock: PowerManager.WakeLock? = null
     private val countdown by lazy { CountdownOverlay(this) }
     private val tick = object : Runnable {
         override fun run() {
@@ -520,6 +521,11 @@ class GateService : Service() {
         // 第一件事就把自唤醒闹钟续上：后面任何一步出错也不能断链
         Revive.rearm(this)
         UninstallGuard.restoreOwnerPolicy(this)
+        // 保持 CPU 不睡死：投影待机/息屏后系统会让 CPU 休眠，局域网网页和计时都会停；设备是插电的，代价可以忽略
+        try {
+            val pm = getSystemService(POWER_SERVICE) as PowerManager
+            cpuLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "StudyOnTV:gate").apply { setReferenceCounted(false); acquire() }
+        } catch (_: Exception) { }
         overlay = GateOverlay(this, GateOverlay.applicationWindowType())
         instance = this
         Prefs.setServiceRunning(this, true)
@@ -558,6 +564,7 @@ class GateService : Service() {
     }
 
     override fun onDestroy() {
+        try { cpuLock?.release() } catch (_: Exception) { }
         try { DeviceRuntime.learning.flushUsage() } catch (_: Exception) { }
         if (Prefs.onboarded(this)) scheduleRestart(this, 5000)
         handler.removeCallbacks(tick); handler.removeCallbacks(mediaTick)
