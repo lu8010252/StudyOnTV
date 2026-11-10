@@ -546,6 +546,11 @@ class GateService : Service() {
         checkOverlayPermission()
         checkAccessibilityLost()   // 进程被杀后重启，检查无障碍是否被系统清除
         Diag.info("Service", "GateService started via=$startVia")
+        // 留证据：距离上次心跳多久。几十秒以内就重新起来 = 进程刚被系统杀过（被内存清理 / 开大应用挤掉）
+        Prefs.heartbeat(this).takeIf { it > 0 }?.let {
+            val gap = (System.currentTimeMillis() - it) / 1000
+            if (gap in 8..3600) Diag.info("Service", "距上次心跳 ${gap} 秒，推测进程被系统杀过后重新拉起 via=$startVia")
+        }
         Watchdog.serviceStarted(this, startVia)
         Watchdog.schedule(this)
         Watchdog.scheduleAlarm(this)

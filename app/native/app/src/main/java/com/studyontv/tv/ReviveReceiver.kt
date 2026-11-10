@@ -12,7 +12,7 @@ import java.io.FileOutputStream
 /**
  * 自唤醒：投影仪内存很小（1.7G、low_ram），打开视频类应用后本应用的前台服务常被系统 lmkd 杀掉，
  * 实测 START_STICKY 拉不回来，无障碍服务也不会自动重新绑定，于是后台就彻底不记时、也不弹拦截页了。
- * 这里用 AlarmManager 每分钟自检一次：服务不在就重新启动。闹钟由系统负责触发，进程死了也照常响。
+ * 这里用 AlarmManager 每 10 秒自检一次：服务不在就重新启动。闹钟由系统负责触发，进程死了也照常响。
  */
 class ReviveReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
@@ -42,7 +42,8 @@ object Revive {
     private const val ACTION = "com.studyontv.tv.REVIVE"
     private const val REQUEST_EXACT = 1101
     private const val REQUEST_REPEAT = 1102
-    private const val INTERVAL_MS = 60_000L
+    private const val INTERVAL_MS = 10_000L          // 精确闹钟链：被杀后最迟 10 秒拉回
+    private const val REPEAT_MS = 60_000L            // 重复闹钟兜底（系统对重复闹钟最小按 60 秒算）
 
     fun rearm(context: Context) {
         val app = context.applicationContext
@@ -58,7 +59,7 @@ object Revive {
             try { manager.set(AlarmManager.RTC_WAKEUP, triggerAt, exact) } catch (_: Exception) { }
         }
         // 重复闹钟兜底：一次性闹钟如果哪次没来得及续上就彻底断链，重复闹钟不会
-        try { manager.setRepeating(AlarmManager.RTC_WAKEUP, triggerAt, INTERVAL_MS, pending(app, REQUEST_REPEAT)) }
+        try { manager.setRepeating(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + REPEAT_MS, REPEAT_MS, pending(app, REQUEST_REPEAT)) }
         catch (_: Exception) { }
     }
 
