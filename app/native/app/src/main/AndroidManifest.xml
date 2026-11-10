@@ -140,8 +140,10 @@
         </receiver>
 
         <!-- 自唤醒：AlarmManager 每分钟检查一次，服务被系统杀掉（电视内存太小）就重新拉起 -->
+        <!-- exported：机顶盒上的外部看门要用 adb 直接给它发广播（GateService 不对外开放，shell 启动不了）；
+             它只会确保服务在运行，没有别的副作用 -->
         <receiver
             android:name=".ReviveReceiver"
-            android:exported="false" />
+            android:exported="true" />
     </application>
 </manifest>

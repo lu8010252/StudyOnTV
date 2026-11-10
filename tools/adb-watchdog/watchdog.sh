@@ -6,7 +6,6 @@ NTFY="${NTFY:-}"
 INTERVAL="${INTERVAL:-30}"
 OFFLINE_NOTIFY="${OFFLINE_NOTIFY:-0}"
 PKG=com.studyontv.tv
-SVC="$PKG/.GateService"
 A11Y="$PKG/$PKG.WatchAccessibilityService"
 HOST="${TV%:*}"; PORT="${TV#*:}"
 off_since=0; off_sent=0; adb_bad=0
@@ -41,14 +40,15 @@ while true; do
   fi
   adb_bad=0
 
-  pid=$(tvsh pidof "$PKG")
-  if [ -z "$pid" ]; then
+  # 进程在不在、前台服务在不在，两个都要看：无障碍服务活着会让进程在，但 GateService 可能已经死了
+  alive() { [ -n "$(tvsh pidof "$PKG")" ] && tvsh dumpsys activity services "$PKG" | grep -q "GateService"; }
+  if ! alive; then
     sleep 15                                   # 先等应用自己的自唤醒（10 秒一次）
-    pid=$(tvsh pidof "$PKG")
-    if [ -z "$pid" ]; then
-      tvsh am start-foreground-service -n "$SVC" >/dev/null
-      sleep 5
-      if [ -n "$(tvsh pidof "$PKG")" ]; then notify "应用进程不在，已由机顶盒拉起"; else notify "应用进程不在，拉起失败（检查投影 ADB 授权）"; fi
+    if ! alive; then
+      # GateService 不对外开放，shell 直接启动会被拒绝；改给（对 adb 开放的）自唤醒接收器发广播，由它启动服务
+      tvsh am broadcast -n "$PKG/.ReviveReceiver" -a com.studyontv.tv.REVIVE >/dev/null
+      sleep 6
+      if alive; then notify "应用服务不在，已由机顶盒拉起"; else notify "应用服务不在，拉起失败（会再试；若一直失败请看 adb 授权）"; fi
     fi
   fi
 
