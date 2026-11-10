@@ -9,7 +9,7 @@ PKG=com.studyontv.tv
 SVC="$PKG/.GateService"
 A11Y="$PKG/$PKG.WatchAccessibilityService"
 HOST="${TV%:*}"; PORT="${TV#*:}"
-off_since=0; off_sent=0
+off_since=0; off_sent=0; adb_bad=0
 
 say() { echo "$(date '+%F %T') $*"; }
 notify() {
@@ -32,6 +32,14 @@ while true; do
   off_since=0; off_sent=0
 
   adb devices 2>/dev/null | grep -q "^$TV[[:space:]]*device" || timeout 6 adb connect "$TV" >/dev/null 2>&1
+  # 先确认 ADB 真的通了：没授权 / 没连上时所有命令都返回空，不能误判成「应用被杀」
+  st=$(adb devices 2>/dev/null | grep "^$TV" | awk '{print $2}')
+  if [ "$st" != "device" ]; then
+    say "ADB 状态: ${st:-未连接}（unauthorized=投影上还没点允许调试）"
+    if [ "$adb_bad" != 1 ]; then notify "ADB 没连通（状态：${st:-未连接}）。请在投影上点「允许调试」并勾选「始终允许」"; adb_bad=1; fi
+    sleep 30; continue
+  fi
+  adb_bad=0
 
   pid=$(tvsh pidof "$PKG")
   if [ -z "$pid" ]; then
@@ -47,6 +55,7 @@ while true; do
   cur=$(tvsh settings get secure enabled_accessibility_services)
   case "$cur" in
     *"$PKG"*) ;;
+    "") say "读不到无障碍设置，跳过本轮" ;;
     *)
       if [ -z "$cur" ] || [ "$cur" = "null" ]; then new="$A11Y"; else new="$cur:$A11Y"; fi
       tvsh settings put secure enabled_accessibility_services "$new" >/dev/null
