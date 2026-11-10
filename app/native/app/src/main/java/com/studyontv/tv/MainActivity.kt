@@ -99,6 +99,10 @@ open class MainActivity : Activity() {
             web.destroy()
             webReleased = true
         }
+        // (二改) 电视上手动打开程序再去看视频时，已停止的界面窗口还占着约 64MB 图形内存（WebView 销毁了也不还），
+        // 极米只有 1.7G，打开 bilibili 时先被内存清理杀掉的就是它。直接把主界面关掉，后台只剩 15MB 左右的服务。
+        // 拦截页（GateActivity）不关：它要保持在视频软件上面；等原生输入页回传答案时也不关。
+        if (DeviceBridge.isTv(this) && this !is GateActivity && !awaitingInput && !isChangingConfigurations) finish()
     }
 
     override fun onNewIntent(intent: Intent?) {
