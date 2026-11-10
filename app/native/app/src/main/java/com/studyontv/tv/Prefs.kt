@@ -47,6 +47,12 @@ object Prefs {
     fun serviceRunning(c: Context): Boolean = sp(c).getBoolean("service_running", false)
     fun setServiceRunning(c: Context, v: Boolean) = sp(c).edit().putBoolean("service_running", v).apply()
 
+    // 计时心跳：电视内存很小，进程随时可能被系统杀掉。每走几秒表就记一次“记到哪儿了”，
+    // 服务重启后据此把被杀期间漏掉的时间补回来（counting=当时是否正在计时）
+    fun heartbeat(c: Context): Long = sp(c).getLong("heartbeat_at", 0L)
+    fun heartbeatCounting(c: Context): Boolean = sp(c).getBoolean("heartbeat_counting", false)
+    fun setHeartbeat(c: Context, at: Long, counting: Boolean) =
+        sp(c).edit().putLong("heartbeat_at", at).putBoolean("heartbeat_counting", counting).apply()
 
     /** 通知权限是否已自动询问过；拒绝后不再自动弹，仍可从列表手动再请求。 */
     fun notificationAsked(c: Context): Boolean = sp(c).getBoolean("notification_asked", false)
