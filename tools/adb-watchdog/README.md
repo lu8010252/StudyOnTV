@@ -1,0 +1,13 @@
+# 投影外部看门（adb-watchdog）
+
+在机顶盒（Armbian + 1Panel）上跑，通过 ADB 看管投影里的「题了个题」：
+
+- 应用进程不在：先等 15 秒（给应用自己的自唤醒机会），还不在就用 `am start-foreground-service` 拉起
+- 无障碍服务被关：写回 `enabled_accessibility_services`
+- 以上两种情况都会推送到 ntfy；投影关机/离线时只做一次端口探测，不跑 adb
+
+部署：1Panel → 容器 → 编排 → 新建，粘贴 `docker-compose.yml`，按需改 `TV` / `NTFY`。
+首次启动后在投影上点「允许 USB 调试」并勾选「始终允许」（密钥存在 `./adbkey`）。
+前提：投影的 ADB 网络调试（5555）要一直开着。
+
+这是应用自带保活之外的一层保险，不能替代应用里的保活。
