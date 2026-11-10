@@ -162,7 +162,8 @@ class LanServer(
                     .put("questions", store.countQuestions())
                         .put("roundsDoneToday", store.roundsDoneToday())
                         .put("repetition", store.repetitionStats())
-                        .put("learning", DeviceRuntime.learning.status()))
+                        .put("learning", DeviceRuntime.learning.status())
+                    .put("speech", JSONObject().put("autoRead", SpeechReader.settings(store).optBoolean("autoRead"))))
             }
             path == "/api/holidays" && method == "GET" -> return json(out, 200, HolidayService.info(context))
             path == "/api/holidays/sync" && method == "POST" -> {
@@ -176,7 +177,9 @@ class LanServer(
             }
             path == "/api/config" && method == "PUT" -> {
                 val input = try { JSONObject(body) } catch (e: Exception) { return json(out, 200, err("bad_json")) }
-                return json(out, 200, JSONObject().put("config", store.saveConfig(input)))
+                val config = DeviceRuntime.learning.saveConfig(input)
+                GateService.refreshNow()
+                return json(out, 200, JSONObject().put("config", config))
             }
             path == "/api/questions/generate" && method == "POST" -> {
                 val input = try { JSONObject(body.ifEmpty { "{}" }) } catch (e: Exception) { return json(out, 200, err("bad_json")) }
@@ -187,7 +190,10 @@ class LanServer(
                 }
             }
             path == "/api/questions" && method == "GET" -> {
-                val all = q["all"] == "1"
+                // all=1 与 enabledOnly=false 等价：都表示「包含已暂停的题目」。
+                // 管理端用 enabledOnly=false 拿全量再在本地按「仅显示启用」过滤，
+                // 否则暂停的题在页面上完全看不到（用户以为题目丢了）。
+                val all = q["all"] == "1" || q["enabledOnly"] == "false"
                 val items = store.questions(q["subject"], q["level"], q["limit"]?.toIntOrNull() ?: 500,
                     enabledOnly = !all, sortBy = q["sort"] ?: "random")
                 return json(out, 200, JSONObject().put("items", items))
@@ -213,14 +219,40 @@ class LanServer(
                     json(out, 200, JSONObject().put("error", "bad_question").put("message", e.message ?: ""))
                 }
             }
+            path == "/api/speech" && method == "GET" -> return json(out, 200, SpeechReader.settings(store))
+            path == "/api/speech" && method == "PUT" -> return json(out, 200, SpeechReader.save(store, JSONObject(body)))
+            path == "/api/bank-automation" && method == "GET" -> return json(out, 200, BankAutomation.settings(store))
+            path == "/api/bank-automation" && method == "PUT" -> return json(out, 200, BankAutomation.save(store, JSONObject(body)))
+            path == "/api/bank-automation/sync" && method == "POST" -> {
+                BankAutomation.start(store)
+                return json(out, 200, BankAutomation.settings(store))
+            }
+            path == "/api/questions/bank" && method == "DELETE" -> {
+                val input = JSONObject(body)
+                require(input.optBoolean("confirm")) { "请确认删除题库" }
+                val deleted = DeviceRuntime.learning.clearQuestions(input.getString("bank"))
+                GateService.refreshNow()
+                return json(out, 200, JSONObject().put("deleted", deleted))
+            }
+            path == "/api/questions/clear" && method == "POST" -> {
+                require(JSONObject(body).optBoolean("confirm")) { "请确认清空全部题库" }
+                val deleted = DeviceRuntime.learning.clearQuestions()
+                GateService.refreshNow()
+                return json(out, 200, JSONObject().put("deleted", deleted))
+            }
             path == "/api/questions/delete" && method == "POST" -> {
                 val ids = JSONObject(body).getJSONArray("ids")
                 require(ids.length() in 1..5000) { "请选择要删除的题目" }
-                return json(out, 200, JSONObject().put("ok", true).put("deleted", store.deleteQuestions((0 until ids.length()).map { ids.getString(it) })))
+                // 走 LearningEngine：删掉的正是孩子手上那题时要立刻换题并升高 quizGeneration
+                val deleted = DeviceRuntime.learning.deleteQuestions((0 until ids.length()).map { ids.getString(it) })
+                GateService.refreshNow()
+                return json(out, 200, JSONObject().put("ok", true).put("deleted", deleted))
             }
             path.startsWith("/api/questions/") && method == "DELETE" -> {
                 val id = path.removePrefix("/api/questions/")
-                return json(out, 200, JSONObject().put("ok", store.deleteQuestion(id)))
+                val deleted = DeviceRuntime.learning.deleteQuestions(listOf(id))
+                GateService.refreshNow()
+                return json(out, 200, JSONObject().put("ok", deleted > 0))
             }
             path == "/api/history" && method == "GET" -> {
                 DeviceRuntime.learning.flushUsage()
@@ -270,6 +302,10 @@ class LanServer(
                 val control = IntegrationAuth.verify(context, token)?.control == true
                 if (!parent && !control) return json(out, 403, err("forbidden").put("message", "请先用管理密码登录"))
                 val input = JSONObject(body.ifEmpty { "{}" })
+                if (input.optString("action") == "credit") {
+                    val value = input.getDouble("minutes")
+                    require(value.isFinite() && value == value.toInt().toDouble()) { "调整时长需要整数分钟" }
+                }
                 val status = DeviceRuntime.learning.remote(input.optString("action"), input.optInt("minutes"), if (parent) "panel" else "integration")
                 GateService.refreshNow()
                 return json(out, 200, JSONObject().put("learning", status))
@@ -303,8 +339,8 @@ class LanServer(
             }
             path == "/api/device" && method == "GET" -> return json(out, 200, JSONObject().put("name", Prefs.deviceName(context))
                 .put("version", BuildConfig.VERSION_NAME).put("flavor", BuildConfig.FLAVOR).put("ip", localIp() ?: "").put("port", boundPort)
-                .put("uninstallProtected", UninstallGuard.active(context)).put("autostart", Watchdog.report(context)).put("monitor", GateService.diagnostics(context))
-                .put("buglyConsent", Prefs.buglyConsent(context)))
+                .put("uninstallProtected", UninstallGuard.active(context)).put("deviceOwner", UninstallGuard.owner(context)).put("autostart", Watchdog.report(context)).put("monitor", GateService.diagnostics(context))
+                .put("keepalive", KeepAlive.report(context)).put("buglyConsent", Prefs.buglyConsent(context)))
             path == "/api/device/bugly" && method == "PUT" -> {
                 val enabled = JSONObject(body).optBoolean("enabled")
                 if (enabled) BuglyInit.initWithConsent(context) else BuglyInit.revoke(context)
@@ -313,12 +349,15 @@ class LanServer(
             path == "/api/device/uninstall-guard" && method == "DELETE" -> {
                 // 家长在网页端可以关闭防卸载（安全：需要家长登录 token）
                 return try {
-                    val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
-                    dpm.removeActiveAdmin(UninstallGuard.component(context))
+                    UninstallGuard.setEnabled(context, false)
                     json(out, 200, JSONObject().put("ok", true).put("uninstallProtected", false))
                 } catch (e: Exception) {
                     json(out, 500, err(e.message ?: "failed"))
                 }
+            }
+            path == "/api/device/uninstall-guard" && method == "PUT" -> {
+                UninstallGuard.setEnabled(context, true)
+                return json(out, 200, JSONObject().put("ok", true).put("uninstallProtected", UninstallGuard.active(context)))
             }
             path == "/api/device" && method == "PUT" -> {
                 val name = JSONObject(body).optString("name").trim()
@@ -340,7 +379,11 @@ class LanServer(
             }
             path == "/api/quiz/start" && method == "POST" -> {
                 if (!deviceAccess) return json(out, 403, err("device_only"))
-                return json(out, 200, DeviceRuntime.learning.start())
+                return json(out, 200, DeviceRuntime.learning.start(JSONObject(body.ifBlank { "{}" }).optString("level").takeIf { it.isNotBlank() }))
+            }
+            path == "/api/quiz/continue" && method == "POST" -> {
+                if (!deviceAccess) return json(out, 403, err("device_only"))
+                return json(out, 200, DeviceRuntime.learning.continueFeedback())
             }
             path == "/api/quiz/review" && method == "POST" -> {
                 if (!deviceAccess) return json(out, 403, err("device_only"))
@@ -385,6 +428,9 @@ class LanServer(
 
     private fun serveStatic(path: String, out: OutputStream, gzip: Boolean, ifNoneMatch: String?) {
         val (assetPath, contentType) = when {
+            path == "/practice" || path == "/practice.html" -> "web/practice.html" to "text/html; charset=utf-8"
+            path == "/practice-sw.js" -> "web/practice-sw.js" to "application/javascript; charset=utf-8"
+            path == "/practice.appcache" -> "web/practice.appcache" to "text/cache-manifest; charset=utf-8"
             path == "/" || path == "/index.html" -> "web/index.html" to "text/html; charset=utf-8"
             path.startsWith("/admin/assets/") -> "admin" + path.removePrefix("/admin") to mime(path)
             path == "/admin" -> return reply(out, 301, null, null, mapOf("Location" to "/admin/"))
@@ -415,7 +461,7 @@ class LanServer(
 
     private fun mime(path: String): String = when {
         path.endsWith(".css") -> "text/css; charset=utf-8"
-        path.endsWith(".js") -> "application/javascript; charset=utf-8"
+        path.endsWith(".js") || path.endsWith(".mjs") -> "application/javascript; charset=utf-8"
         path.endsWith(".json") -> "application/json; charset=utf-8"
         path.endsWith(".png") -> "image/png"
         path.endsWith(".jpg") -> "image/jpeg"
@@ -486,8 +532,23 @@ class LanServer(
 
     
     fun localIp(): String? = try {
-        NetworkInterface.getNetworkInterfaces().toList()
-            .filter { it.isUp && !it.isLoopback }
+        // VPNs can own the default route; advertise a physical LAN address instead.
+        val lanIp = try {
+            val connectivity = context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+            connectivity.allNetworks.asSequence().mapNotNull { network ->
+                val caps = connectivity.getNetworkCapabilities(network)
+                if (caps == null || caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) ||
+                    !(caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) ||
+                        caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET))) null
+                else connectivity.getLinkProperties(network)?.linkAddresses?.asSequence()
+                    ?.map { it.address }?.filterIsInstance<Inet4Address>()
+                    ?.firstOrNull { it.isSiteLocalAddress }?.hostAddress
+            }.firstOrNull()
+        } catch (_: Exception) { null }
+        lanIp ?: NetworkInterface.getNetworkInterfaces().toList()
+            .filter { it.isUp && !it.isLoopback && !it.isPointToPoint &&
+                !it.name.startsWith("tun") && !it.name.startsWith("tap") && !it.name.startsWith("wg") }
+            .sortedBy { if (it.name.startsWith("wlan") || it.name.startsWith("eth")) 0 else 1 }
             .flatMap { it.inetAddresses.toList() }
             .filterIsInstance<Inet4Address>()
             .firstOrNull { it.isSiteLocalAddress }

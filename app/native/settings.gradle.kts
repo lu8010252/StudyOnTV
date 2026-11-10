@@ -14,4 +14,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "StudyOnTV"
-include(":app")
+include(":app", ":legacy")

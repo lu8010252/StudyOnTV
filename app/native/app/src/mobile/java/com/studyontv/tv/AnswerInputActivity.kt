@@ -39,6 +39,13 @@ class AnswerInputActivity : Activity() {
             setBackgroundColor(TvUi.background(this@AnswerInputActivity))
         }
         root.addView(TvUi.text(this, "填写答案", 26f, bold = true).apply { paint.isFakeBoldText = true })
+        // 手机版与电视版对齐（#81）：把题干带过来并显示，长题干截断
+        val prompt = intent.getStringExtra("prompt").orEmpty()
+        if (prompt.isNotBlank()) root.addView(TextView(this).apply {
+            text = if (prompt.length > 200) prompt.take(200) + "…" else prompt
+            textSize = 15f; setTextColor(TvUi.muted(this@AnswerInputActivity)); maxLines = 3
+            setPadding(0, dp(8), 0, 0)
+        }, LinearLayout.LayoutParams(-1, -2))
         text = EditText(this).apply {
             hint = "键盘、输入法手写，或语音转文字"; minLines = 3; TvUi.field(this)
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
@@ -91,7 +98,7 @@ class AnswerInputActivity : Activity() {
             voicePending = true
             startActivityForResult(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
                 .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
+                .putExtra(RecognizerIntent.EXTRA_LANGUAGE, intent.getStringExtra("language") ?: "zh-CN")
                 .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
                 .putExtra(RecognizerIntent.EXTRA_PROMPT, "请说出答案"), 42)
             handler.postDelayed(voiceTimeout, 120000)
@@ -106,7 +113,8 @@ class AnswerInputActivity : Activity() {
         if (requestCode == 42) { voicePending = false; handler.removeCallbacks(voiceTimeout) }
         if (requestCode == 42 && resultCode == RESULT_OK) {
             val value = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull() ?: return
-            text.append(value)
+            text.setText(value)
+            text.setSelection(text.text.length)
         }
     }
 

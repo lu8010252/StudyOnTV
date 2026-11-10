@@ -1,0 +1,8 @@
+CACHE MANIFEST
+# studyontv-practice-v1
+CACHE:
+practice.html
+assets/css/practice.css
+assets/js/practice.js
+NETWORK:
+*

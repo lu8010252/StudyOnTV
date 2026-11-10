@@ -1,0 +1,9 @@
+{
+  "wifi_ssid": "CHANGE_ME",
+  "wifi_password": "CHANGE_ME",
+  "tv_host": "192.168.1.20",
+  "tv_port": 5555,
+  "package": "com.studyontv.tv",
+  "interval": 30,
+  "repair_accessibility": false
+}

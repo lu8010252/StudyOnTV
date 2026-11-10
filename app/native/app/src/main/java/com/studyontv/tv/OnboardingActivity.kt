@@ -25,6 +25,7 @@ class OnboardingActivity : Activity() {
     private lateinit var modeDescription: TextView
     private lateinit var modeDot: View
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var notificationRequested = false
     private val refreshStatus = object : Runnable {
         override fun run() { refresh(); handler.postDelayed(this, 1000) }
     }
@@ -90,8 +91,8 @@ class OnboardingActivity : Activity() {
         add(android.R.drawable.ic_menu_recent_history, "使用情况访问", "只统计其他应用的使用时长", true, { Foreground.hasUsageAccess(this) }) {
             openSettings(Settings.ACTION_USAGE_ACCESS_SETTINGS)
         }
-        add(android.R.drawable.ic_lock_idle_alarm, "后台运行", "关闭电池优化，减少被系统清理", true, { Build.VERSION.SDK_INT < 23 || ignoringBattery() }) {
-            if (Build.VERSION.SDK_INT >= 23 && !ignoringBattery()) openSettings(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, true, Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+        add(android.R.drawable.ic_lock_idle_alarm, "后台运行", "关闭电池优化，减少被系统清理", true, { KeepAlive.ignoringBattery(this) }) {
+            if (Build.VERSION.SDK_INT >= 23 && !KeepAlive.ignoringBattery(this)) openSettings(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, true, Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
             else openSettings(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, true)
         }
         add(android.R.drawable.ic_lock_lock, "防卸载", "孩子无法直接删除应用，家长可随时关闭", true, { UninstallGuard.active(this) }) {
@@ -100,6 +101,12 @@ class OnboardingActivity : Activity() {
                 Toast.makeText(this, "这台设备不支持设备管理应用，无法开启防卸载", Toast.LENGTH_LONG).show()
             }
         }
+        add(android.R.drawable.ic_menu_preferences, "开发者选项", "系统调试开关；USB 调试需要在其中开启", true, { KeepAlive.developerOptions(this) }) {
+            openDeveloperOptions()
+        }
+        add(android.R.drawable.ic_menu_compass, "USB 调试", "用电脑通过 ADB 管理设备；应用无法代开", true, { KeepAlive.usbDebugging(this) }) {
+            openDeveloperOptions()
+        }
         // 电视一般不显示通知，只在手机 / 平板上提示
         if (!tv && Build.VERSION.SDK_INT >= 33) add(android.R.drawable.ic_dialog_info, "通知", "显示“使用时间管理中”的常驻通知", true,
             { checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED }) {
@@ -107,16 +114,8 @@ class OnboardingActivity : Activity() {
         }
         list.addView(TvUi.text(this, if (tv) "部分电视没有“电池优化”，可在系统“应用管理”里允许自启动。" else "部分手机还需要在系统设置里允许“自启动”或“后台活动”。", if (tv) 13f else 12f, p.text3),
             LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6); leftMargin = dp(4) })
-        // 针对常见品牌给出更具体的自启动引导
-        val brand = android.os.Build.MANUFACTURER.lowercase()
-        val brandTip = when {
-            brand.contains("tcl") -> "TCL 电视：设置 → 应用 → 题了个题 → 自启动，开启「允许自启动」"
-            brand.contains("hisense") || brand.contains("vidaa") -> "海信电视：设置 → 应用管理 → 题了个题 → 权限 → 允许自启动"
-            brand.contains("skyworth") || brand.contains("coocaa") -> "创维 / 酷开：设置 → 应用 → 题了个题 → 自启动权限，设为允许"
-            brand.contains("xiaomi") || brand.contains("redmi") -> "小米电视：设置 → 应用 → 应用管理 → 题了个题 → 自启动，开启。注意：小米 HyperOS 建议不授予悬浮窗权限，否则可能被系统强杀"
-            brand.contains("changhong") -> "长虹电视：设置 → 应用管理 → 题了个题 → 允许后台运行"
-            else -> null
-        }
+        // 针对常见品牌给出更具体的自启动引导；文案与家长面板共用
+        val brandTip = KeepAlive.brandTip(tv)
         if (brandTip != null) list.addView(TvUi.text(this, brandTip, if (tv) 12f else 11f, p.text3),
             LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4); leftMargin = dp(4) })
 
@@ -145,13 +144,7 @@ class OnboardingActivity : Activity() {
         refresh()
         // 第一个还没开启的权限获得焦点；都开好了就直接落在“完成”
         (items.firstOrNull { !it.enabled() }?.row?.view ?: manage).requestFocus()
-    }
-
-    private fun ignoringBattery(): Boolean {
-        if (Build.VERSION.SDK_INT < 23) return true
-        return try {
-            (getSystemService(POWER_SERVICE) as android.os.PowerManager).isIgnoringBatteryOptimizations(packageName)
-        } catch (_: Exception) { false }
+        maybeRequestNotifications()
     }
 
     private fun openSettings(action: String, packageSpecific: Boolean = false, fallback: String? = null) {
@@ -163,6 +156,28 @@ class OnboardingActivity : Activity() {
         options.add(Intent(Settings.ACTION_SETTINGS))
         for (intent in options) try { startActivity(intent); return } catch (_: Exception) { }
         Toast.makeText(this, "请在系统设置中调整权限", Toast.LENGTH_SHORT).show()
+    }
+
+    /** 开发者选项在部分电视上不存在，逐级回退到设备信息 / 应用详情 / 系统设置。 */
+    private fun openDeveloperOptions() {
+        GateService.openingSystemPage(parentAuthorized = true)
+        val options = listOf(
+            Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS),
+            Intent(Settings.ACTION_DEVICE_INFO_SETTINGS),
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")),
+            Intent(Settings.ACTION_SETTINGS)
+        )
+        for (intent in options) try { startActivity(intent); return } catch (_: Exception) { }
+        Toast.makeText(this, "这台设备没有开发者选项页面，请在系统设置中查找", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun maybeRequestNotifications() {
+        if (tv || Build.VERSION.SDK_INT < 33 || notificationRequested || Prefs.notificationAsked(this)) return
+        if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED) return
+        notificationRequested = true
+        Prefs.setNotificationAsked(this, true)
+        requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 9)
     }
 
     private fun complete(manage: Boolean) {
@@ -177,7 +192,7 @@ class OnboardingActivity : Activity() {
     private fun refresh() {
         if (!::modeTitle.isInitialized) return
         val p = TvUi.palette(this)
-        items.forEach { val on = it.enabled(); it.row.setStatus(if (on) "已开启" else if (it.optional) "可选" else "去开启", on) }
+        items.forEach { val on = it.enabled(); it.row.setStatus(if (on) "已开启" else if (it.optional) "未开启" else "去开启", on) }
         val overlay = GateOverlay.canDraw(this)
         val usage = Foreground.hasUsageAccess(this)
         val (title, description, ready) = when {
@@ -192,6 +207,9 @@ class OnboardingActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        // 从系统设置回来必须重新探测悬浮窗：长虹等机型 Settings.canDrawOverlays 永远返回 false，
+        // 只有真实 addView 探针能确认，否则家长授权完回到这里仍看到「未开启」（issue #92）。
+        OverlayAccess.invalidate()
         handler.removeCallbacks(refreshStatus)
         handler.post(refreshStatus)
     }

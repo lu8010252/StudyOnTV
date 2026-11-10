@@ -68,6 +68,11 @@ Body: {"passphrase":"<管理密码>"}
 | GET | `/api/questions?limit=5000` | 读取题库 |
 | POST | `/api/questions` | 新增或修改单题，或批量导入 `items` |
 | DELETE | `/api/questions/{id}` | 删除题目 |
+| POST | `/api/questions/clear` | 清空全部题库，正文 `{"confirm":true}`，含暂停题并清理题目进度 |
+| DELETE | `/api/questions/bank` | 删除命名题库，正文 `{"bank":"数学","confirm":true}` |
+| GET / PUT | `/api/bank-automation` | 读取/保存远程题库与自动 AI 补题设置 |
+| POST | `/api/bank-automation/sync` | 启动后台同步/补题；轮询 GET 查看状态 |
+| GET / PUT | `/api/speech` | 朗读通路设置；密钥不回显，空白保留已保存值 |
 | GET | `/api/history?days=7` | 实际使用时长与答题统计 |
 | GET | `/api/events?limit=50` | 近期记录 |
 
@@ -96,7 +101,7 @@ Body: {"passphrase":"<管理密码>"}
 
 ## 配置 AI 自动批改
 
-在面板「批改」中选择 AI 自动批改，填写 HTTPS 的完整 chat/completions 地址、模型和 API Key。DeepSeek 可填 `https://api.deepseek.com/chat/completions` 与 `deepseek-chat`。密钥只保存在被控设备，不会在读取配置时返回。
+在面板「批改」中选择 AI 自动批改，填写 HTTPS 的完整 chat/completions 地址、模型和 API Key。DeepSeek 可填 `https://api.deepseek.com/chat/completions` 与 `deepseek-flash`。密钥只保存在被控设备，不会在读取配置时返回。
 
 开启后，题目、评分标准和孩子的答案会发送到家长配置的服务。DeepSeek 等支持图片的模型可同时批改文字和手写图片，需在面板开启「模型支持图像」；不支持图片的模型只批文字答案。调用失败或模型不能处理图像时，答案保留在待批队列，可人工评分或重试。
 

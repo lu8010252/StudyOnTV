@@ -14,10 +14,15 @@ class WatchAccessibilityService : AccessibilityService() {
             if (pkg != null && (pkg.contains("inputmethod") || pkg.contains("keyboard"))) return
             // 系统栏、音量条、投影自带的悬浮菜单都会弹出临时窗口，真正的前台应用并没有变，不能当成切换
             if (pkg == "com.android.systemui") return
-            if (!GateService.hasGate() || pkg != packageName) Foreground.update(pkg)
+            // anchor / countdown / gate 悬浮窗不代表应用 Activity 在前台（#96）。
+            val ownOverlay = pkg == packageName && !Foreground.hasResumedActivity()
+            if (!ownOverlay && (!GateService.hasGate() || pkg != packageName)) {
+                val cls = event.className?.toString()?.takeIf { it.contains("Activity") }
+                Foreground.update(pkg, cls)
+            }
             // 无障碍服务由系统常驻，顺便充当看门狗：管理服务被系统清理后在下一次切换应用时拉起
             if (!GateService.running) GateService.ensureRunning(this, "accessibility")
-            GateService.onForegroundChanged(this, pkg)
+            if (!ownOverlay) GateService.onForegroundChanged(this, pkg)
         }
     }
     override fun onInterrupt() = Unit

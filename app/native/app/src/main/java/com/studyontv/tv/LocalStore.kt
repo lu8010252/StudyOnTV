@@ -9,7 +9,7 @@ import org.json.JSONObject
 import java.util.Calendar
 import java.util.UUID
 
-class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", null, 6) {
+class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLiteOpenHelper(context, databaseName, null, 7) {
     companion object {
         val DEFAULT_PRAISE = listOf("太棒了！", "答对啦！", "完全正确！", "真厉害！", "好样的，继续保持！", "漂亮！你越来越熟练了")
         val DEFAULT_ENCOURAGE = listOf("没关系，记住正确答案就好", "差一点点，下一题加油！", "错误也是学习的一部分", "别灰心，再接再厉！")
@@ -23,6 +23,7 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
         createReviews(db)
         createProgress(db)
         createPoints(db)
+        createQuestionStats(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -31,6 +32,7 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
         if (oldVersion < 4) createProgress(db)
         if (oldVersion < 5) createPoints(db)
         if (oldVersion < 6) compactUsage(db)
+        if (oldVersion < 7) createQuestionStats(db)
     }
 
     /**
@@ -54,6 +56,41 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
             }
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
+    }
+
+    private fun createQuestionStats(db: SQLiteDatabase) {
+        // IF NOT EXISTS：升级过程被打断 / 重复升级时不能整库异常，否则 /api/state、题库都读不出来
+        db.execSQL("CREATE TABLE IF NOT EXISTS question_stats(qid TEXT PRIMARY KEY, presented INTEGER NOT NULL DEFAULT 0, answered INTEGER NOT NULL DEFAULT 0, correct INTEGER NOT NULL DEFAULT 0, last_at INTEGER NOT NULL DEFAULT 0)")
+    }
+
+    fun presented(id: String) {
+        writableDatabase.execSQL("INSERT OR IGNORE INTO question_stats(qid) VALUES(?)", arrayOf(id))
+        writableDatabase.execSQL("UPDATE question_stats SET presented=presented+1,last_at=? WHERE qid=?", arrayOf<Any>(System.currentTimeMillis(), id))
+    }
+
+    fun answered(id: String, correct: Boolean) {
+        writableDatabase.execSQL("INSERT OR IGNORE INTO question_stats(qid) VALUES(?)", arrayOf(id))
+        writableDatabase.execSQL("UPDATE question_stats SET answered=answered+1,correct=correct+?,last_at=? WHERE qid=?", arrayOf<Any>(if (correct) 1 else 0, System.currentTimeMillis(), id))
+    }
+
+    /** 题库里的题目 id：删除题库前先拿到，用来判断孩子手上那一轮是不是被删掉了。 */
+    fun idsInBank(bank: String): List<String> {
+        require(bank.isNotBlank()) { "请选择题库" }
+        val ids = mutableListOf<String>()
+        readableDatabase.rawQuery("SELECT id,details FROM questions", null).use { cursor ->
+            while (cursor.moveToNext()) {
+                val details = JSONObject(cursor.getString(1)?.takeIf { it.isNotBlank() } ?: "{}")
+                if (details.optString("bank", "默认题库") == bank) ids.add(cursor.getString(0))
+            }
+        }
+        return ids
+    }
+
+    fun deleteBank(bank: String): Int = deleteQuestions(idsInBank(bank))
+
+    /** 出题 / 结算时校验题目是否还在：家长可能刚在管理页删掉这一题。 */
+    fun questionExists(id: String): Boolean = readableDatabase.rawQuery("SELECT 1 FROM questions WHERE id=? LIMIT 1", arrayOf(id)).use {
+        it.moveToFirst()
     }
 
     private fun createProgress(db: SQLiteDatabase) {
@@ -183,14 +220,22 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
         val defaults = JSONObject().put("dailyMinutes", 40).put("dailyFreeMinutes", 0).put("sessionMinutes", 10)
             .put("questionsPerRound", 5).put("roundsPerDay", 3).put("passRatio", 0.6)
             .put("windowStart", "18:30").put("windowEnd", "20:00").put("allDay", true).put("spacedRepetitionEnabled", false)
-            .put("playMode", "round").put("extraEnabled", true)
+            .put("playMode", "round").put("extraEnabled", true).put("shuffleOptions", false).put("showCountdown", true)
             .put("wrongThreshold", 3).put("extraQuestions", 2)
             .put("difficultyRewardEnabled", false)
             .put("difficultyRewards", JSONObject().put("1", 1).put("2", 2).put("3", 3).put("4", 4).put("5", 5))
             .put("praisePhrases", JSONArray(DEFAULT_PRAISE)).put("encouragePhrases", JSONArray(DEFAULT_ENCOURAGE))
             .put("autoNextSeconds", 0).put("scheduleMode", "allow").put("blockSettingsDuringControl", true).put("theme", if (BuildConfig.FLAVOR == "tv") "dark" else "system")
             .put("holidayMode", "sunday")
+            .put("bootFreeMinutes", 0).put("dailyLimitEnabled", true).put("roundsLimitEnabled", true)
+            .put("restEnabled", false).put("restWatchMinutes", 40).put("restMinutes", 10)
+            .put("wrongReviewSeconds", 0).put("fontScale", 100).put("childSelectLevel", false)
+            .put("trafficAssistEnabled", false).put("backgroundAnchorEnabled", true)
+            .put("learningContent", "quiz").put("educationalVideos", JSONArray()).put("videoMinutes", 1)
+            .put("quizBanks", JSONArray())
             .put("quizSubjects", JSONArray()).put("quizLevels", JSONArray())
+            // 网课时段 / 大人豁免（Issue #112）：旧配置没有这两个键，默认空数组 = 完全沿用旧行为
+            .put("timePoints", JSONArray()).put("exemptWindows", JSONArray())
             .put("version", 1)
         val saved = try { JSONObject(get("config", "{}")) } catch (e: Exception) { JSONObject() }
         saved.keys().forEach { defaults.put(it, saved.get(it)) }
@@ -249,11 +294,58 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
         return out
     }
 
+    /**
+     * 网课时段 / 大人豁免的校验（Issue #112）。时间精确到分钟，end < start 表示跨午夜。
+     * days 用真实星期几：0 = 周一 … 6 = 周日，不受 holidayMode 影响。
+     */
+    private fun normalizeWindows(raw: JSONArray?, counted: Boolean, label: String): JSONArray {
+        val out = JSONArray()
+        val source = raw ?: return out
+        require(source.length() <= 50) { "${label}最多 50 条" }
+        val pattern = Regex("([01][0-9]|2[0-3]):[0-5][0-9]")
+        for (i in 0 until source.length()) {
+            val item = source.optJSONObject(i) ?: throw IllegalArgumentException("${label}格式不正确")
+            val name = item.optString("name").trim()
+            require(name.isNotEmpty() && name.length <= 20) { "${label}名称需要 1–20 个字" }
+            val start = item.optString("start")
+            val end = item.optString("end")
+            require(pattern.matches(start) && pattern.matches(end)) { "${label}需要有效的开始和结束时间（精确到分钟）" }
+            require(start != end) { "${label}的开始与结束时间不能相同" }
+            val days = JSONArray()
+            val seen = mutableSetOf<Int>()
+            val rawDays = item.optJSONArray("days") ?: JSONArray()
+            for (d in 0 until rawDays.length()) {
+                val day = rawDays.optInt(d, -1)
+                require(day in 0..6) { "${label}的星期设置不正确" }
+                if (seen.add(day)) days.put(day)
+            }
+            require(days.length() > 0) { "请为${label}选择星期" }
+            val clean = JSONObject()
+                .put("id", item.optString("id").trim().takeIf { it.isNotEmpty() && it.length <= 64 }
+                    ?: ((if (counted) "tp_" else "ex_") + UUID.randomUUID()))
+                .put("name", name).put("days", days).put("start", start).put("end", end)
+            if (counted) {
+                val mode = item.optString("mode", "free")
+                require(mode in listOf("free", "counted")) { "${label}的用途需要为自由使用或计入限额" }
+                clean.put("mode", mode)
+                if (mode == "counted") {
+                    val minutes = item.optInt("dailyMinutes", 0)
+                    require(minutes in 1..480) { "计入限额的${label}需要 1–480 分钟" }
+                    clean.put("dailyMinutes", minutes)
+                }
+            }
+            out.put(clean)
+        }
+        return out
+    }
+
     fun saveConfig(input: JSONObject): JSONObject {
         val next = config()
         val ranges = mapOf("dailyMinutes" to 1..480, "dailyFreeMinutes" to 0..120, "sessionMinutes" to 1..120,
             "questionsPerRound" to 1..100, "roundsPerDay" to 1..100,
-            "wrongThreshold" to 1..100, "extraQuestions" to 1..100)
+            "wrongThreshold" to 1..100, "extraQuestions" to 1..100,
+            "bootFreeMinutes" to 0..120, "restWatchMinutes" to 1..480, "restMinutes" to 1..120,
+            "wrongReviewSeconds" to 0..300, "fontScale" to 75..200, "videoMinutes" to 1..30)
         ranges.forEach { (key, range) ->
             if (input.has(key)) {
                 val value = input.getDouble(key)
@@ -274,11 +366,25 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
             require(ratio.isFinite() && ratio > 0 && ratio <= 1) { "答对比例需要大于 0 且不超过 100%" }
             next.put("passRatio", ratio)
         }
+        if (input.has("learningContent")) {
+            require(input.getString("learningContent") in listOf("quiz", "video", "alternate")) { "未知学习内容模式" }
+            next.put("learningContent", input.getString("learningContent"))
+        }
+        if (input.has("educationalVideos")) {
+            val urls = input.getJSONArray("educationalVideos")
+            require(urls.length() <= 50) { "最多 50 个公益视频" }
+            for (i in 0 until urls.length()) {
+                val url = urls.getString(i)
+                require(url.length <= 2048 && (url.startsWith("https://") || url.startsWith("http://"))) { "请使用 HTTP/HTTPS 视频直链" }
+            }
+            next.put("educationalVideos", urls)
+        }
+        require(next.optString("learningContent", "quiz") == "quiz" || next.getJSONArray("educationalVideos").length() > 0) { "视频学习模式需要添加视频地址" }
         if (input.has("playMode")) {
-            require(input.getString("playMode") in listOf("round", "streak", "practice")) { "未知玩法" }
+            require(input.getString("playMode") in listOf("round", "streak", "practice", "count")) { "未知玩法" }
             next.put("playMode", input.getString("playMode"))
         }
-        listOf("extraEnabled", "difficultyRewardEnabled", "allDay", "spacedRepetitionEnabled", "blockSettingsDuringControl").forEach {
+        listOf("extraEnabled", "difficultyRewardEnabled", "allDay", "spacedRepetitionEnabled", "blockSettingsDuringControl", "shuffleOptions", "showCountdown", "dailyLimitEnabled", "roundsLimitEnabled", "restEnabled", "childSelectLevel", "trafficAssistEnabled", "backgroundAnchorEnabled").forEach {
             if (input.has(it)) next.put(it, input.getBoolean(it))
         }
         for (key in listOf("praisePhrases", "encouragePhrases")) if (input.has(key)) {
@@ -295,10 +401,10 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
             require(input.getString("scheduleMode") in listOf("allow", "control")) { "未知的时段用途" }
             next.put("scheduleMode", input.getString("scheduleMode"))
         }
-        for (key in listOf("quizSubjects", "quizLevels")) if (input.has(key)) {
+        for (key in listOf("quizSubjects", "quizLevels", "quizBanks")) if (input.has(key)) {
             val raw = input.optJSONArray(key) ?: JSONArray()
             val clean = JSONArray()
-            for (i in 0 until minOf(raw.length(), 50)) raw.optString(i).trim().takeIf { it.isNotEmpty() && it.length <= 32 }?.let { value ->
+            for (i in 0 until minOf(raw.length(), 50)) raw.optString(i).trim().takeIf { it.isNotEmpty() && it.length <= (if (key.endsWith("Banks")) 64 else 32) }?.let { value ->
                 if (!(0 until clean.length()).any { clean.optString(it) == value }) clean.put(value)
             }
             next.put(key, clean)
@@ -307,6 +413,8 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
             val clean = normalizeWeek(input.optJSONArray("weekSlots")) ?: throw IllegalArgumentException("可用时段格式不正确")
             next.put("weekSlots", clean)
         }
+        if (input.has("timePoints")) next.put("timePoints", normalizeWindows(input.optJSONArray("timePoints"), true, "网课时段"))
+        if (input.has("exemptWindows")) next.put("exemptWindows", normalizeWindows(input.optJSONArray("exemptWindows"), false, "大人豁免时段"))
         if (input.has("holidayMode")) {
             require(input.getString("holidayMode") in listOf("sunday", "normal")) { "未知的节假日规则" }
             next.put("holidayMode", input.getString("holidayMode"))
@@ -340,11 +448,31 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
         if (!subject.isNullOrEmpty()) { where.append(" AND subject=?"); args.add(subject) }
         if (!level.isNullOrEmpty()) { where.append(" AND level=?"); args.add(level) }
         val out = JSONArray()
-        val source = if (spaced) "questions LEFT JOIN question_progress progress ON questions.id=progress.qid" else "questions"
+        val source = (if (spaced) "questions LEFT JOIN question_progress progress ON questions.id=progress.qid" else "questions") +
+            " LEFT JOIN question_stats stats ON questions.id=stats.qid"
         val order = if (spaced) "CASE WHEN progress.due_at<=${System.currentTimeMillis()} THEN 0 WHEN progress.qid IS NULL THEN 1 ELSE 2 END, progress.due_at ASC, RANDOM()"
             else when (sortBy) { "newest" -> "questions.created_at DESC, questions.rowid DESC"; "oldest" -> "questions.created_at ASC, questions.rowid ASC"; else -> "RANDOM()" }
-        readableDatabase.rawQuery("SELECT questions.* FROM $source WHERE $where ORDER BY $order LIMIT ${limit.coerceIn(1, 5000)}", args.toTypedArray()).use { c ->
-            while (c.moveToNext()) out.put(rowToItem(c))
+        readableDatabase.rawQuery("SELECT questions.*,COALESCE(stats.presented,0) AS presented,COALESCE(stats.answered,0) AS answered_count,COALESCE(stats.correct,0) AS correct_count FROM $source WHERE $where ORDER BY $order LIMIT ${limit.coerceIn(1, 5000)}", args.toTypedArray()).use { c ->
+            while (c.moveToNext()) {
+                val details = c.getString(c.getColumnIndexOrThrow("details"))
+                val item = if (details.isNullOrEmpty()) JSONObject() else JSONObject(details)
+                item.put("id", c.getString(c.getColumnIndexOrThrow("id")))
+                    .put("q", c.getString(c.getColumnIndexOrThrow("stem")))
+                    .put("a", JSONArray(c.getString(c.getColumnIndexOrThrow("options"))))
+                    .put("k", c.getInt(c.getColumnIndexOrThrow("answer")))
+                    .put("difficulty", c.getInt(c.getColumnIndexOrThrow("difficulty")))
+                    .put("tip", c.getString(c.getColumnIndexOrThrow("tip")) ?: "")
+                    .put("subject", c.getString(c.getColumnIndexOrThrow("subject")) ?: "")
+                    .put("level", c.getString(c.getColumnIndexOrThrow("level")) ?: "")
+                    // 必须回传 enabled：管理端靠它区分「启用 / 已暂停」，
+                    // 否则暂停的题在页面上永远看不到，用户会以为题目丢了。
+                    .put("enabled", c.getInt(c.getColumnIndexOrThrow("enabled")) == 1)
+                    .put("stats", JSONObject().put("presented", c.getInt(c.getColumnIndexOrThrow("presented")))
+                        .put("answered", c.getInt(c.getColumnIndexOrThrow("answered_count")))
+                        .put("correct", c.getInt(c.getColumnIndexOrThrow("correct_count"))))
+                if (!item.has("type")) item.put("type", "single")
+                out.put(item)
+            }
         }
         return out
     }
@@ -372,7 +500,8 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
      * - 题库被“自动淘汰”做空时，会把淘汰的题放回来，保证总有题可做
      */
     fun pickQuestion(skip: Set<String>, last: String?, spaced: Boolean, minStar: Int,
-                     subjects: List<String> = emptyList(), levels: List<String> = emptyList()): JSONObject? {
+                     subjects: List<String> = emptyList(), levels: List<String> = emptyList(),
+                     banks: List<String> = emptyList()): JSONObject? {
         fun query(skipIds: Collection<String>, star: Int): JSONObject? {
             val where = StringBuilder("questions.enabled=1")
             val args = ArrayList<String>()
@@ -388,9 +517,16 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
                 else "CASE WHEN p.qid IS NULL THEN 0 ELSE 1 END, COALESCE(p.updated_at,0), RANDOM()"
             val list = ArrayList<JSONObject>()
             readableDatabase.rawQuery(
-                "SELECT questions.* FROM questions LEFT JOIN question_progress p ON questions.id=p.qid WHERE $where ORDER BY $order LIMIT 12",
+                "SELECT questions.* FROM questions LEFT JOIN question_progress p ON questions.id=p.qid WHERE $where ORDER BY $order LIMIT ${if (banks.isEmpty()) 12 else 3000}",
                 args.toTypedArray()
-            ).use { c -> while (c.moveToNext()) list.add(rowToItem(c)) }
+            ).use { c ->
+                while (c.moveToNext() && list.size < 12) {
+                    val item = rowToItem(c)
+                    // 题库范围（上游功能）：题库名存在 details 里，只能取出来再过滤
+                    if (banks.isNotEmpty() && item.optString("bank", "默认题库") !in banks) continue
+                    list.add(item)
+                }
+            }
             if (list.isEmpty()) return null
             return if (spaced) list[0] else list[java.util.Random().nextInt(list.size)]
         }
@@ -461,6 +597,19 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
         require(difficulty in 1..5) { "难度需要为 1–5 星" }
         val id = item.optString("id").ifEmpty { "q_" + UUID.randomUUID().toString() }
         val details = JSONObject(item.toString()).put("type", type)
+        details.remove("stats")
+        val bank = item.optString("bank", "默认题库").trim()
+        require(bank.isNotEmpty() && bank.length <= 64) { "题库名称需要 1–64 个字" }
+        details.put("bank", bank)
+        for (key in listOf("image", "audio")) {
+            val value = item.optString(key).trim()
+            require(value.isEmpty() || ((value.startsWith("https://") || value.startsWith("http://")) && value.length <= 2048) ||
+                (key == "image" && value.startsWith("data:image/") && value.length <= 500000)) { "图片或音频地址无效" }
+            details.put(key, value)
+        }
+        val language = item.optString("language", "zh-CN")
+        require(language in listOf("zh-CN", "en-US", "en-GB")) { "朗读/识别语言需要为中文或英文" }
+        details.put("language", language)
         writableDatabase.insertWithOnConflict("questions", null, ContentValues().apply {
             put("id", id); put("subject", item.optString("subject", "常识"))
             put("level", item.optString("level", "")); put("difficulty", difficulty)
@@ -481,35 +630,35 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "studyontv.db", n
         return items.length()
     }
 
-    // ---- AI 出题用的查询 ----
-    fun unseenCount(subject: String): Int = readableDatabase.rawQuery(
-        "SELECT COUNT(*) FROM questions LEFT JOIN question_progress p ON questions.id=p.qid WHERE questions.enabled=1 AND questions.subject=? AND p.qid IS NULL", arrayOf(subject)
-    ).use { if (it.moveToFirst()) it.getInt(0) else 0 }
-
-    fun countSubject(subject: String): Int = readableDatabase.rawQuery(
-        "SELECT COUNT(*) FROM questions WHERE enabled=1 AND subject=?", arrayOf(subject)
-    ).use { if (it.moveToFirst()) it.getInt(0) else 0 }
-
-    fun stemsOf(subject: String, limit: Int): List<String> {
-        val out = ArrayList<String>()
-        // 最新的在前（包含已淘汰的题），AI 出题据此避开重复
-        readableDatabase.rawQuery("SELECT stem FROM questions WHERE subject=? ORDER BY rowid DESC LIMIT ?", arrayOf(subject, limit.toString())).use { while (it.moveToNext()) out.add(it.getString(0)) }
-        return out
+    fun clearQuestions(): Int {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val deleted = db.delete("questions", null, null)
+            db.delete("question_progress", null, null)
+            db.delete("question_stats", null, null)
+            db.setTransactionSuccessful()
+            return deleted
+        } finally { db.endTransaction() }
     }
 
-
     fun deleteQuestions(ids: List<String>): Int {
+        if (ids.isEmpty()) return 0
         val db = writableDatabase
         var count = 0
         db.beginTransaction()
         try {
-            ids.forEach { count += db.delete("questions", "id=?", arrayOf(it)) }
+            ids.forEach {
+                count += db.delete("questions", "id=?", arrayOf(it))
+                db.delete("question_progress", "qid=?", arrayOf(it))
+                db.delete("question_stats", "qid=?", arrayOf(it))
+            }
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
         return count
     }
 
-    fun deleteQuestion(id: String): Boolean = writableDatabase.delete("questions", "id=?", arrayOf(id)) > 0
+    fun deleteQuestion(id: String): Boolean = deleteQuestions(listOf(id)) > 0
 
     fun setEnabled(ids: List<String>, enabled: Boolean): Int {
         val db = writableDatabase; var count = 0

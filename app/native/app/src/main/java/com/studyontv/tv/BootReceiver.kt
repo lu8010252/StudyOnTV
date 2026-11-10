@@ -14,6 +14,7 @@ class BootReceiver : BroadcastReceiver() {
                 "android.intent.action.LOCKED_BOOT_COMPLETED",
                 "com.tcl.android.intent.action.BOOT_COMPLETED",
                 "com.hisense.intent.action.BOOT_COMPLETED")) {
+            UninstallGuard.restoreOwnerPolicy(context)
             Prefs.setUpdateInProgress(context, false)
             if (action != Intent.ACTION_MY_PACKAGE_REPLACED) Watchdog.bootBroadcast(context)
             GateService.ensureRunning(context, if (action == Intent.ACTION_MY_PACKAGE_REPLACED) "update" else "boot")
@@ -22,7 +23,7 @@ class BootReceiver : BroadcastReceiver() {
         // 屏幕点亮 / 用户解锁 / 网络变化：进程被杀后快速拉起的兜底
         // 只在管控配置已存在时才拉起，避免干扰未配对的设备
         if (action in setOf(Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT,
-                "android.net.conn.CONNECTIVITY_CHANGE")) {
+                "android.net.conn.CONNECTIVITY_CHANGE", Watchdog.REVIVE_ACTION)) {
             if (GateService.running) return          // 已在运行，无需操作
             if (!Prefs.onboarded(context)) return      // 未完成引导，不拉起
             GateService.ensureRunning(context, "revive")

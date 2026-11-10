@@ -22,6 +22,7 @@ import org.json.JSONObject
 class TvTextInputActivity : Activity() {
     private lateinit var edit: EditText
     private var delivered = false
+    private var cancelled = false
     private val requestId get() = intent.getStringExtra("requestId") ?: ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -54,13 +55,16 @@ class TvTextInputActivity : Activity() {
         fun add(label: String, primary: Boolean = false, action: () -> Unit) =
             row.addView(TvUi.button(this, label, primary, action), LinearLayout.LayoutParams(-2, -2).apply { leftMargin = (8 * dp).toInt(); rightMargin = (8 * dp).toInt() })
         add("确定", true) { finishWith(true) }
-        if (packageManager.queryIntentActivities(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH), 0).isNotEmpty()) add("语音输入") { voice() }
+        add("语音输入 / 重录") { voice() }
         add("清空") { edit.setText("") }
         add("取消") { finishWith(false) }
         root.addView(row, LinearLayout.LayoutParams(-1, -2).apply { topMargin = (20 * dp).toInt() })
         setContentView(root)
         edit.requestFocus()
-        edit.post { (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(edit, InputMethodManager.SHOW_IMPLICIT) }
+        edit.post {
+            if (intent.getBooleanExtra("voice", false) && savedInstanceState == null) voice()
+            else (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(edit, InputMethodManager.SHOW_IMPLICIT)
+        }
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -73,20 +77,23 @@ class TvTextInputActivity : Activity() {
         try {
             startActivityForResult(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
                 .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN"), 7)
+                .putExtra(RecognizerIntent.EXTRA_LANGUAGE, intent.getStringExtra("language") ?: "zh-CN"), 7)
         } catch (_: Exception) { android.widget.Toast.makeText(this, "这台电视没有语音识别", android.widget.Toast.LENGTH_SHORT).show() }
     }
 
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != 7 || resultCode != RESULT_OK) return
         val spoken = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull() ?: return
-        edit.append(if (edit.text.isEmpty()) spoken else " $spoken")
+        edit.setText(spoken)
+        edit.setSelection(edit.text.length)
     }
 
     private fun finishWith(save: Boolean) {
         if (delivered) return
         delivered = true
+        cancelled = !save
         AnswerInput.complete(requestId, if (save) JSONObject().put("text", edit.text.toString()) else null)
         finish()
     }
@@ -97,7 +104,11 @@ class TvTextInputActivity : Activity() {
     }
 
     override fun onDestroy() {
-        if (!delivered && !isChangingConfigurations) AnswerInput.complete(requestId, null)
+        // 遥控器「返回键」退出时不算取消：把已输入的内容带回去，避免辛苦打的字白打（#64）
+        if (!delivered && !isChangingConfigurations) {
+            val draft = if (::edit.isInitialized) edit.text.toString() else ""
+            AnswerInput.complete(requestId, if (draft.isNotBlank()) JSONObject().put("text", draft) else null)
+        }
         super.onDestroy()
     }
 }

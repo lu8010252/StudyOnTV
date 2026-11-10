@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import {parseQuestionText} from './document-import.ts';
+const items=parseQuestionText('1. 2 + 2 = ?\nA. 3\nB. 4\n答案：B\n解析：相加得 4\n2. 选出偶数\nA. 2 B. 3 C. 4\n答案：AC\n3. 地球是圆的\n答案：正确\n4. 苹果的英文\n答案：apple|Apple');
+assert.equal(items.length,4);
+assert.deepEqual(items[0].a,['3','4']);assert.equal(items[0].k,1);assert.equal(items[0].tip,'相加得 4');
+assert.deepEqual(items[1].correctIndices,[0,2]);assert.equal(items[2].type,'boolean');
+assert.deepEqual(items[3].answers,['apple','Apple']);
+assert.throws(()=>parseQuestionText('1. 没有答案的题目'),/无法识别/);
+assert.throws(()=>parseQuestionText('1. question\nA. first\nB. second\n答案：D'),/无法识别/);
+assert.throws(()=>parseQuestionText(''),/没有可提取的文字/);
+console.log('PASS document parsing: single/multiple/boolean/text, explanations and invalid input');

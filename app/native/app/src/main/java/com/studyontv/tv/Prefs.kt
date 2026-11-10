@@ -53,6 +53,11 @@ object Prefs {
     fun heartbeatCounting(c: Context): Boolean = sp(c).getBoolean("heartbeat_counting", false)
     fun setHeartbeat(c: Context, at: Long, counting: Boolean) =
         sp(c).edit().putLong("heartbeat_at", at).putBoolean("heartbeat_counting", counting).apply()
+
+    /** 通知权限是否已自动询问过；拒绝后不再自动弹，仍可从列表手动再请求。 */
+    fun notificationAsked(c: Context): Boolean = sp(c).getBoolean("notification_asked", false)
+    fun setNotificationAsked(c: Context, v: Boolean) = sp(c).edit().putBoolean("notification_asked", v).apply()
+
     /** null = 未表态（尚未被问过）, true = 同意, false = 拒绝 */
     fun buglyConsent(c: Context): Boolean = sp(c).getBoolean("bugly_consent", false)
     fun setBuglyConsent(c: Context, v: Boolean) = sp(c).edit().putBoolean("bugly_consent", v).apply()

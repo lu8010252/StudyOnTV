@@ -24,7 +24,7 @@
 |---|---|---|---|
 | GET | `/api/state` | 只读 | 规则、今日统计、学习状态 |
 | GET | `/api/device` | 只读 | 设备名、版本、开机自启状态 |
-| POST | `/api/remote` | 控制 | `unlock` / `lock` / `cancel` |
+| POST | `/api/remote` | 控制 | `unlock` / `lock` / `cancel` / `indefinite` / `credit` |
 
 `POST /api/remote` 的请求体：
 
@@ -35,6 +35,8 @@
 - `unlock`：临时解锁 1–1440 分钟，不扣学习余额，到点自动恢复规则；
 - `lock`：立即暂停，`minutes` 为 0 表示一直暂停到手动取消（最多 7 天）；
 - `cancel`：取消当前的临时解锁或暂停。
+- `indefinite`：持续关闭管控，直到手动取消。
+- `credit`：`minutes` 为 -480 到 480 的非零整数。正数增加今天的奖励余额，负数提前收走余额；同步偏移今日总额度，不修改规则中的 `dailyMinutes`，跨天清零。原有时段、强制休息和家长锁定仍生效。状态新增 `todayLimitMinutes`（关闭每日上限时为 `null`）、`restSeconds`、`feedbackSeconds`、`bootFreeSeconds`。
 
 集成令牌只能访问上表中的接口，不能修改规则、题库、密码或权限本身。
 

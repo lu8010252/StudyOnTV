@@ -1,0 +1,17 @@
+.question-media { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-bottom: 18px; }
+.question-media:empty { display: none; }
+.question-media-image { display: block; max-width: 100%; max-height: 28vh; object-fit: contain; border-radius: 12px; }
+.question-media audio { max-width: 100%; }
+html.tv-device #stage { overflow-y: auto; max-height: calc(100vh - 9rem); }
+.btn:disabled { opacity: .65; cursor: default; }
+html:not(.tv-device) .question { font-size: calc(28px * var(--learn-scale, 1)); }
+html:not(.tv-device) .question.long { font-size: calc(23px * var(--learn-scale, 1)); }
+html:not(.tv-device) .question.longer { font-size: calc(19px * var(--learn-scale, 1)); }
+html:not(.tv-device) .opt-text, html:not(.tv-device) .written-answer { font-size: calc(18px * var(--learn-scale, 1)); }
+html:not(.tv-device) .fb-answer, html:not(.tv-device) .fb-tip { font-size: calc(16px * var(--learn-scale, 1)); }
+@media (min-width: 900px) {
+ html:not(.tv-device) .question { font-size: calc(40px * var(--learn-scale, 1)); }
+ html:not(.tv-device) .question.long { font-size: calc(32px * var(--learn-scale, 1)); }
+ html:not(.tv-device) .question.longer { font-size: calc(26px * var(--learn-scale, 1)); }
+ html:not(.tv-device) .opt-text { font-size: calc(24px * var(--learn-scale, 1)); }
+}

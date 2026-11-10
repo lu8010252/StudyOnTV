@@ -17,6 +17,10 @@ object AnswerInput {
     var active = false
         private set
 
+    fun language(): String = try {
+        JSONObject(DeviceRuntime.store.get("active_round", "{}")).optJSONObject("question")?.optString("language", "zh-CN") ?: "zh-CN"
+    } catch (_: Exception) { "zh-CN" }
+
     /** 打开一个原生输入页（手机：手写 / 语音；电视：遥控器 + 系统输入法），结果经 SOTV_INPUT 回传给网页 */
     fun open(context: Context, web: WebView, screen: Class<out Activity>, extras: Intent.() -> Unit = {}) {
         if (active) return
@@ -41,6 +45,13 @@ object AnswerInput {
         }
     }
 
+    /**
+     * 把结果回传给网页。
+     *
+     * 部分电视（如 TCL mt5879 系列）的 WebView 在从原生页切回来时，JS 上下文还没准备好，
+     * 单次 evaluateJavascript 会静默丢失，表现为「点了确定回到题目还是空的」（issue #64）。
+     * 这里带上一次性 token 重复注入，直到 JS 回写 window.__sotvAck 确认为止。
+     */
     fun complete(id: String, result: JSONObject?) {
         if (id != requestId) return
         Handler(Looper.getMainLooper()).post {
@@ -49,13 +60,25 @@ object AnswerInput {
             active = false
             requestId = ""
             target.clear()
-            if (result != null) {
-                // 延迟 120ms 让 WebView visibility 恢复后 JS 上下文稳定，
-                // 避免部分厂商 WebView 在切换过程中 state.round 短暂为 null 导致回调被丢弃
-                Handler(Looper.getMainLooper()).postDelayed({
-                    view?.evaluateJavascript("window.SOTV_INPUT&&SOTV_INPUT(" + result.toString() + ")", null)
-                }, 120)
+            if (result == null || view == null) return@post
+            val token = UUID.randomUUID().toString()
+            val payload = result.toString()
+            var attempt = 0
+            fun send() {
+                                attempt++
+                try {
+                    view.evaluateJavascript("window.SOTV_INPUT&&SOTV_INPUT($payload,'$token')", null)
+                } catch (_: Throwable) { return }
+                if (attempt >= 8) return
+                view.postDelayed({
+                                        try {
+                        view.evaluateJavascript("window.__sotvAck==='$token'") { ack ->
+                            if (ack == null || !ack.contains("true")) send()
+                        }
+                    } catch (_: Throwable) { }
+                }, (180L * attempt).coerceAtMost(1200L))
             }
+            view.postDelayed({ send() }, 120)
         }
     }
 }

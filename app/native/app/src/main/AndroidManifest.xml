@@ -58,6 +58,8 @@
             android:taskAffinity="com.studyontv.tv.gate"
             android:theme="@style/GateTheme" />
 
+        <activity android:name=".EducationalVideoActivity" android:exported="false" android:configChanges="orientation|screenSize" />
+
         <activity
             android:name=".UpdateActivity"
             android:configChanges="orientation|screenSize|keyboardHidden|navigation"
@@ -76,6 +78,7 @@
         <service
             android:name=".GateService"
             android:exported="false"
+            android:stopWithTask="false"
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"

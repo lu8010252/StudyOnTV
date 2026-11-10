@@ -1,6 +1,7 @@
 # 构建产物 / 本地环境
 /app/native/build/
 /app/native/app/build/
+/app/native/legacy/build/
 /app/native/.gradle/
 /app/native/.idea/
 /app/native/local.properties
@@ -15,6 +16,8 @@
 Thumbs.db
 *.log
 node_modules/
+__pycache__/
+*.pyc
 
 # 构建时从 app/web、admin、data/seed.json 自动同步，不入库
 /app/native/app/src/main/assets/web/
@@ -27,9 +30,27 @@ studyontv-release.jks
 
 /app/server/
 
-/parent-ui/
+/parent-ui/dist/
+/parent-ui/**/._*
+/parent-ui/public/assets/vendor/
+/parent-ui/public/assets/math.js
+/parent-ui/public/assets/analytics.js
+/parent-ui/public/assets/notices/*
+!/parent-ui/public/assets/notices/shadcn-admin.txt
 
 # Kotlin compiler cache
 .kotlin/
 
 /release-artifacts/
+
+# External watchdog local configuration and ADB credentials
+/deploy/watchdog/docker/.env
+/deploy/watchdog/esp32/config.json
+/deploy/watchdog/esp32/auth.json
+/deploy/watchdog/esp32/local/
+/deploy/watchdog/esp32/adbkey*
+
+# Local agent worktrees / scratch output
+/.claude/
+/tmp-check/
+

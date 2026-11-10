@@ -1,0 +1,7 @@
+<!DOCTYPE html>
+<html lang="zh-CN" manifest="practice.appcache">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="apple-mobile-web-app-capable" content="yes"><title>题了个题 · 浏览器练习</title><link rel="stylesheet" href="assets/css/practice.css"></head>
+<body><main><h1>题了个题 · 浏览器练习</h1><p class="note">适用于 iPad 和旧设备的本地练习。题库与记录保存在当前浏览器；此页面不能限制其他应用。</p>
+<section><label>导入题库 JSON <input id="bankFile" type="file" accept=".json,application/json"></label><details><summary>粘贴题库 JSON（旧设备可用）</summary><textarea id="bankText" rows="6" style="width:100%" placeholder='{"items":[…]}'></textarea><button id="importText">导入粘贴内容</button></details><button id="exportBank">导出备份</button><label>年级 <select id="level"><option value="">全部年级</option></select></label><label>每组题数 <input id="target" type="number" value="5" min="1" max="100"></label><button id="start">开始一组</button></section>
+<section id="question"><h2 id="stem">点击“开始一组”</h2><div id="media"></div><div id="options"></div><input id="written" type="text" placeholder="输入答案" style="display:none"><button id="submit" style="display:none">提交答案</button><button id="read">朗读题目</button><div id="feedback" role="status"></div><button id="next" style="display:none">继续</button></section><p id="progress"></p><p id="summary"></p><p id="error" role="alert"></p>
+</main><script src="assets/js/practice.js"></script></body></html>

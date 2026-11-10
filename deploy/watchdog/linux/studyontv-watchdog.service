@@ -1,0 +1,20 @@
+[Unit]
+Description=StudyOnTV external ADB watchdog
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=studyontv
+Group=studyontv
+WorkingDirectory=/opt/studyontv-watchdog
+EnvironmentFile=/etc/studyontv-watchdog.env
+ExecStart=/bin/sh /opt/studyontv-watchdog/deploy/watchdog/run-watchdog.sh
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

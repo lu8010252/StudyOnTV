@@ -1,0 +1,20 @@
+services:
+  watchdog:
+    build:
+      context: ../../..
+      dockerfile: deploy/watchdog/docker/Dockerfile
+    restart: unless-stopped
+    environment:
+      SOTV_SERIAL: "${SOTV_SERIAL:?Set SOTV_SERIAL in .env}"
+      SOTV_PACKAGE: "${SOTV_PACKAGE:-com.studyontv.tv}"
+      SOTV_INTERVAL: "${SOTV_INTERVAL:-30}"
+      SOTV_REPAIR_ACCESSIBILITY: "${SOTV_REPAIR_ACCESSIBILITY:-0}"
+    volumes:
+      - adb-keys:/root/.android
+    logging:
+      driver: json-file
+      options:
+        max-size: "2m"
+        max-file: "3"
+volumes:
+  adb-keys:

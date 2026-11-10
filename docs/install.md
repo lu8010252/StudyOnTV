@@ -129,6 +129,12 @@ adb shell appops set com.studyontv.tv SYSTEM_ALERT_WINDOW allow
 
 **开机启动：** 首次打开并完成设置后，App 接收 Android 开机、部分电视快速开机与覆盖安装广播，尝试恢复前台管理服务。请在厂商设置中允许自启动和后台运行。小米等电视的遥控器待机、关机清后台未必触发 Android 开机广播；系统强制停止或厂商禁用后台启动时，仍需重新打开 App，不能保证自动恢复。
 
+部分小米 / Redmi TV 固件没有自启动白名单入口。若「打开应用正常，回桌面数秒后手机管理页断开」，应先区分应用崩溃和厂商强制停止。日志中的 `has system window, so kill it`、`PeriodicCleaner`、`killAllThirdApp`、`Force stopping` 分别可指向系统窗口策略、周期清理、待机清理等路径（[#43](https://github.com/chadyi/StudyOnTV/issues/43)、[#48](https://github.com/chadyi/StudyOnTV/issues/48)、[#73](https://github.com/chadyi/StudyOnTV/issues/73)）。前台服务并不能保证绕过这些清理。
+
+部分报告在关闭悬浮窗、保留无障碍和使用情况访问后改善了存活，但这依赖机型；Android 10+ 的后台全屏启动也可能受限。采用该配置后，应实际验证到时能否拦截视频应用，而不能只看管理页是否在线。新规则中的「显示剩余时间角标」只控制角标，不会移除服务的 anchor 窗口，也不等同于撤销悬浮窗权限。
+
+首次设置后分别测试一次遥控器待机唤醒和断电冷启动，再在家长端「设置 → 设备」检查开机自启、服务和无障碍状态。若无障碍已授权但未连接，尝试在设备设置中关闭后重新开启；若被系统撤销，需重新授权。没有相应厂商设置界面的设备仍可能需要外部维护。当前开放问题及修复范围见 [issue 排查记录](./issue-triage.md)。需要常开电脑 / NAS 通过已授权 ADB 补救厂商强停时，见 [外部看门狗与 tv-vigil 源码分析](./background-recovery.md)。
+
 **应用更新：** 家长面板可检查更新，默认优先蒲公英，失败再尝试 GitHub、CDN 与镜像。TV 和手机 / 平板分别更新，下载后核对包名、版本和签名；覆盖安装保留本机数据。需要调整「安装未知应用」权限时，可先由家长验证后进入系统设置。
 
 <img src="./screenshots/v0.3.0/setup-mobile.png" width="260" alt="手机权限页：未授权也可进入设置和学习">

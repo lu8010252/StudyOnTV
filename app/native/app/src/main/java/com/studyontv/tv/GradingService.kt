@@ -20,21 +20,21 @@ object GradingService {
     fun providers(): JSONArray = JSONArray().apply {
         fun p(id: String, name: String, base: String, model: String, vision: String = "", note: String = "", keyUrl: String = "") = put(JSONObject()
             .put("id", id).put("name", name).put("baseUrl", base).put("model", model).put("visionModel", vision).put("note", note).put("keyUrl", keyUrl))
-        p("deepseek", "DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat", "deepseek-chat", "性价比高，支持文字与手写图片（开启“模型支持图像”）", "https://platform.deepseek.com/api_keys")
-        p("dashscope", "阿里云百炼（通义千问）", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus", "qwen-vl-plus", "", "https://bailian.console.aliyun.com/?apiKey=1")
-        p("zhipu", "智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", "glm-4-flash", "glm-4v-flash", "有免费模型", "https://open.bigmodel.cn/usercenter/apikeys")
-        p("moonshot", "月之暗面 Kimi", "https://api.moonshot.cn/v1", "moonshot-v1-8k", "", "", "https://platform.moonshot.cn/console/api-keys")
-        p("siliconflow", "硅基流动", "https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-7B-Instruct", "Qwen/Qwen2.5-VL-7B-Instruct", "", "https://cloud.siliconflow.cn/account/ak")
-        p("volcengine", "火山方舟（豆包）", "https://ark.cn-beijing.volces.com/api/v3", "", "", "模型名填写推理接入点 ID 或模型 ID", "https://console.volcengine.com/ark")
-        p("openrouter", "OpenRouter", "https://openrouter.ai/api/v1", "openai/gpt-4o-mini", "openai/gpt-4o-mini", "", "https://openrouter.ai/keys")
-        p("openai", "OpenAI", "https://api.openai.com/v1", "gpt-4o-mini", "gpt-4o-mini", "", "https://platform.openai.com/api-keys")
-        p("ollama", "本地 Ollama / LM Studio", "http://192.168.1.10:11434/v1", "qwen2.5:7b", "", "局域网内的电脑，地址改成那台电脑的 IP；无需 API Key")
+        p("deepseek", "DeepSeek", "https://api.deepseek.com/v1", "deepseek-flash", "deepseek-flash", "性价比高，支持文字与手写图片（开启“模型支持图像”）", "https://platform.deepseek.com/api_keys")
+        p("dashscope", "阿里云百炼（通义千问）", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen3.8-flash", "qwen3.8-flash", "", "https://bailian.console.aliyun.com/?apiKey=1")
+        p("zhipu", "智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", "glm-4.7-flash", "glm-4.6v-flash", "有免费模型", "https://open.bigmodel.cn/usercenter/apikeys")
+        p("moonshot", "月之暗面 Kimi", "https://api.moonshot.cn/v1", "kimi-k3.1-pro", "kimi-k3.1-pro", "", "https://platform.moonshot.cn/console/api-keys")
+        p("siliconflow", "硅基流动", "https://api.siliconflow.cn/v1", "Qwen/Qwen3-8B", "Qwen/Qwen3-VL-8B-Instruct", "", "https://cloud.siliconflow.cn/account/ak")
+        p("volcengine", "火山方舟（豆包）", "https://ark.cn-beijing.volces.com/api/v3", "doubao-seed-2-1-lite-260915", "doubao-seed-2-1-lite-260915", "模型名填写模型 ID（如 doubao-seed-2-1-lite-260915）；也兼容推理接入点 ID", "https://console.volcengine.com/ark")
+        p("openrouter", "OpenRouter", "https://openrouter.ai/api/v1", "openai/gpt-6-luna", "openai/gpt-6-luna", "", "https://openrouter.ai/keys")
+        p("openai", "OpenAI", "https://api.openai.com/v1", "gpt-6-luna", "gpt-6-luna", "", "https://platform.openai.com/api-keys")
+        p("ollama", "本地 Ollama / LM Studio", "http://192.168.1.10:11434/v1", "qwen3:8b", "qwen3-vl:8b", "局域网内的电脑，地址改成那台电脑的 IP；无需 API Key")
         p("custom", "自定义（OpenAI 兼容）", "", "", "")
     }
 
     fun settings(store: LocalStore, includeKey: Boolean = false): JSONObject {
         val result = JSONObject().put("mode", "manual").put("provider", "deepseek").put("endpoint", "https://api.deepseek.com/v1")
-            .put("model", "deepseek-chat").put("vision", false).put("passScore", 60)
+            .put("model", "deepseek-flash").put("vision", false).put("passScore", 60)
         val saved = JSONObject(store.get("grading_settings", "{}"))
         saved.keys().forEach { result.put(it, saved.get(it)) }
         result.put("hasKey", result.optString("apiKey").isNotEmpty())
@@ -77,6 +77,8 @@ object GradingService {
         require(next.getDouble("passScore").isFinite() && next.getDouble("passScore") in 1.0..100.0) { "及格分需要为 1–100" }
         next.remove("hasKey"); next.remove("chatUrl"); next.remove("providers"); next.remove("clearKey")
         store.set("grading_settings", next.toString())
+        // 只记主机与模型，绝不记 Key（#106 排查“到底存的是哪个地址”）
+        Diag.info("AI", "grading settings saved mode=${next.optString("mode")} provider=${next.optString("provider")} host=${hostOf(next.optString("endpoint"))} model=${next.optString("model")} hasKey=${next.optString("apiKey").isNotEmpty()}")
         return settings(store)
     }
 
@@ -90,10 +92,17 @@ object GradingService {
 
     private class ApiError(message: String) : Exception(message)
 
+    /** 日志里只记主机名，绝不记 Key、题目或答案原文（#106 排查需要看到“连的是哪台机器”） */
+    private fun hostOf(raw: String): String = try { URL(raw).host ?: "" } catch (_: Exception) { "invalid-url" }
+
     private fun request(url: String, key: String, body: JSONObject?, timeout: Int = 30000): JSONObject {
+        val started = System.currentTimeMillis()
+        val host = hostOf(url)
+        val method = if (body == null) "GET" else "POST"
+        fun elapsed() = System.currentTimeMillis() - started
         val connection = URL(url).openConnection() as HttpURLConnection
         try {
-            connection.requestMethod = if (body == null) "GET" else "POST"
+            connection.requestMethod = method
             connection.connectTimeout = 10000; connection.readTimeout = timeout
             connection.instanceFollowRedirects = false
             connection.setRequestProperty("Content-Type", "application/json")
@@ -103,10 +112,14 @@ object GradingService {
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
             val bytes = stream?.use { it.readBytes() } ?: ByteArray(0)
-            if (bytes.size > 2_000_000) throw ApiError("响应过大")
+            if (bytes.size > 2_000_000) {
+                Diag.warn("AI", "$method $host response too large bytes=${bytes.size} elapsed=${elapsed()}ms")
+                throw ApiError("响应过大")
+            }
             val text = String(bytes, Charsets.UTF_8)
             if (code !in 200..299) {
                 val detail = try { JSONObject(text).let { it.optJSONObject("error")?.optString("message") ?: it.optString("message") ?: it.optString("error") } } catch (_: Exception) { text.take(160) }
+                Diag.warn("AI", "$method $host http=$code elapsed=${elapsed()}ms timeout=${timeout}ms detail=${detail.orEmpty().take(120)}")
                 throw ApiError(when (code) {
                     401, 403 -> "API Key 无效或没有权限（HTTP $code）"
                     404 -> "地址或模型不存在（HTTP 404），请检查接口地址是否以 /v1 等版本号结尾"
@@ -114,25 +127,57 @@ object GradingService {
                     else -> "服务返回 HTTP $code"
                 } + if (!detail.isNullOrBlank()) "：" + detail.take(160) else "")
             }
-            return try { JSONObject(text) } catch (_: Exception) { throw ApiError("返回内容不是 JSON，请确认地址是 OpenAI 兼容接口") }
-        } catch (e: java.net.UnknownHostException) { throw ApiError("无法解析域名，请检查网络或地址")
-        } catch (e: java.net.SocketTimeoutException) { throw ApiError("连接超时，请检查网络或稍后重试")
-        } catch (e: java.net.ConnectException) { throw ApiError("无法连接到服务（${e.message?.take(60)}）")
-        } catch (e: javax.net.ssl.SSLException) { throw ApiError("HTTPS 握手失败，设备系统可能太旧：${e.message?.take(60)}")
+            Diag.info("AI", "$method $host http=$code elapsed=${elapsed()}ms bytes=${bytes.size}")
+            return try { JSONObject(text) } catch (_: Exception) {
+                Diag.warn("AI", "$method $host not-json elapsed=${elapsed()}ms")
+                throw ApiError("返回内容不是 JSON，请确认地址是 OpenAI 兼容接口")
+            }
+        } catch (e: ApiError) {
+            // 上面的 HTTP / 非 JSON 分支已经写过日志，这里只补网络层没覆盖的情况
+            throw e
+        } catch (e: java.net.UnknownHostException) {
+            Diag.warn("AI", "$method $host failed=${e.javaClass.simpleName} elapsed=${elapsed()}ms")
+            throw ApiError("无法解析域名，请检查网络或地址")
+        } catch (e: java.net.SocketTimeoutException) {
+            Diag.warn("AI", "$method $host failed=${e.javaClass.simpleName} elapsed=${elapsed()}ms timeout=${timeout}ms")
+            throw ApiError("连接超时，请检查网络或稍后重试")
+        } catch (e: java.net.ConnectException) {
+            Diag.warn("AI", "$method $host failed=${e.javaClass.simpleName} elapsed=${elapsed()}ms detail=${e.message.orEmpty().take(120)}")
+            throw ApiError("无法连接到服务（${e.message?.take(60)}）")
+        } catch (e: javax.net.ssl.SSLException) {
+            Diag.warn("AI", "$method $host failed=${e.javaClass.simpleName} elapsed=${elapsed()}ms detail=${e.message.orEmpty().take(120)}")
+            throw ApiError("HTTPS 握手失败，设备系统可能太旧：${e.message?.take(60)}")
+        } catch (e: java.io.IOException) {
+            // 未分类 IO（Broken pipe / unexpected end of stream 等）：文案保持原样，但必须留下异常类名
+            Diag.warn("AI", "$method $host failed=${e.javaClass.simpleName} elapsed=${elapsed()}ms detail=${e.message.orEmpty().take(160)}")
+            throw e
         } finally { connection.disconnect() }
     }
 
     /** 发送 JSON 模式请求；部分服务商不支持 response_format，会自动去掉后重试 */
     private fun chat(config: JSONObject, messages: JSONArray, maxTokens: Int, timeout: Int = 30000): String {
-        val body = JSONObject().put("model", config.getString("model")).put("messages", messages)
+        val started = System.currentTimeMillis()
+        val model = config.optString("model")
+        val body = JSONObject().put("model", model).put("messages", messages)
             .put("temperature", 0).put("max_tokens", maxTokens).put("response_format", JSONObject().put("type", "json_object"))
         val url = chatUrl(config.getString("endpoint"))
         val key = config.optString("apiKey")
+        var retried = false
         val envelope = try { request(url, key, body, timeout) } catch (e: ApiError) {
-            if (e.message?.contains("HTTP 400") == true || e.message?.contains("HTTP 422") == true) request(url, key, body.apply { remove("response_format") }, timeout) else throw e
+            if (e.message?.contains("HTTP 400") == true || e.message?.contains("HTTP 422") == true) {
+                retried = true
+                Diag.info("AI", "chat ${hostOf(url)} retry without response_format model=$model")
+                request(url, key, body.apply { remove("response_format") }, timeout)
+            } else throw e
         }
-        return envelope.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")?.optString("content")?.trim()
-            ?: throw ApiError("返回格式不是 chat/completions")
+        val content = envelope.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")?.optString("content")?.trim()
+        if (content == null) {
+            Diag.warn("AI", "chat ${hostOf(url)} bad-envelope model=$model elapsed=${System.currentTimeMillis() - started}ms")
+            throw ApiError("返回格式不是 chat/completions")
+        }
+        // 成功路径只记模型与耗时：不记题目 / 答案明文
+        Diag.info("AI", "chat ok model=$model elapsed=${System.currentTimeMillis() - started}ms chars=${content.length} retried=$retried")
+        return content
     }
 
     /** 从模型回复里取出 JSON（兼容 ```json 代码块、前后带说明文字的情况） */
@@ -151,16 +196,20 @@ object GradingService {
                 .put(JSONObject().put("role", "system").put("content", "只返回 JSON：{\"score\":数字,\"feedback\":\"中文\"}"))
                 .put(JSONObject().put("role", "user").put("content", "题目：1+1=？ 参考答案：2。学生答案：2。请评分。"))
             val reply = extractJson(chat(config, messages, 200))
+            Diag.info("AI", "grading/test ok host=${hostOf(chatUrl(config.optString("endpoint")))} model=${config.optString("model")} elapsed=${System.currentTimeMillis() - started}ms")
             JSONObject().put("ok", true).put("ms", System.currentTimeMillis() - started)
                 .put("message", "连接成功，模型可以按要求批改（示例得分 ${reply.opt("score")}）")
         } catch (e: Exception) {
+            Diag.warn("AI", "grading/test failed=${e.javaClass.simpleName} elapsed=${System.currentTimeMillis() - started}ms detail=${(e.message ?: "").take(160)}")
             JSONObject().put("ok", false).put("ms", System.currentTimeMillis() - started).put("message", e.message ?: "测试失败")
         }
     }
 
     fun models(store: LocalStore, input: JSONObject): JSONObject = try {
+        val started = System.currentTimeMillis()
         val config = draft(store, input)
-        val data = request(modelsUrl(config.getString("endpoint")), config.optString("apiKey"), null, 15000)
+        val url = modelsUrl(config.getString("endpoint"))
+        val data = request(url, config.optString("apiKey"), null, 15000)
         val items = data.optJSONArray("data") ?: data.optJSONArray("models") ?: JSONArray()
         val ids = JSONArray()
         for (i in 0 until minOf(items.length(), 500)) {
@@ -168,8 +217,10 @@ object GradingService {
             val id = if (item is JSONObject) item.optString("id").ifEmpty { item.optString("name") } else item?.toString().orEmpty()
             if (id.isNotEmpty()) ids.put(id)
         }
+        Diag.info("AI", "grading/models ok host=${hostOf(url)} count=${ids.length()} elapsed=${System.currentTimeMillis() - started}ms")
         JSONObject().put("ok", true).put("items", ids)
     } catch (e: Exception) {
+        Diag.warn("AI", "grading/models failed=${e.javaClass.simpleName} detail=${(e.message ?: "").take(160)}")
         JSONObject().put("ok", false).put("items", JSONArray()).put("message", e.message ?: "获取失败，可以直接手动填写模型名称")
     }
 
@@ -200,7 +251,11 @@ type 只能是：single（单选，答案用 k 表示正确选项下标）、mul
             .put(JSONObject().put("role", "system").put("content", system))
             .put(JSONObject().put("role", "user").put("content", "请出 $count 道题，范围：$topic。题型：${asked.joinToString("、") { labels[it] ?: it }}。难度：${request.optString("difficulty")}。" +
                 (if (extra.isNotEmpty()) "额外要求：$extra。" else "") + (if (!withTip) "不需要写解析。" else "每题附一句解析。") + "只返回 JSON。"))
-        val reply = extractJson(chat(config, messages, 5000, 60000))
+        val started = System.currentTimeMillis()
+        val reply = try { extractJson(chat(config, messages, 5000, 60000)) } catch (e: Exception) {
+            Diag.warn("AI", "questions/generate failed=${e.javaClass.simpleName} count=$count elapsed=${System.currentTimeMillis() - started}ms detail=${(e.message ?: "").take(160)}")
+            throw e
+        }
         val raw = reply.optJSONArray("items") ?: throw IllegalArgumentException("模型没有返回题目列表，请重试")
         val existing = HashSet<String>()
         val bank = store.questions(null, null, 5000)
@@ -252,7 +307,11 @@ type 只能是：single（单选，答案用 k 表示正确选项下标）、mul
             }
             items.put(next)
         }
-        if (items.length() == 0) throw IllegalArgumentException(if (duplicate > 0) "生成的题目都和题库里已有的重复，请换个范围或关闭跳过重复" else "模型返回的题目格式不完整，请重试")
+        if (items.length() == 0) {
+            Diag.warn("AI", "questions/generate empty count=$count raw=${raw.length()} duplicate=$duplicate elapsed=${System.currentTimeMillis() - started}ms")
+            throw IllegalArgumentException(if (duplicate > 0) "生成的题目都和题库里已有的重复，请换个范围或关闭跳过重复" else "模型返回的题目格式不完整，请重试")
+        }
+        Diag.info("AI", "questions/generate ok count=$count items=${items.length()} duplicate=$duplicate model=${config.optString("model")} elapsed=${System.currentTimeMillis() - started}ms")
         return JSONObject().put("items", items).put("duplicates", duplicate)
     }
 
@@ -284,6 +343,7 @@ type 只能是：single（单选，答案用 k 表示正确选项下标）、mul
                 val grade = extractJson(chat(config, messages, 1500))
                 engine.grade(id, grade.getDouble("score").coerceIn(0.0, 100.0), grade.optString("feedback"), "ai")
             } catch (e: Exception) {
+                Diag.error("AI", "grading review=$id failed", e)
                 val review = store.review(id)
                 if (review != null && review.optString("state") == "pending") {
                     review.put("feedback", "AI 暂未完成批改（" + (e.message ?: "未知错误").take(120) + "），答案已保留，可重试或由家长批改")
