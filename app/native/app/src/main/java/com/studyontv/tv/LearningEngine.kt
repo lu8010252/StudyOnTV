@@ -750,10 +750,8 @@ class LearningEngine(private val store: LocalStore) {
                     round.put("earnedMs", round.getLong("earnedMs") + (minutes * 60000).toLong())
                 }
             }
-            val repetitions = store.recordProgress(question.getString("id"), quality ?: if (correct) 4 else 1)
+            store.recordProgress(question.getString("id"), quality ?: if (correct) 4 else 1)
             store.answered(question.getString("id"), correct)
-            // 同一道题连续答对多次：自动淘汰，不再出现
-            Tune.afterAnswer(store, question.getString("id"), correct, repetitions)
             store.logEvent("answer", JSONObject().put("qid", question.getString("id")).put("correct", correct)
                 .put("difficulty", question.optInt("difficulty", 2)).put("extra", wasExtra).put("mode", mode))
             val baseDone = when (mode) {

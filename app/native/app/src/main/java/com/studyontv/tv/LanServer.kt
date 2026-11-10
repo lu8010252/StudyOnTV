@@ -278,7 +278,6 @@ class LanServer(
             path == "/api/points/sync" && method == "POST" -> { PointsSync.syncNow(store); return json(out, 200, PointsSync.summary(store)) }
             path == "/api/tune" && method == "GET" -> return json(out, 200, Tune.summary(store))
             path == "/api/tune/settings" && method == "PUT" -> return json(out, 200, Tune.save(store, JSONObject(body)))
-            path == "/api/tune/restore" && method == "POST" -> { store.restoreRetired(); return json(out, 200, Tune.summary(store)) }
             path == "/api/grading" && method == "GET" -> return json(out, 200, GradingService.settings(store).put("providers", GradingService.providers()))
             path == "/api/grading/test" && method == "POST" -> return json(out, 200, GradingService.test(store, JSONObject(body.ifEmpty { "{}" })))
             path == "/api/grading/models" && method == "POST" -> return json(out, 200, GradingService.models(store, JSONObject(body.ifEmpty { "{}" })))

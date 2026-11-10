@@ -55,18 +55,10 @@ class GateService : Service() {
     }
     private var anchor: View? = null
     private lateinit var overlay: GateOverlay
-    private var ticks = 0
     private val countdown by lazy { CountdownOverlay(this) }
     private val tick = object : Runnable {
         override fun run() {
             try { checkForeground() } catch (e: Exception) { android.util.Log.e("StudyOnTV", "Screen time check failed", e) }
-            // 每 5 秒落一次计时心跳：电视内存小，进程随时会被系统杀掉，重启后靠它算漏掉的时长
-            if (++ticks >= 5) {
-                ticks = 0
-                Prefs.setHeartbeat(this@GateService, System.currentTimeMillis(), wasUsing)
-                // 顺带自检无障碍：断了就写回去（内部有 20 秒节流，没授权时直接跳过）
-                try { AccessibilityHeal.ensure(this@GateService) } catch (_: Exception) { }
-            }
             handler.postDelayed(this, 1000)
         }
     }
@@ -517,8 +509,6 @@ class GateService : Service() {
     override fun onCreate() {
         super.onCreate()
         DeviceRuntime.ensure(this)
-        // 第一件事就把自唤醒闹钟续上：后面任何一步出错也不能断链
-        Revive.rearm(this)
         UninstallGuard.restoreOwnerPolicy(this)
         overlay = GateOverlay(this, GateOverlay.applicationWindowType())
         instance = this
@@ -532,10 +522,6 @@ class GateService : Service() {
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm).setContentIntent(pi).setOngoing(true).build()
         if (Build.VERSION.SDK_INT >= 34) startForeground(1001, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         else startForeground(1001, notification)
-        // 被杀期间秒表停了，先按 UsageStats 事件补记漏掉的时长（后台线程，别卡住启动）
-        Thread {
-            try { UsageBackfill.run(this) } catch (e: Exception) { android.util.Log.e("StudyOnTV", "UsageBackfill failed", e) }
-        }.apply { isDaemon = true; name = "usage-backfill" }.start()
         MediaPause.recover(this)
         checkOverlayPermission()
         checkAccessibilityLost()   // 进程被杀后重启，检查无障碍是否被系统清除
@@ -550,9 +536,8 @@ class GateService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
     override fun onBind(intent: Intent?): IBinder? = null
 
-    /** 被“从最近任务里划掉”时：把自唤醒闹钟续上，手机上 2 秒后再拉起服务 */
+    /** 被“从最近任务里划掉”时：手机上 2 秒后再拉起服务 */
     override fun onTaskRemoved(rootIntent: Intent?) {
-        Revive.rearm(this)
         scheduleRestart(this, 2000)
         super.onTaskRemoved(rootIntent)
     }
@@ -565,9 +550,6 @@ class GateService : Service() {
         overlay.destroy(); WatchAccessibilityService.hideGate(); countdown.destroy(); updateAnchor(false)
         instance = null
         Prefs.setServiceRunning(this, false)
-        // 正常停止前把心跳落准，下次启动补记不会多算
-        Prefs.setHeartbeat(this, System.currentTimeMillis(), wasUsing)
-        Revive.rearm(this)
         Diag.info("Service", "GateService destroyed")
         super.onDestroy()
     }

@@ -1,5 +1,5 @@
-/* 抽题与题库面板：右下角「🎛 管控」按钮 + 弹层。管理令牌与积分、AI 出题面板共用（sessionStorage）。
- * ① 暂停管控（大人要看电视）② 抽题最低星级 ③ 答对多次自动淘汰。 */
+/* 抽题偏好面板：右下角「🎛 管控」按钮 + 弹层。管理令牌与积分面板共用（sessionStorage）。
+ * 抽题最低星级。（暂停管控、自动淘汰已改用上游的功能） */
 (function () {
   'use strict';
   var TK = 'stv_points_token';
@@ -78,21 +78,13 @@
       el('option', { value: '4', text: '4 星及以上' })
     ]);
     star.value = String(d.minDifficulty || 2);
-    var retire = el('input', { type: 'checkbox' }); retire.checked = !!d.autoRetire;
-    var times = el('input', { type: 'number', min: '2', max: '20', style: INP, value: String(d.retireTimes || 3) });
 
     var save = function () {
       msg.style.color = '#6d776f'; msg.textContent = '保存中…';
-      api('PUT', '/api/tune/settings', { minDifficulty: +star.value, autoRetire: retire.checked, retireTimes: +times.value })
+      api('PUT', '/api/tune/settings', { minDifficulty: +star.value })
         .then(function (j) { data = j; toast('已保存'); view(); })
         .catch(function (e) { msg.style.color = '#c0392b'; msg.textContent = e.message; });
     };
-    var restore = function () {
-      if (!confirm('把已淘汰的 ' + d.retired + ' 道题全部放回题库，并当作新题重新做？')) return;
-      api('POST', '/api/tune/restore').then(function (j) { data = j; toast('已放回题库'); view(); })
-        .catch(function (e) { msg.textContent = e.message; });
-    };
-
     stopTick();
     frame('抽题与题库', [
       el('div', { style: SEC }, [
@@ -100,22 +92,15 @@
         el('div', { text: '最低星级：先从这个星级以上的题里抽（题库里没有时会自动放宽，不会没题做）。没做过的题优先，做过的优先出最久没做的，本轮不会出重复题。', style: 'font-size:12px;color:#6d776f;margin:4px 0 8px' }),
         star
       ]),
-      el('div', { style: SEC }, [
-        el('b', { text: '🧹 答对多次自动淘汰' }),
-        el('label', { style: 'display:block;margin:6px 0' }, [retire, ' 同一道题连续答对达到下面的次数后，自动从题库撤下']),
-        el('div', { text: '连续答对几次（2–20，默认 3；答错会重新计数）', style: 'font-size:12px' }), times,
-        el('div', { text: '已淘汰 ' + d.retired + ' 题（保留记录，AI 出题仍会避开它们；每个科目至少保留 10 题，题库做空时会自动放回）。', style: 'font-size:12px;color:#6d776f;margin-bottom:8px' }),
-        el('button', { text: '把已淘汰的题放回题库', style: BTN2 + (d.retired > 0 ? '' : ';opacity:.5'), onclick: d.retired > 0 ? restore : function () {} })
-      ]),
       msg,
-      el('div', {}, [el('button', { text: '保存抽题与淘汰设置', style: BTN, onclick: save })]),
+      el('div', {}, [el('button', { text: '保存抽题设置', style: BTN, onclick: save })]),
       el('div', { text: '版本 v' + (d.version || ''), style: 'margin-top:6px;font-size:12px;color:#9aa0a6' })
     ]);
   }
 
   function mount() {
     if (document.getElementById('stv-tune-fab')) return;
-    document.body.appendChild(el('button', { id: 'stv-tune-fab', text: '🎛 管控', title: '暂停管控 / 抽题与淘汰',
+    document.body.appendChild(el('button', { id: 'stv-tune-fab', text: '🎛 管控', title: '抽题偏好',
       style: 'position:fixed;right:14px;bottom:112px;z-index:9999;padding:10px 16px;border:0;border-radius:24px;background:#b5703a;color:#fff;font-size:14px;box-shadow:0 3px 12px rgba(0,0,0,.25);cursor:pointer', onclick: open }));
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount); else mount();

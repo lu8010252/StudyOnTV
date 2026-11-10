@@ -28,7 +28,5 @@ class BootReceiver : BroadcastReceiver() {
             if (!Prefs.onboarded(context)) return      // 未完成引导，不拉起
             GateService.ensureRunning(context, "revive")
         }
-        // 开机后（无论是否已初始化）都排一次自唤醒闹钟，之后由服务自己滚续
-        if (Prefs.onboarded(context)) Revive.rearm(context)
     }
 }

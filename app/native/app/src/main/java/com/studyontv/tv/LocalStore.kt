@@ -9,7 +9,7 @@ import org.json.JSONObject
 import java.util.Calendar
 import java.util.UUID
 
-class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLiteOpenHelper(context, databaseName, null, 7) {
+class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLiteOpenHelper(context, databaseName, null, 8) {
     companion object {
         val DEFAULT_PRAISE = listOf("太棒了！", "答对啦！", "完全正确！", "真厉害！", "好样的，继续保持！", "漂亮！你越来越熟练了")
         val DEFAULT_ENCOURAGE = listOf("没关系，记住正确答案就好", "差一点点，下一题加油！", "错误也是学习的一部分", "别灰心，再接再厉！")
@@ -33,6 +33,8 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         if (oldVersion < 5) createPoints(db)
         if (oldVersion < 6) compactUsage(db)
         if (oldVersion < 7) createQuestionStats(db)
+        // 自动淘汰改用上游的“掌握后暂停”，之前被我们淘汰（enabled=2）的题放回题库
+        if (oldVersion < 8) db.execSQL("UPDATE questions SET enabled=1 WHERE enabled=2")
     }
 
     /**
@@ -466,7 +468,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
                     .put("level", c.getString(c.getColumnIndexOrThrow("level")) ?: "")
                     // 必须回传 enabled：管理端靠它区分「启用 / 已暂停」，
                     // 否则暂停的题在页面上永远看不到，用户会以为题目丢了。
-                    .put("enabled", c.getInt(c.getColumnIndexOrThrow("enabled")) == 1)
+                    .put("enabled", c.getInt(c.getColumnIndexOrThrow("enabled")) != 0)
                     .put("stats", JSONObject().put("presented", c.getInt(c.getColumnIndexOrThrow("presented")))
                         .put("answered", c.getInt(c.getColumnIndexOrThrow("answered_count")))
                         .put("correct", c.getInt(c.getColumnIndexOrThrow("correct_count"))))
@@ -535,33 +537,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         query(skip, star)?.let { return it }
         if (star > 1) query(skip, 1)?.let { return it }
         query(lastOnly, 1)?.let { return it }
-        if (restoreRetired() > 0) return query(lastOnly, 1)
         return query(emptyList(), 1)
-    }
-
-    // ---- 自动淘汰：enabled=2 表示“答对多次，已撤下”，题目记录还在，AI 出题去重仍会参考它 ----
-    fun retireQuestion(id: String, keepAtLeast: Int): Boolean {
-        val stmt = writableDatabase.compileStatement(
-            "UPDATE questions SET enabled=2 WHERE id=? AND enabled=1 AND " +
-                "(SELECT COUNT(*) FROM questions q2 WHERE q2.enabled=1 AND q2.subject=questions.subject) > ?"
-        )
-        try {
-            stmt.bindString(1, id)
-            stmt.bindLong(2, keepAtLeast.toLong())
-            return stmt.executeUpdateDelete() > 0
-        } finally { stmt.close() }
-    }
-
-    fun countRetired(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM questions WHERE enabled=2", null).use {
-        if (it.moveToFirst()) it.getInt(0) else 0
-    }
-
-    /** 把淘汰的题全部放回题库，并清掉它们的答题进度，重新当作新题。 */
-    fun restoreRetired(): Int {
-        val db = writableDatabase
-        db.execSQL("DELETE FROM question_progress WHERE qid IN (SELECT id FROM questions WHERE enabled=2)")
-        val stmt = db.compileStatement("UPDATE questions SET enabled=1 WHERE enabled=2")
-        try { return stmt.executeUpdateDelete() } finally { stmt.close() }
     }
 
     /** 包含已淘汰的题；用来判断是否需要导入内置题库（淘汰完不能再重新导入一遍）。 */
