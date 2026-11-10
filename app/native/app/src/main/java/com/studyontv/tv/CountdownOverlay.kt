@@ -10,9 +10,12 @@ import android.view.WindowManager
 import android.widget.TextView
 
 /**
- * 看电视期间右上角显示的剩余时间角标：只显示分钟，最后 1 分钟闪烁提醒。
- * 纯展示（FLAG_NOT_FOCUSABLE | FLAG_NOT_TOUCHABLE，不吃遥控器按键、不挡触摸），
- * 由 GateService 的每秒 tick 驱动；答题页自身不显示（它有自己的顶部胶囊）。
+ * Remaining-time badge shown in the top-right corner while the child is watching video.
+ * Minutes only; blinks during the final minute.
+ *
+ * Display only: FLAG_NOT_FOCUSABLE | FLAG_NOT_TOUCHABLE, so it never consumes remote-control
+ * keys or touches. Driven by GateService's one-second tick. Not used on the quiz screen, which
+ * has its own top pill.
  */
 class CountdownOverlay(private val context: Context) {
     private val manager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -20,6 +23,7 @@ class CountdownOverlay(private val context: Context) {
     private var attached = false
     private var blinkOn = true
     private var lastUrgent: Boolean? = null
+    private var lastText: String? = null
     var lastError: String = ""
         private set
 
@@ -28,15 +32,17 @@ class CountdownOverlay(private val context: Context) {
     private fun chip(): TextView = view ?: TextView(context).apply {
         textSize = 15f
         setPadding(dp(14), dp(6), dp(14), dp(6))
-        // 部分电视桌面/播放器底色很亮，加一层阴影保证任何画面下都看得清
+        // Some launchers and players have a very bright background; a shadow keeps the text
+        // readable on any frame.
         setShadowLayer(4f, 0f, 1f, Color.argb(200, 0, 0, 0))
         view = this
     }
 
     private fun paint(urgent: Boolean) {
         val chip = view ?: return
-        // lastUrgent 用 null 表示“还没画过”：否则首次调用（urgent=false）会直接 return，
-        // 文字颜色和背板永远不生效，角标会变成默认灰字、无背板，在暗色画面上看不清。
+        // null means "never painted yet". Without that, the first call (urgent = false) would
+        // return early and neither the text color nor the background would ever be applied,
+        // leaving a default grey label with no backdrop that is unreadable on dark footage.
         if (lastUrgent == urgent) return
         lastUrgent = urgent
         chip.setTextColor(if (urgent) Color.rgb(255, 92, 92) else Color.WHITE)
@@ -46,12 +52,15 @@ class CountdownOverlay(private val context: Context) {
         }
     }
 
-    /** seconds：剩余总秒数（答题余额 + 每日免费时长余额）。<=0 时自动隐藏。 */
+    /** [seconds]: total remaining seconds (quiz credit + daily free quota). Hidden when <= 0. */
     fun update(seconds: Long) {
         if (seconds <= 0) { hide(); return }
         val urgent = seconds <= 60
         val chip = chip()
-        chip.text = "剩余 ${(seconds + 59) / 60} 分钟"
+        // Skip setText when the minute value has not changed: re-assigning the same text every
+        // second still triggers a layout pass, which shows up as visible jitter on low-end TVs.
+        val label = "剩余 ${(seconds + 59) / 60} 分钟"
+        if (label != lastText) { chip.text = label; lastText = label }
         paint(urgent)
         if (!attached) {
             val params = WindowManager.LayoutParams(
@@ -83,5 +92,7 @@ class CountdownOverlay(private val context: Context) {
     fun destroy() {
         hide()
         view = null
+        lastText = null
+        lastUrgent = null
     }
 }

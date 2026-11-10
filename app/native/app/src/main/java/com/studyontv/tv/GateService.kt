@@ -79,7 +79,7 @@ class GateService : Service() {
             countdown.hide()
             return
         }
-        if (now < settingsUntil) { wasUsing = false; hideAll(); if (MediaPause.active) releaseMuteWithoutGate("settings"); return }
+        if (now < settingsUntil) { wasUsing = false; hideAll(); countdown.hide(); if (MediaPause.active) releaseMuteWithoutGate("settings"); return }
         val power = getSystemService(POWER_SERVICE) as PowerManager
         val locked = (getSystemService(KEYGUARD_SERVICE) as KeyguardManager).isKeyguardLocked
         val awake = power.isInteractive && !locked
@@ -129,7 +129,7 @@ class GateService : Service() {
         // #110：静音必须由「真的弹出来了」背书——弹窗失败或被收起后立刻解除静音，
         // 否则出现「视频被静音了，却没人来答题」。
         if (MediaPause.active && !muteBackedByVisibleGate()) releaseMuteWithoutGate("foreground")
-        updateCountdown(status, active, free, canOverlay, awake, pkg)
+        updateCountdown(status, active, free, canOverlay, awake, monitoring, ownForeground, settingsBlocked, pkg)
     }
 
     /**
@@ -287,13 +287,16 @@ class GateService : Service() {
     }
 
     /** 看电视期间在画面右上角显示剩余分钟数；不在看电视 / 拦截中 / 自由时段 / 家长解锁时隐藏 */
-    private fun updateCountdown(status: org.json.JSONObject, active: Boolean, free: Boolean, canOverlay: Boolean, awake: Boolean, pkg: String?) {
+    private fun updateCountdown(status: org.json.JSONObject, active: Boolean, free: Boolean, canOverlay: Boolean,
+                                awake: Boolean, monitoring: Boolean, ownForeground: Boolean, settingsBlocked: Boolean, pkg: String?) {
         val now = SystemClock.elapsedRealtime()
         if (active) { countdownActiveAt = now; countdownPackage = pkg }
         // 同一播放器短暂缓冲时保留角标，切换应用、关屏或进入管控页仍立即隐藏。
         val recentlyActive = countdownActiveAt >= 0 && now - countdownActiveAt < 12_000 && pkg == countdownPackage
         val seconds = status.optLong("remainingSeconds") + status.optLong("freeQuotaSeconds")
-        val show = DeviceRuntime.store.config().optBoolean("showCountdown", true) && canOverlay && awake && (active || recentlyActive) && !free && status.optString("reason").isEmpty() &&
+        val show = DeviceRuntime.store.config().optBoolean("showCountdown", true) && canOverlay && awake &&
+            monitoring && !ownForeground && !settingsBlocked && (pkg == null || !exempt(pkg, false)) &&
+            (active || recentlyActive) && !free && status.optString("reason").isEmpty() &&
             status.optJSONObject("override") == null && seconds > 0 && !hasGate()
         if (show) countdown.update(seconds) else {
             countdown.hide()
@@ -319,7 +322,10 @@ class GateService : Service() {
         }
     }
 
-    private fun hideAll() { overlay.hide(); WatchAccessibilityService.hideGate(); countdown.hide() }
+    // Only dismisses the gate (overlay window / accessibility layer). The countdown badge is
+    // driven separately by updateCountdown() every tick; hiding it here as well would remove
+    // and re-add its window on every tick, which is what caused the per-second flicker.
+    private fun hideAll() { overlay.hide(); WatchAccessibilityService.hideGate() }
 
     private val mediaTick = object : Runnable {
         override fun run() {
