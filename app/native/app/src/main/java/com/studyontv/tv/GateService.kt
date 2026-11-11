@@ -29,6 +29,8 @@ class GateService : Service() {
     private var lastLaunch = 0L
     private var lastFallbackNotify = 0L
     private var lastFallbackActivityAt = 0L
+    /** 上一次主动改用全屏学习页的时间（#122），避免 1.8 秒防抖内重复 startActivity */
+    private var lastFullscreenAt = 0L
     private var gateFailures = 0
     private var lastGateError = ""
     private var lastGateErrorAt = -1L
@@ -192,6 +194,24 @@ class GateService : Service() {
             lastGateErrorAt = -1L
             return
         }
+        // #122 海信 VIDAA：普通悬浮窗能 addView、能分配 buffer，却被硬件视频层压住，
+        // WindowManager / SurfaceFlinger / View.isShown 全都看不出来，自检永远是「可见」。
+        // 这种情况不再相信探针，改走全屏学习页。两种触发：
+        //   1. 家长勾选「强制使用全屏学习页」；
+        //   2. 悬浮窗权限只靠 addView 探针成立（固件 AppOps 不忠实），且暂停时确实有音频在播
+        //      —— 也就是「画面上正放着视频」，正是会被压住的那个场景。
+        val forcedFullscreen = DeviceRuntime.store.config().optBoolean("forceFullscreenGate", false)
+        val preferFullscreen = GatePresentation.preferFullscreen(
+            forcedFullscreen, OverlayAccess.probeOnly(this), MediaPause.lastPauseHadAudio)
+        if (preferFullscreen && (protecting || settingsBlocked) && gateReason.isNotEmpty() &&
+            now - lastGate > GatePresentation.VISIBLE_RETRY_MS && now - lastFullscreenAt > 5_000) {
+            if (openFullscreenGate(gateReason, forcedFullscreen)) {
+                lastFullscreenAt = now
+                lastGate = now
+                if (overlay.isShowing) overlay.hide()
+                return
+            }
+        }
         if (!(protecting || settingsBlocked) || gateReason.isEmpty() || hasGate()) return
         val delay = if (gateFailures > 0) GatePresentation.failureRetryDelayMs(gateFailures) else GatePresentation.VISIBLE_RETRY_MS
         if (now - lastGate <= delay) return
@@ -281,6 +301,29 @@ class GateService : Service() {
                 .setSmallIcon(android.R.drawable.ic_lock_idle_alarm).setContentIntent(pi)
                 .setAutoCancel(true).setOnlyAlertOnce(true).build())
         } catch (e: Exception) { Diag.error("Gate", "cannot notify missing capability", e) }
+    }
+
+    /**
+     * 主动改用全屏学习页展示 Gate（#122 海信 VIDAA）。
+     *
+     * 与 [fallbackToActivity] 的区别：这是「悬浮窗存在但看不见」的场景，不是失败兜底，
+     * 所以不增加失败计数、不解除静音、也不发「没能弹出」的通知——学习页起来后
+     * [gateShown] 会通过 [Foreground.learningActivity] 认定已展示。
+     *
+     * @return false 表示连 Activity 都拉不起来，调用方应继续走原来的悬浮窗路径。
+     */
+    private fun openFullscreenGate(gateReason: String, forced: Boolean): Boolean = try {
+        lastFallbackActivityAt = SystemClock.elapsedRealtime()
+        startActivity(Intent(this, GateActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            .putExtra("reason", gateReason))
+        Diag.info("Gate", if (forced) "家长已开启强制全屏学习页，跳过悬浮窗 reason=$gateReason"
+        else "悬浮窗可能被视频层压住（探针权限+正在播放视频），改用全屏学习页 reason=$gateReason")
+        true
+    } catch (e: Exception) {
+        lastGateError = "fullscreen startActivity=${e.javaClass.simpleName}: ${e.message ?: ""}"
+        Diag.warn("Gate", "cannot open fullscreen gate: $lastGateError")
+        false
     }
 
     /** 悬浮层 / 无障碍覆盖层都失败时的最后手段：全屏学习页 + 可点击通知 */
@@ -680,6 +723,12 @@ class GateService : Service() {
                 .put("overlayProbeError", OverlayAccess.lastProbeError)
                 .put("overlayProbeErrorKind", OverlayAccess.lastProbeErrorKind)
                 .put("overlayProbeAgeSeconds", if (OverlayAccess.lastProbeAt < 0) -1 else (now - OverlayAccess.lastProbeAt) / 1000)
+                // === #122 悬浮窗「存在但被视频层压住」的诊断 ===
+                .put("overlayProbeOnly", OverlayAccess.probeOnly(context))
+                // 回归测试里 DeviceRuntime 可能还没初始化，这里不能抛
+                .put("forceFullscreenGate", try { DeviceRuntime.store.config().optBoolean("forceFullscreenGate", false) } catch (_: Exception) { false })
+                .put("lastPauseHadAudio", MediaPause.lastPauseHadAudio)
+                .put("fullscreenGateAgeSeconds", if (service == null || service.lastFullscreenAt <= 0) -1 else (now - service.lastFullscreenAt) / 1000)
                 .put("foregroundPackage", service?.foregroundPackage ?: "")
                 .put("foregroundIdentified", service?.foregroundPackage != null)
                 .put("ownActivityForeground", service?.ownActivityForeground ?: false)
@@ -755,6 +804,17 @@ object GatePresentation {
         else -> MAX_FAILURE_RETRY_MS
     }
 
+    /**
+     * #122：要不要跳过悬浮窗、直接用全屏学习页。
+     *
+     * 海信 VIDAA 会把普通应用的全屏悬浮窗压在硬件视频层下面：addView 成功、SurfaceFlinger 有 buffer、
+     * `View.isShown` 也是 true，屏幕上却还是视频，任何自检都看不出来。两种情况改走 Activity：
+     * 1. 家长显式开启「强制使用全屏学习页」；
+     * 2. 悬浮窗权限只靠 addView 探针成立（固件 AppOps 不忠实），且暂停时确实有音频在播。
+     */
+    fun preferFullscreen(forced: Boolean, overlayProbeOnly: Boolean, hadAudioAtPause: Boolean): Boolean =
+        forced || (overlayProbeOnly && hadAudioAtPause)
+
     /** 窗口 attach 了不等于可见：宽限期内算「正在弹出」，超出宽限期仍未校验通过就是失败 */
     fun presenting(attached: Boolean, verifiedVisible: Boolean, attachedForMs: Long): Boolean =
         attached && (verifiedVisible || attachedForMs < VISIBILITY_GRACE_MS)
@@ -825,6 +885,15 @@ object OverlayAccess {
     fun invalidate() { probed = false }
 
     fun canDraw(context: Context): Boolean = settingsCanDraw(context) || appOpsAllows(context) || probe(context)
+
+    /**
+     * 权限只靠 addView 探针成立：Settings 与 AppOps 都说没有。
+     *
+     * 海信 VIDAA（#122）就是这种机型：探针能加窗，但普通悬浮窗被硬件视频层压住，
+     * 画面实际仍是视频；这类设备在播放时改走全屏学习页更可靠。
+     */
+    fun probeOnly(context: Context): Boolean =
+        !settingsCanDraw(context) && !appOpsAllows(context) && probe(context)
 
     /** 旧的唯一真值：Settings.canDrawOverlays（厂商不忠实时会一直是 false） */
     @Suppress("DEPRECATION")

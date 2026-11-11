@@ -35,7 +35,8 @@ object GatePresentationRegression {
             check(diag.has(key)) { "#110: 既有诊断字段被删掉了: $key" }
         }
         for (key in listOf("gateExpected", "gateVisible", "overlayAttached", "overlayVisible",
-            "overlayPageReady", "mute", "muteStreamMuted", "muteWithoutGate")) {
+            "overlayPageReady", "mute", "muteStreamMuted", "muteWithoutGate",
+            "overlayProbeOnly", "forceFullscreenGate", "lastPauseHadAudio")) {
             check(diag.has(key)) { "#110: 诊断缺少字段 $key（$diag）" }
             check(diag.get(key) is Boolean) { "#110: 诊断字段 $key 必须是布尔，实际 ${diag.get(key)?.javaClass}" }
         }
@@ -73,6 +74,11 @@ object GatePresentationRegression {
         check(!GatePresentation.inconsistentMute(muteActive = true, gateVisible = true, inputActive = false, free = false))
         // 答题输入页属于答题流程，不算不一致
         check(!GatePresentation.inconsistentMute(muteActive = true, gateVisible = false, inputActive = true, free = false))
+        // #122 海信 VIDAA：悬浮窗被硬件视频层压住，家长强制开关或「探针权限 + 正在播视频」时改走全屏学习页
+        check(GatePresentation.preferFullscreen(forced = true, overlayProbeOnly = false, hadAudioAtPause = false))
+        check(GatePresentation.preferFullscreen(forced = false, overlayProbeOnly = true, hadAudioAtPause = true))
+        check(!GatePresentation.preferFullscreen(forced = false, overlayProbeOnly = true, hadAudioAtPause = false))
+        check(!GatePresentation.preferFullscreen(forced = false, overlayProbeOnly = false, hadAudioAtPause = true))
         // 自由时段本来就不该静音（GateService 每个 tick 都会 releaseAll）：真静音了就是异常，
         // 必须能被诊断看出来（与下面 muteAllowed(free = true) == false 保持同一口径）。
         check(GatePresentation.inconsistentMute(muteActive = true, gateVisible = false, inputActive = false, free = true))

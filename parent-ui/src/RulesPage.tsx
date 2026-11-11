@@ -276,6 +276,10 @@ export default function RulesPage({state,sessionId}:{state:any,sessionId:number}
        {toggle('blockSettingsDuringControl')}
       </Field>
       <Field orientation="responsive" className="py-4">
+       <FieldContent><FieldTitle>强制使用全屏学习页</FieldTitle><FieldDescription className="text-xs leading-5">到点后不再用悬浮窗，直接在独立页面答题。适合海信 VIDAA 等悬浮窗被视频层压住的电视：系统显示悬浮窗正常，画面上却仍是视频。</FieldDescription></FieldContent>
+       {toggle('forceFullscreenGate')}
+      </Field>
+      <Field orientation="responsive" className="py-4">
        <FieldContent><FieldTitle>{c.scheduleMode==='control'?'全天都需要答题':'全天可用'}</FieldTitle></FieldContent>
        {toggle('allDay')}
       </Field>

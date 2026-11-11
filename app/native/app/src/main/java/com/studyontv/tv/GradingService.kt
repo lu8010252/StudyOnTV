@@ -101,15 +101,20 @@ object GradingService {
         val method = if (body == null) "GET" else "POST"
         fun elapsed() = System.currentTimeMillis() - started
         val connection = URL(url).openConnection() as HttpURLConnection
+        // 区分“连不上”和“连上了但模型不回话”：前者是地址/网络问题，后者多半是模型慢或限流
+        var responded = false
         try {
             connection.requestMethod = method
-            connection.connectTimeout = 10000; connection.readTimeout = timeout
+            // 老电视的 DNS 查询 + TLS 握手经常超过 10 秒（#106：TCL Android 11 连公网 API），连接阶段放宽到 20 秒；
+            // 读超时仍由调用方控制，避免模型慢时一直卡住
+            connection.connectTimeout = 20000; connection.readTimeout = timeout
             connection.instanceFollowRedirects = false
             connection.setRequestProperty("Content-Type", "application/json")
             connection.setRequestProperty("User-Agent", "StudyOnTV")
             if (key.isNotEmpty()) connection.setRequestProperty("Authorization", "Bearer $key")
             if (body != null) { connection.doOutput = true; connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) } }
             val code = connection.responseCode
+            responded = true
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
             val bytes = stream?.use { it.readBytes() } ?: ByteArray(0)
             if (bytes.size > 2_000_000) {
@@ -139,11 +144,15 @@ object GradingService {
             Diag.warn("AI", "$method $host failed=${e.javaClass.simpleName} elapsed=${elapsed()}ms")
             throw ApiError("无法解析域名，请检查网络或地址")
         } catch (e: java.net.SocketTimeoutException) {
-            Diag.warn("AI", "$method $host failed=${e.javaClass.simpleName} elapsed=${elapsed()}ms timeout=${timeout}ms")
-            throw ApiError("连接超时，请检查网络或稍后重试")
+            val connectStage = !responded && e.message.orEmpty().contains("connect", ignoreCase = true)
+            Diag.warn("AI", "$method $host failed=${e.javaClass.simpleName} stage=${if (connectStage) "connect" else "read"} elapsed=${elapsed()}ms timeout=${timeout}ms")
+            throw ApiError(if (connectStage)
+                "连接 $host 超时（20 秒），电视可能访问不到这个地址。请确认电视能上网，或用手机热点对比一次"
+            else
+                "已连上 $host，但 ${timeout / 1000} 秒内没有返回内容，模型可能过慢或服务限流")
         } catch (e: java.net.ConnectException) {
             Diag.warn("AI", "$method $host failed=${e.javaClass.simpleName} elapsed=${elapsed()}ms detail=${e.message.orEmpty().take(120)}")
-            throw ApiError("无法连接到服务（${e.message?.take(60)}）")
+            throw ApiError("无法连接 $host（${e.message?.take(60)}）")
         } catch (e: javax.net.ssl.SSLException) {
             Diag.warn("AI", "$method $host failed=${e.javaClass.simpleName} elapsed=${elapsed()}ms detail=${e.message.orEmpty().take(120)}")
             throw ApiError("HTTPS 握手失败，设备系统可能太旧：${e.message?.take(60)}")

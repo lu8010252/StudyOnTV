@@ -30,6 +30,9 @@ object MediaPause {
     /** 最近一次开始静音的时间（elapsedRealtime），用于诊断「静音了多久」 */
     @Volatile var lastPauseAt: Long = 0L
         private set
+    /** 最近一次暂停时是否真的有音频在播：#122 用来判断“画面上是视频”，据此优先走全屏学习页 */
+    @Volatile var lastPauseHadAudio: Boolean = false
+        private set
     @Volatile var lastReleaseAt: Long = 0L
         private set
 
@@ -63,6 +66,7 @@ object MediaPause {
             lastKey = SystemClock.elapsedRealtime()
             lastPauseAt = lastKey
             owners.add(context)
+            lastPauseHadAudio = audio.isMusicActive
             Diag.info("Audio", "pause start volume=$originalVolume muted=$originalMuted canMute=$canMute api=${Build.VERSION.SDK_INT} music=${audio.isMusicActive} owners=${owners.size}")
             if (audio.isMusicActive) { sendPause(audio); attempts = 1 }
             holding = audio.requestAudioFocus(listener, AudioManager.STREAM_MUSIC,
