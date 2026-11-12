@@ -41,7 +41,9 @@ object GatePresentationRegression {
             check(diag.get(key) is Boolean) { "#110: 诊断字段 $key 必须是布尔，实际 ${diag.get(key)?.javaClass}" }
         }
         for (key in listOf("gateFailures", "lastGateErrorAt", "lastGateErrorAgeSeconds",
-            "muteOwners", "muteForSeconds", "muteWithoutGateSeconds")) {
+            "muteOwners", "muteForSeconds", "muteWithoutGateSeconds",
+            // #120 红米电视：被系统清理的次数和无障碍被关掉的次数要能从诊断里数出来
+            "accessibilityLostCount", "uncleanRestarts")) {
             check(diag.has(key)) { "#110: 诊断缺少字段 $key（$diag）" }
             check(diag.get(key) is Number) { "#110: 诊断字段 $key 必须是数字，实际 ${diag.get(key)?.javaClass}" }
         }

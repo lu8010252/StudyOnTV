@@ -53,6 +53,11 @@ object Prefs {
     fun heartbeatCounting(c: Context): Boolean = sp(c).getBoolean("heartbeat_counting", false)
     fun setHeartbeat(c: Context, at: Long, counting: Boolean) =
         sp(c).edit().putLong("heartbeat_at", at).putBoolean("heartbeat_counting", counting).apply()
+    /** 无障碍被系统或用户关掉的累计次数，以及最后一次的时间（#120：红米电视会被系统清理连带关掉） */
+    fun accessibilityLostCount(c: Context): Int = sp(c).getInt("accessibility_lost_count", 0)
+    fun setAccessibilityLostCount(c: Context, v: Int) = sp(c).edit().putInt("accessibility_lost_count", v).apply()
+    fun accessibilityLostAt(c: Context): Long = sp(c).getLong("accessibility_lost_at", 0L)
+    fun setAccessibilityLostAt(c: Context, v: Long) = sp(c).edit().putLong("accessibility_lost_at", v).apply()
 
     /** 通知权限是否已自动询问过；拒绝后不再自动弹，仍可从列表手动再请求。 */
     fun notificationAsked(c: Context): Boolean = sp(c).getBoolean("notification_asked", false)

@@ -26,16 +26,27 @@ class WatchAccessibilityService : AccessibilityService() {
         }
     }
     override fun onInterrupt() = Unit
+
+    /**
+     * 被解绑（用户/系统关掉无障碍、或服务自身出问题被系统摘掉）时先走这里，
+     * 留下一条记录，#120 这类「无障碍自己关闭」才能分清是解绑还是进程被杀（进程被杀不会走到任何回调）。
+     */
+    override fun onUnbind(intent: android.content.Intent?): Boolean {
+        Diag.warn("A11y", "service unbound action=${intent?.action}")
+        return super.onUnbind(intent)
+    }
     override fun onServiceConnected() {
         instance = this
         connected = true
         GateService.note("无障碍服务已连接")
+        Diag.info("A11y", "service connected")
         gate = GateOverlay(this, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY) {
             performGlobalAction(GLOBAL_ACTION_HOME)
         }
         GateService.ensureRunning(this, "accessibility")
     }
     override fun onDestroy() {
+        Diag.info("A11y", "service destroyed connected=$connected")
         gate?.destroy(); gate = null
         instance = null
         connected = false

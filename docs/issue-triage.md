@@ -15,6 +15,14 @@
 - #102：二维码优先使用物理 Wi-Fi / Ethernet 地址，备用扫描排除常见隧道网卡，系统网络 API 失败时继续备用扫描。
 - #106：AI 连接测试、模型列表请求超时从 10 秒增加至 60 秒；AI 请求超时提示与局域网连接超时区分。尚不能据此认定所有自定义服务均已兼容。
 
+## 最新追加（#120）
+
+- #120：红米 A Pro 65（MiTV-ASSU0 / Android 14 / 0.3.23）「回桌面无障碍自己关闭、开机不自启」。日志里没有任何一次 `via=boot`；70 小时内进程被系统杀掉后由 `START_STICKY` 拉起 38 次（11-08 00:19–00:37 的 18 分钟里就有 20 次），无障碍随后被系统关掉 12 次；`autostart.pending=true` 表示本机装上后还没重启过，开机广播是否被拦暂时无法判断。新增 `ProcessHealth`：用 `Prefs.serviceRunning`（服务 `onCreate` 置真、`onDestroy` 置假）当哨兵，新进程启动时标记仍未清除即计一次「被系统清理」，诊断新增 `uncleanRestarts`、`accessibilityLostCount`；`WatchAccessibilityService` 补上 connected / unbound / destroyed 生命周期日志，下次能分清是系统解绑还是进程被杀（被杀的进程不会有任何回调）。厂商清理本身仍需在电视上放行自启动与后台，APK 无法自行解除。
+
+## 最新追加（#122）
+
+- #122：海信 VIDAA 的悬浮窗「存在但看不见」。这台机器的 `Settings.canDrawOverlays()` 与 AppOps 都报不支持，只有 1×1 `addView` 探针成功；全屏悬浮窗加窗成功、SurfaceFlinger 也有 buffer，但被硬件视频层压住，屏幕上仍是视频，`View.isShown` 之类的自检全部正常。新增家长开关「强制使用全屏学习页」，并在「探针权限 + 暂停时确实有音频在播」时自动改走全屏 `GateActivity`；诊断新增 `overlayProbeOnly`、`forceFullscreenGate`、`lastPauseHadAudio`、`fullscreenGateAgeSeconds`，`GatePresentationRegression` 覆盖判定。厂商真机是否同样投影仍需原机确认。
+
 ## 最新追加（#110–#112）
 
 - #110：静音与弹窗改为同源判定。只有确实可见的 Gate（悬浮层 / 无障碍层 / 全屏学习页 / 刚拉起的兜底页）或输入页在前台时才允许持续静音；窗口被系统移除、addView 成功但不可见、弹窗失败时立即解除静音。弹窗失败按 2s→3s→5s→10s 退避重试，失败原因进入诊断和家长通知。已有 `GatePresentationRegression` 覆盖。
@@ -25,6 +33,7 @@
 
 | Issue | 结论与后续 |
 | --- | --- |
+| [#120](https://github.com/chadyi/StudyOnTV/issues/120) 红米电视无障碍/自启 | 已确认进程被系统反复清理并连带关掉无障碍；新增「被系统清理次数 / 无障碍丢失次数」诊断与无障碍生命周期日志。开机广播需要在电视上放行自启动，本机还没有重启后的日志。 |
 | [#112](https://github.com/chadyi/StudyOnTV/issues/112) 自定义时间点 | 已实现精确到分钟的网课时段（自由 / 计入限额 + 独立上限）、大人豁免、跨午夜与家长端编辑器，并有引擎回归；待真实网课时间和海信/JUUI 等固件复测。 |
 | [#111](https://github.com/chadyi/StudyOnTV/issues/111) SyncAdapter 自愈 | 未实现，本版不做。参考补丁未合入；同源分析认为 SyncAdapter 仍受 force-stop/stopped 限制，不能解决强停类问题。当前工作区无通知监听心跳实现。分析见 docs/issue-111-analysis.md。 |
 | [#110](https://github.com/chadyi/StudyOnTV/issues/110) 静音后不弹题 | 已修：静音必须由可见 Gate 或输入页背书；窗口被系统移除/不可见/失败时立即解除静音，弹窗失败退避重试并写诊断。需创维酷开真机复测。 |
