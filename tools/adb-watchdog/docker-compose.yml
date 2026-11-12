@@ -29,7 +29,8 @@ services:
         PKG=com.studyontv.tv
         A11Y="$$PKG/$$PKG.WatchAccessibilityService"
         HOST="$${TV%:*}"; PORT="$${TV#*:}"
-        off_since=0; off_sent=0; adb_bad=0
+        off_since=0; off_sent=0; adb_bad=0; revive_bad=0
+        WD_VER=2.1   # 看门脚本版本：启动日志第一行能看到，用来确认机顶盒上跑的是不是最新的
 
         say() { echo "$$(date '+%F %T') $$*"; }
         notify() {
@@ -38,7 +39,7 @@ services:
         }
         tvsh() { timeout 10 adb -s "$$TV" shell "$$@" 2>/dev/null | tr -d '\r'; }
 
-        say "启动：看管 $$TV，每 $${INTERVAL}s 检查一次"
+        say "启动 v$$WD_VER：看管 $$TV，每 $${INTERVAL}s 检查一次"
         while true; do
           # 投影没开机 / 没联网：只做一次很轻的端口探测，不跑 adb，隔久一点再看
           if ! nc -z -w 2 "$$HOST" "$$PORT" 2>/dev/null; then
@@ -63,13 +64,24 @@ services:
 
           # 进程在不在、前台服务在不在，两个都要看：无障碍服务活着会让进程在，但 GateService 可能已经死了
           alive() { [ -n "$$(tvsh pidof "$$PKG")" ] && tvsh dumpsys activity services "$$PKG" | grep -q "GateService"; }
-          if ! alive; then
+          if alive; then
+            revive_bad=0
+          else
             sleep 15                                   # 先等应用自己的自唤醒（10 秒一次）
-            if ! alive; then
+            if alive; then
+              revive_bad=0                             # 应用自己拉起来了，不用打扰
+            else
               # GateService 不对外开放，shell 直接启动会被拒绝；改给（对 adb 开放的）自唤醒接收器发广播，由它启动服务
-              tvsh am broadcast -n "$$PKG/.ReviveReceiver" -a com.studyontv.tv.REVIVE >/dev/null
+              # -f 32 = 即使应用处于「已停止」状态也投递
+              tvsh am broadcast -f 32 -n "$$PKG/.ReviveReceiver" -a com.studyontv.tv.REVIVE >/dev/null
               sleep 6
-              if alive; then notify "应用服务不在，已由机顶盒拉起"; else notify "应用服务不在，拉起失败（会再试；若一直失败请看 adb 授权）"; fi
+              if alive; then
+                notify "应用服务不在，已由机顶盒拉起"; revive_bad=0
+              else
+                say "仍未恢复：进程=[$$(tvsh pidof "$$PKG")] GateService行数=$$(tvsh dumpsys activity services "$$PKG" | grep -c GateService)"
+                # 连续失败只通知一次，恢复后再重新计
+                if [ "$$revive_bad" != 1 ]; then notify "应用服务不在，拉起失败（会继续重试；若一直失败请看 adb 授权）"; revive_bad=1; fi
+              fi
             fi
           fi
 
