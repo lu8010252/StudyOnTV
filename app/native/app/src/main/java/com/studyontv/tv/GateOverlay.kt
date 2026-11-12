@@ -229,7 +229,7 @@ class GateOverlay(
                 hide()
             }
         }
-        @JavascriptInterface fun readAloud(text: String) = SpeechReader.read(context, text, "zh-CN", ::speechNotice)
+        @JavascriptInterface fun readAloud(text: String) = SpeechReader.read(context, text, "", ::speechNotice)
         @JavascriptInterface fun readInLanguage(text: String, language: String) = SpeechReader.read(context, text, language, ::speechNotice)
         @JavascriptInterface fun stopReading() = SpeechReader.stop()
         @JavascriptInterface fun playAudio(url: String) = SpeechReader.playAudio(context, url, ::speechNotice)

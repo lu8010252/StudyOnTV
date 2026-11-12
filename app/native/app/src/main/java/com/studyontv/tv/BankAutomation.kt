@@ -15,8 +15,15 @@ object BankAutomation {
     private var checkedAt = 0L
     private fun hash(value: String) = MessageDigest.getInstance("SHA-256").digest(value.toByteArray())
         .take(12).joinToString("") { "%02x".format(it.toInt() and 255) }
+    /** AI 补题可选题型（#125：电视上填空题输入麻烦，家长可以只补单选题） */
+    private val QUESTION_TYPES = listOf("single", "multiple", "boolean", "text", "subjective")
+    /** 老版本写死的题型，配置里没有 types 时沿用，避免升级后出题行为突然变化 */
+    private val LEGACY_TYPES = listOf("single", "text")
     fun settings(store: LocalStore): JSONObject = JSONObject(store.get("bank_automation", "{}"))
-        .apply { if (!has("sources")) put("sources", JSONArray()) }
+        .apply {
+            if (!has("sources")) put("sources", JSONArray())
+            if (optJSONArray("types") == null || optJSONArray("types")!!.length() == 0) put("types", JSONArray(LEGACY_TYPES))
+        }
         .put("running", running.get()).put("status", JSONObject(store.get("bank_automation_status", "{}")))
     fun save(store: LocalStore, input: JSONObject): JSONObject {
         val sources = input.optJSONArray("sources") ?: JSONArray()
@@ -40,9 +47,18 @@ object BankAutomation {
         require(minimum in 1..500 && batch in 1..20 && attempts in 1..100 && accuracy in 50..100) { "自动题库参数超出范围" }
         val topic = input.optString("topic").trim()
         require(topic.length <= 2000 && (!input.optBoolean("autoAi") || topic.isNotBlank())) { "自动补题需要填写出题范围" }
+        // #125：题型筛选。前端传了 types 就必须是至少一种有效题型，没传沿用旧的两类
+        val types = input.optJSONArray("types")?.let { array ->
+            (0 until array.length()).map { array.optString(it) }.filter { it in QUESTION_TYPES }.distinct()
+        }
+        if (input.has("types")) require(!types.isNullOrEmpty()) { "请选择至少一种自动补题的题型" }
+        // 老客户端不带 types 时不覆盖已经选好的题型
+        val saved = if (types?.isNotEmpty() == true) types
+            else settings(store).optJSONArray("types")?.let { array -> (0 until array.length()).map { array.optString(it) }.filter { it in QUESTION_TYPES } }.orEmpty()
+                .ifEmpty { LEGACY_TYPES }
         store.set("bank_automation", JSONObject().put("sources", clean).put("autoAi", input.optBoolean("autoAi"))
             .put("minimum", minimum).put("batch", batch).put("masteryAttempts", attempts).put("masteryAccuracy", accuracy)
-            .put("topic", topic).toString())
+            .put("topic", topic).put("types", JSONArray(saved)).toString())
         return settings(store)
     }
     @Synchronized fun tick(store: LocalStore) {
@@ -80,7 +96,8 @@ object BankAutomation {
                     report.put("pausedMastered", mastered.size)
                     if (store.countQuestions() < config.optInt("minimum", 30)) {
                         val result = GradingService.generateQuestions(store, JSONObject().put("topic", config.getString("topic"))
-                            .put("count", config.optInt("batch", 10)).put("types", JSONArray(listOf("single", "text")))
+                            .put("count", config.optInt("batch", 10))
+                            .put("types", config.optJSONArray("types")?.takeIf { it.length() > 0 } ?: JSONArray(LEGACY_TYPES))
                             .put("difficulty", "mixed").put("withTip", true).put("skipDuplicates", true))
                         val items = result.getJSONArray("items")
                         for (i in 0 until items.length()) items.getJSONObject(i).put("bank", "AI补题")

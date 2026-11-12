@@ -205,7 +205,35 @@ class LanServer(
                         .put("roundsDoneToday", store.roundsDoneToday())
                         .put("repetition", store.repetitionStats())
                         .put("learning", DeviceRuntime.learning.status())
+                    // 多孩子（#132）：设备端要知道「现在是谁在学」和有哪些可选档案
+                    .put("children", store.children()).put("activeChild", store.activeChild())
                     .put("speech", JSONObject().put("autoRead", SpeechReader.settings(store).optBoolean("autoRead"))))
+            }
+            path == "/api/children" && method == "GET" -> return json(out, 200,
+                JSONObject().put("items", store.children()).put("active", store.activeChild()))
+            path == "/api/children" && method == "POST" -> {
+                val child = store.createChild(JSONObject(body).getString("name"))
+                return json(out, 200, JSONObject().put("ok", true).put("child", child).put("items", store.children()))
+            }
+            path == "/api/children" && method == "PUT" -> {
+                val input = JSONObject(body)
+                store.renameChild(input.getString("id"), input.getString("name"))
+                return json(out, 200, JSONObject().put("ok", true).put("items", store.children()))
+            }
+            path == "/api/children/switch" && method == "POST" -> {
+                // 切换前先把还没落库的观看时长记到原孩子名下，否则会算到下一个孩子头上
+                DeviceRuntime.learning.flushUsage()
+                store.switchChild(JSONObject(body).optString("id"))
+                GateService.refreshNow()
+                return json(out, 200, JSONObject().put("ok", true).put("items", store.children())
+                    .put("active", store.activeChild()))
+            }
+            path == "/api/children/delete" && method == "POST" -> {
+                DeviceRuntime.learning.flushUsage()
+                store.deleteChild(JSONObject(body).optString("id"))
+                GateService.refreshNow()
+                return json(out, 200, JSONObject().put("ok", true).put("items", store.children())
+                    .put("active", store.activeChild()))
             }
             path == "/api/holidays" && method == "GET" -> return json(out, 200, HolidayService.info(context))
             path == "/api/holidays/sync" && method == "POST" -> {
@@ -261,6 +289,9 @@ class LanServer(
                     json(out, 200, JSONObject().put("error", "bad_question").put("message", e.message ?: ""))
                 }
             }
+            // #130：家长在手机上点一下，让电视 / 投影打开完整系统设置（很多固件藏了菜单）
+            path == "/api/system-settings" && method == "POST" -> return json(out, 200,
+                JSONObject().put("ok", DeviceBridge.openSystemSettings(context)))
             path == "/api/speech" && method == "GET" -> return json(out, 200, SpeechReader.settings(store))
             path == "/api/speech" && method == "PUT" -> return json(out, 200, SpeechReader.save(store, JSONObject(body)))
             path == "/api/bank-automation" && method == "GET" -> return json(out, 200, BankAutomation.settings(store))

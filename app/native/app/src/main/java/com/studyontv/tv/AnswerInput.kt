@@ -17,9 +17,10 @@ object AnswerInput {
     var active = false
         private set
 
+    /** 当前题的朗读 / 识别语言；空串表示题目没标注，由系统语言决定（#126 粤语系统） */
     fun language(): String = try {
-        JSONObject(DeviceRuntime.store.get("active_round", "{}")).optJSONObject("question")?.optString("language", "zh-CN") ?: "zh-CN"
-    } catch (_: Exception) { "zh-CN" }
+        JSONObject(DeviceRuntime.store.get("active_round", "{}")).optJSONObject("question")?.optString("language", "") ?: ""
+    } catch (_: Exception) { "" }
 
     /** 打开一个原生输入页（手机：手写 / 语音；电视：遥控器 + 系统输入法），结果经 SOTV_INPUT 回传给网页 */
     fun open(context: Context, web: WebView, screen: Class<out Activity>, extras: Intent.() -> Unit = {}) {

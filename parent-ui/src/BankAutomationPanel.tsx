@@ -8,20 +8,23 @@ import {Badge} from '@/components/ui/badge';
 import {Button} from '@/components/ui/button';
 import {Card,CardContent} from '@/components/ui/card';
 import {Checkbox} from '@/components/ui/checkbox';
-import {Field,FieldContent,FieldDescription,FieldGroup,FieldLabel,FieldLegend,FieldSet,FieldTitle} from '@/components/ui/field';
+import {Field,FieldContent,FieldDescription,FieldError,FieldGroup,FieldLabel,FieldLegend,FieldSet,FieldTitle} from '@/components/ui/field';
 import {Input} from '@/components/ui/input';
 import {Separator} from '@/components/ui/separator';
 import {Textarea} from '@/components/ui/textarea';
 import {Switch} from '@/components/ui/switch';
 
+const typeOptions:[string,string][]=[['single','单选'],['multiple','多选'],['boolean','判断'],['text','填空'],['subjective','主观题']];
+
 export default function BankAutomationPanel({sessionId}:{sessionId:number}){
  const client=useQueryClient();
  const query=useQuery({queryKey:['bankAutomation',sessionId],queryFn:()=>api('/api/bank-automation'),refetchInterval:5000});
- const [dirty,setDirty]=useState(false),[form,setForm]=useState<any>({sources:[],autoAi:false,minimum:30,batch:10,masteryAttempts:5,masteryAccuracy:90,topic:''});
+ const [dirty,setDirty]=useState(false),[form,setForm]=useState<any>({sources:[],autoAi:false,minimum:30,batch:10,masteryAttempts:5,masteryAccuracy:90,topic:'',types:['single','text']});
  useEffect(()=>{if(query.data&&!dirty)setForm({...form,...query.data});},[query.data,dirty]);
  const field=(key:string,value:any)=>{setDirty(true);setForm((f:any)=>({...f,[key]:value}));};
  const save=useMutation({mutationFn:()=>api('/api/bank-automation','PUT',form),onSuccess:r=>{client.setQueryData(['bankAutomation',sessionId],r);setDirty(false);},onError:(e:any)=>toast.error(e.message)});
- const valid=form.sources.every((source:any)=>(!source.name.trim()&&!source.url.trim())||(!!source.name.trim()&&/^https?:\/\//.test(source.url.trim())))&&Number(form.minimum)>=1&&Number(form.batch)>=1&&Number(form.masteryAttempts)>=1&&Number(form.masteryAccuracy)>=50;
+ const types:string[]=form.types||[];
+ const valid=form.sources.every((source:any)=>(!source.name.trim()&&!source.url.trim())||(!!source.name.trim()&&/^https?:\/\//.test(source.url.trim())))&&Number(form.minimum)>=1&&Number(form.batch)>=1&&Number(form.masteryAttempts)>=1&&Number(form.masteryAccuracy)>=50&&(!form.autoAi||types.length>0);
  useEffect(()=>{if(!dirty||!valid)return;const timer=window.setTimeout(()=>save.mutate(),800);return()=>window.clearTimeout(timer);},[form,dirty,valid]);
  const sync=useMutation({mutationFn:()=>api('/api/bank-automation/sync','POST',{}),onSuccess:()=>{client.invalidateQueries({queryKey:['bankAutomation',sessionId]});toast.message('已开始同步，完成后可刷新题库');},onError:(e:any)=>toast.error(e.message)});
  const status=query.data?.status;
@@ -68,6 +71,15 @@ export default function BankAutomationPanel({sessionId}:{sessionId:number}){
       <Field orientation="responsive" className="border-b border-border/60 py-4"><FieldContent><FieldTitle>每批补充题数</FieldTitle></FieldContent><Input aria-label="每批补充题数" type="number" min={1} max={20} className="w-24" value={form.batch} onChange={e=>field('batch',Number(e.target.value))}/></Field>
       <Field orientation="responsive" className="border-b border-border/60 py-4"><FieldContent><FieldTitle>至少作答次数</FieldTitle></FieldContent><Input aria-label="至少作答次数" type="number" min={1} max={100} className="w-24" value={form.masteryAttempts} onChange={e=>field('masteryAttempts',Number(e.target.value))}/></Field>
       <Field orientation="responsive" className="border-b border-border/60 py-4"><FieldContent><FieldTitle>掌握正确率 · %</FieldTitle></FieldContent><Input aria-label="掌握正确率" type="number" min={50} max={100} className="w-24" value={form.masteryAccuracy} onChange={e=>field('masteryAccuracy',Number(e.target.value))}/></Field>
+      <Field orientation="responsive" className="border-b border-border/60 py-4">
+       <FieldContent><FieldTitle>补题题型</FieldTitle><FieldDescription className="text-xs">电视上用遥控器填字麻烦，可以只补选择题；至少选一种。</FieldDescription>{form.autoAi&&types.length===0&&<FieldError>请至少选择一种题型</FieldError>}</FieldContent>
+       <div className="flex flex-wrap gap-x-4 gap-y-2">
+        {typeOptions.map(([value,label])=><Field key={value} orientation="horizontal" className="w-auto gap-2">
+         <Checkbox id={`auto-type-${value}`} checked={types.includes(value)} onCheckedChange={checked=>field('types',checked?[...types,value]:types.filter((t:string)=>t!==value))}/>
+         <FieldLabel htmlFor={`auto-type-${value}`} className="font-normal">{label}</FieldLabel>
+        </Field>)}
+       </div>
+      </Field>
       <div className="pt-3"><Textarea aria-label="自动补题范围" placeholder="例如：四年级上册数学，分数基础，附解析" value={form.topic} onChange={e=>field('topic',e.target.value)}/></div>
      </>}
     </FieldSet>

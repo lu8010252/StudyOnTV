@@ -112,6 +112,10 @@ class OnboardingActivity : Activity() {
             { checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED }) {
             requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 9)
         }
+        // #130：不少电视 / 投影 / 平板把原生设置菜单藏起来，家长找不到授权入口。
+        // 这一行不显示「已开启 / 未开启」，只是把完整系统设置直接调起来。
+        val systemSettings = TvUi.row(this, android.R.drawable.ic_menu_preferences, "打开系统设置", "找不到应用管理、授权入口时从完整设置里找", ::openSystemSettings)
+        list.addView(systemSettings.view, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(if (tv) 8 else 10) })
         list.addView(TvUi.text(this, if (tv) "部分电视没有“电池优化”，可在系统“应用管理”里允许自启动。" else "部分手机还需要在系统设置里允许“自启动”或“后台活动”。", if (tv) 13f else 12f, p.text3),
             LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6); leftMargin = dp(4) })
         // 针对常见品牌给出更具体的自启动引导；文案与家长面板共用
@@ -156,6 +160,11 @@ class OnboardingActivity : Activity() {
         options.add(Intent(Settings.ACTION_SETTINGS))
         for (intent in options) try { startActivity(intent); return } catch (_: Exception) { }
         Toast.makeText(this, "请在系统设置中调整权限", Toast.LENGTH_SHORT).show()
+    }
+
+    /** #130：直接调起完整系统设置，电视隐藏菜单时家长仍能找到权限页面 */
+    private fun openSystemSettings() {
+        if (!DeviceBridge.openSystemSettings(this)) Toast.makeText(this, "这台设备没有可调起的系统设置页面，可用电脑通过 ADB 授权", Toast.LENGTH_LONG).show()
     }
 
     /** 开发者选项在部分电视上不存在，逐级回退到设备信息 / 应用详情 / 系统设置。 */

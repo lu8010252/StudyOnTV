@@ -11,12 +11,16 @@ import {Select,SelectContent,SelectItem,SelectTrigger,SelectValue} from '@/compo
 import {Switch} from '@/components/ui/switch';
 
 const modes=['system','auto','azure','aliyun'];
+/** #126：设备级朗读语言。空 = 跟随每道题的标注，"system" = 跟随系统语言 */
+const readLanguages:[string,string][]=[['auto','跟随每道题的标注'],['system','跟随设备系统语言'],['zh-CN','普通话'],['zh-HK','粤语'],['zh-TW','台湾国语'],['en-US','英语（美式）'],['en-GB','英语（英式）']];
+const readLanguageValue=(value:any)=>(readLanguages.some(([v])=>v===value)?value:'auto');
 const labels:Record<string,string>={azureRegion:'Azure 区域',azureVoice:'Azure 音色',azureKey:'Azure Key',aliyunAppKey:'阿里云 AppKey',aliyunAccessKeyId:'阿里云 AccessKey ID',aliyunSecret:'阿里云 AccessKey Secret',aliyunVoice:'阿里云音色'};
 const azureFields=['azureRegion','azureVoice','azureKey'],aliyunFields=['aliyunAppKey','aliyunAccessKeyId','aliyunSecret','aliyunVoice'];
 
 function validate(form:any){
  const errors:Record<string,string>={};
  if(!modes.includes(form.mode))errors.mode='请选择有效的朗读通路';
+ if(String(form.readLanguage??'')!=='' && readLanguageValue(form.readLanguage)==='auto')errors.readLanguage='请选择有效的朗读语言';
  for(const key of [...azureFields,...aliyunFields]){
   const limit=key==='azureKey'||key==='aliyunSecret'?500:200;
   if(String(form[key]??'').length>limit)errors[key]=`${labels[key]}不能超过 ${limit} 个字符`;
@@ -72,6 +76,15 @@ export default function SpeechSettings({sessionId}:{sessionId:number}){
     <Item size="sm" className="rounded-none px-4 py-4 sm:px-6">
      <ItemContent><ItemTitle>自动朗读题目</ItemTitle><ItemDescription className="text-xs">进入新题目时自动播放题干。</ItemDescription></ItemContent>
      <ItemActions><Switch aria-label="自动朗读题目" checked={!!form.autoRead} onCheckedChange={value=>change('autoRead',value)}/></ItemActions>
+    </Item>
+    <Item size="sm" className="rounded-none px-4 py-4 sm:px-6" data-invalid={!!errors.readLanguage}>
+     <ItemContent><ItemTitle>朗读语言</ItemTitle><ItemDescription className="text-xs">系统是粤语 / 繁体时选「跟随设备系统语言」，题目就不用逐条修改。</ItemDescription><FieldError>{errors.readLanguage}</FieldError></ItemContent>
+     <ItemActions>
+      <Select value={readLanguageValue(form.readLanguage)} onValueChange={value=>change('readLanguage',value==='auto'?'':value)}>
+       <SelectTrigger aria-label="朗读语言" aria-invalid={!!errors.readLanguage} className="w-full sm:w-44"><SelectValue>{readLanguages.find(([value])=>value===readLanguageValue(form.readLanguage))?.[1]}</SelectValue></SelectTrigger>
+       <SelectContent>{readLanguages.map(([value,label])=><SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent>
+      </Select>
+     </ItemActions>
     </Item>
     <Item size="sm" className="rounded-none px-4 py-4 sm:px-6" data-invalid={!!errors.mode}>
      <ItemContent><ItemTitle>朗读通路</ItemTitle><ItemDescription className="text-xs">自动选择优先使用已配置的云端密钥。</ItemDescription><FieldError>{errors.mode}</FieldError></ItemContent>

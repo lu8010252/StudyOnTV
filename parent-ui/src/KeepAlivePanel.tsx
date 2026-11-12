@@ -1,5 +1,5 @@
 import {useQuery} from '@tanstack/react-query';
-import {ShieldCheck,RefreshCw,Copy,CircleCheck,CircleAlert,CircleHelp} from 'lucide-react';
+import {ShieldCheck,RefreshCw,Copy,CircleCheck,CircleAlert,CircleHelp,Settings} from 'lucide-react';
 import {toast} from 'sonner';
 import {Button} from '@/components/ui/button';
 import {api} from './api';
@@ -43,6 +43,13 @@ export default function KeepAlivePanel({sessionId}:{sessionId:number}){
  const debug=debugStatus(data);
  const LevelIcon=LEVEL[summary.level].icon;
  const autostart=data?.autostart;
+ const openSystemSettings=async()=>{
+  try{
+   const result=await api('/api/system-settings','POST',{});
+   if(result?.ok===false)toast.error('这台设备没有可调起的系统设置页面');
+   else toast.success('已在设备上打开系统设置');
+  }catch(e:any){toast.error(e.message||'无法打开系统设置');}
+ };
  const copy=async()=>{
   if(!data)return;
   const result=await copyText(selfCheckText(data));
@@ -103,6 +110,7 @@ export default function KeepAlivePanel({sessionId}:{sessionId:number}){
    <div className="flex flex-wrap gap-2 pt-4">
     <Button variant="outline" onClick={()=>device.refetch()} disabled={device.isFetching}><RefreshCw className={device.isFetching?'animate-spin':''}/>{device.isFetching?'检测中…':'重新检测'}</Button>
     <Button variant="ghost" onClick={copy}><Copy/>复制自检信息</Button>
+    <Button variant="ghost" onClick={openSystemSettings}><Settings/>打开系统设置</Button>
    </div>
    {data.keepalive&&<p className="mt-3 text-xs leading-5 text-muted-foreground">设备信息：{[data.keepalive.manufacturer,data.keepalive.model].filter(Boolean).join(' ')||'未知型号'} · Android {data.keepalive.android||'未知'} · 应用 v{data.version}</p>}
   </>}

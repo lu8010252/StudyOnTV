@@ -28,7 +28,13 @@ import java.util.concurrent.Executors
  */
 object SpeechReader {
     /** 语音识别白名单：白名单外的题目语言不静默当中文，而是降级到设备默认语言并记诊断（#81） */
-    private val RECOGNITION_LANGUAGES = listOf("zh-CN", "en-US", "en-GB")
+    private val RECOGNITION_LANGUAGES = listOf("zh-CN", "zh-HK", "zh-TW", "en-US", "en-GB")
+    /** 题目可以标注的朗读语言；"" 表示跟随设备系统语言（#126 粤语系统被读成国语的根因是写死 zh-CN） */
+    val LANGUAGES = listOf("", "zh-CN", "zh-HK", "zh-TW", "en-US", "en-GB")
+    /** 语音识别支持的语种（白名单外再降级，供回归测试断言） */
+    val whitelist: List<String> get() = RECOGNITION_LANGUAGES
+    /** 设备级朗读语言覆盖："" 跟随题目、"system" 跟随系统，其余为固定语言标签 */
+    private val OVERRIDES = LANGUAGES + listOf("system")
 
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
@@ -57,6 +63,7 @@ object SpeechReader {
     fun settings(store: LocalStore): JSONObject = JSONObject(store.get("speech_settings", "{}"))
         .apply {
             if (!has("mode")) put("mode", "system")
+            if (!has("readLanguage")) put("readLanguage", "")
             for (key in listOf("azureKey", "aliyunSecret")) { put(key + "Set", optString(key).isNotEmpty()); remove(key) }
         }
     fun save(store: LocalStore, input: JSONObject): JSONObject {
@@ -64,6 +71,12 @@ object SpeechReader {
         val mode = input.optString("mode", "system")
         require(mode in listOf("auto", "system", "azure", "aliyun")) { "未知朗读通路" }
         next.put("mode", mode).put("autoRead", input.optBoolean("autoRead"))
+        // #126：设备级朗读语言。空 = 跟随题目设置，"system" = 跟随设备系统语言（粤语系统读粤语）
+        if (input.has("readLanguage")) {
+            val readLanguage = input.optString("readLanguage").trim()
+            require(readLanguage in OVERRIDES) { "不支持的朗读语言" }
+            next.put("readLanguage", readLanguage)
+        }
         for (key in listOf("azureRegion", "azureVoice", "aliyunAppKey", "aliyunAccessKeyId", "aliyunVoice")) if (input.has(key)) {
             require(input.getString(key).length <= 200); next.put(key, input.getString(key).trim())
         }
@@ -81,7 +94,7 @@ object SpeechReader {
      * 朗读。`language` 是题目语言；引擎不支持时先回落设备默认语言，再不行回报失败。
      * `notice` 由桥传入，失败时回调（网页里有 window.SOTV_SPEECH_NOTICE 就能显示提示）。
      */
-    fun read(context: Context, text: String, language: String = "zh-CN", notice: ((JSONObject) -> Unit)? = null) {
+    fun read(context: Context, text: String, language: String = "", notice: ((JSONObject) -> Unit)? = null) {
         if (text.isBlank()) return
         val app = context.applicationContext
         main.post {
@@ -97,8 +110,14 @@ object SpeechReader {
                 config.optString("aliyunSecret").isNotEmpty() -> "aliyun"
                 else -> "system"
             } else mode
-            if (chosen == "system") systemRead(app, clean, language, request)
-            else cloudPart(app, clean.chunked(150), 0, language, config, chosen, request)
+            // #126：家长可以在朗读设置里指定设备朗读语言；留空就跟随每道题的语言标注
+            val spoken = when (val override = config.optString("readLanguage").trim()) {
+                "system" -> ""          // 跟随设备系统语言
+                "" -> language          // 跟随题目
+                else -> override
+            }
+            if (chosen == "system") systemRead(app, clean, spoken, request)
+            else cloudPart(app, clean.chunked(150), 0, spoken, config, chosen, request)
         }
     }
 
@@ -178,7 +197,8 @@ object SpeechReader {
     /** 语音识别语言：白名单内原样用；白名单外降级到设备默认语言并记一条诊断（不再静默变中文） */
     fun recognitionLanguage(requested: String): String {
         val want = requested.trim()
-        if (want.isEmpty()) return "zh-CN"          // 网页没传语言：沿用旧行为，用中文
+        // 题目没标语言：跟随设备系统语言（粤语 / 繁体系统的孩子用粤语识别），不支持时才用中文
+        if (want.isEmpty()) return defaultLanguage().takeIf { it in RECOGNITION_LANGUAGES } ?: "zh-CN"
         if (want in RECOGNITION_LANGUAGES) return want
         val fallback = defaultLanguage().takeIf { it in RECOGNITION_LANGUAGES } ?: "zh-CN"
         Diag.warn("Speech", "recognition language $want not supported, degraded to $fallback")
@@ -352,8 +372,15 @@ object SpeechReader {
     private fun azure(config: JSONObject, text: String, language: String): ByteArray {
         val region = config.getString("azureRegion")
         require(region.matches(Regex("[a-z0-9-]+")))
-        val voice = config.optString("azureVoice").ifBlank { if (language.startsWith("en")) "en-US-JennyNeural" else "zh-CN-XiaoxiaoNeural" }
-        val ssml = "<speak version='1.0' xml:lang='${xml(language)}'><voice name='${xml(voice)}'>${xml(text)}</voice></speak>"
+        // SSML 的 xml:lang 不能为空，题目没标语言时按设备系统语言读；其它语系按中文处理
+        val tag = language.ifBlank { defaultLanguage() }.let { if (it.startsWith("zh") || it.startsWith("en")) it else "zh-CN" }
+        val voice = config.optString("azureVoice").ifBlank { when {
+            tag.startsWith("en") -> "en-US-JennyNeural"
+            tag == "zh-HK" -> "zh-HK-HiuMaanNeural"
+            tag == "zh-TW" -> "zh-TW-HsiaoChenNeural"
+            else -> "zh-CN-XiaoxiaoNeural"
+        } }
+        val ssml = "<speak version='1.0' xml:lang='${xml(tag)}'><voice name='${xml(voice)}'>${xml(text)}</voice></speak>"
         return request("https://$region.tts.speech.microsoft.com/cognitiveservices/v1",
             mapOf("Ocp-Apim-Subscription-Key" to config.getString("azureKey"), "Content-Type" to "application/ssml+xml",
                 "X-Microsoft-OutputFormat" to "audio-16khz-32kbitrate-mono-mp3"), ssml.toByteArray())

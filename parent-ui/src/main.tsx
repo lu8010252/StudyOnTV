@@ -1,7 +1,7 @@
 import {useEffect,useState,lazy,Suspense,type ReactNode} from 'react';
 import {root} from './react-root';
 import {QueryClient,QueryClientProvider,useQuery} from '@tanstack/react-query';
-import {AlertCircle,LoaderCircle,BookOpen,ClipboardCheck,SlidersHorizontal,ChartColumn,Leaf,LogOut,ArrowRight,LockKeyhole,Monitor,Wifi,Settings,Sun,Moon,Laptop,ChevronsUpDown,Tv,Palette,KeyRound,CloudDownload,RadioTower,FileText,Bot,Eye,EyeOff,House,ShieldCheck} from 'lucide-react';
+import {AlertCircle,LoaderCircle,BookOpen,ClipboardCheck,SlidersHorizontal,ChartColumn,Leaf,LogOut,ArrowRight,LockKeyhole,Monitor,Wifi,Settings,Sun,Moon,Laptop,ChevronsUpDown,Tv,Palette,KeyRound,CloudDownload,RadioTower,FileText,Bot,Eye,EyeOff,House,ShieldCheck,Users} from 'lucide-react';
 import {Toaster,toast} from 'sonner';
 import {Button} from '@/components/ui/button';
 import {Input} from '@/components/ui/input';
@@ -25,6 +25,7 @@ import DevicePanel from './DevicePanel';
 import KeepAlivePanel from './KeepAlivePanel';
 import LogsPage from './LogsPage';
 import AiSettings from './AiSettings';
+import ChildrenPanel from './ChildrenPanel';
 import FeedbackPanel from './FeedbackPanel';
 import InstallPrompt from './InstallPrompt';
 const RecordsPage=lazy(()=>import('./RecordsPage'));
@@ -40,8 +41,8 @@ const pages:{id:PageId,title:string,short:string,icon:any,description:string}[]=
  {id:'rules',title:'学习计划',short:'计划',icon:SlidersHorizontal,description:'任务、时段、范围与奖励'},
  {id:'records',title:'成长记录',short:'记录',icon:ChartColumn,description:'使用时间与学习进度'},
  {id:'settings',title:'设置',short:'设置',icon:Settings,description:'设备、外观、更新与安全'}];
-type SectionId='device'|'keepalive'|'display'|'update'|'security'|'integration'|'logs'|'ai';
-const sections:{id:SectionId,title:string,icon:any}[]=[{id:'device',title:'设备',icon:Tv},{id:'keepalive',title:'后台保活',icon:ShieldCheck},{id:'display',title:'界面与反馈',icon:Palette},{id:'update',title:'版本更新',icon:CloudDownload},{id:'security',title:'管理密码',icon:KeyRound},{id:'integration',title:'家庭自动化',icon:RadioTower},{id:'logs',title:'诊断日志',icon:FileText},{id:'ai',title:'模型 API（高级）',icon:Bot}];
+type SectionId='device'|'children'|'keepalive'|'display'|'update'|'security'|'integration'|'logs'|'ai';
+const sections:{id:SectionId,title:string,icon:any}[]=[{id:'device',title:'设备',icon:Tv},{id:'children',title:'孩子',icon:Users},{id:'keepalive',title:'后台保活',icon:ShieldCheck},{id:'display',title:'界面与反馈',icon:Palette},{id:'update',title:'版本更新',icon:CloudDownload},{id:'security',title:'管理密码',icon:KeyRound},{id:'integration',title:'家庭自动化',icon:RadioTower},{id:'logs',title:'诊断日志',icon:FileText},{id:'ai',title:'模型 API（高级）',icon:Bot}];
 
 /* ---------- 记住登录：保存在本机浏览器，30 天有效；修改管理密码或断开连接后失效 ---------- */
 const SESSION_KEY='sotv-panel-session';
@@ -145,7 +146,7 @@ function SettingsPage({section,go,sessionId,state,logout}:{section:SectionId,go:
   <TabsList aria-label="设置分区" className="no-scrollbar sticky top-14 z-20 -mx-4 flex h-12 w-[calc(100%+2rem)] justify-start gap-1 overflow-x-auto rounded-none border-b bg-background/92 px-3 backdrop-blur md:top-16 lg:static lg:mx-0 lg:block lg:h-auto lg:w-full lg:space-y-1 lg:rounded-2xl lg:border lg:bg-card/55 lg:p-2">
    {sections.map(s=><TabsTrigger key={s.id} value={s.id} className="h-9 shrink-0 justify-start gap-2 rounded-lg px-3 text-muted-foreground data-[state=active]:text-foreground lg:flex lg:h-10 lg:w-full lg:justify-start lg:data-[state=active]:bg-background lg:data-[state=active]:shadow-xs"><s.icon/>{s.title}</TabsTrigger>)}
   </TabsList>
-  <TabsContent value={section} className="m-0 w-full min-w-0">{section==='keepalive'?<KeepAlivePanel sessionId={sessionId}/>:section==='display'?<FeedbackPanel state={state} sessionId={sessionId}/>:section==='logs'?<LogsPage sessionId={sessionId}/>:section==='ai'?<AiSettings sessionId={sessionId}/>:<DevicePanel sessionId={sessionId} only={section} onPasswordChanged={logout} onOpenKeepAlive={()=>go('settings','keepalive')}/>}</TabsContent>
+  <TabsContent value={section} className="m-0 w-full min-w-0">{section==='children'?<ChildrenPanel sessionId={sessionId}/>:section==='keepalive'?<KeepAlivePanel sessionId={sessionId}/>:section==='display'?<FeedbackPanel state={state} sessionId={sessionId}/>:section==='logs'?<LogsPage sessionId={sessionId}/>:section==='ai'?<AiSettings sessionId={sessionId}/>:<DevicePanel sessionId={sessionId} only={section} onPasswordChanged={logout} onOpenKeepAlive={()=>go('settings','keepalive')}/>}</TabsContent>
  </Tabs>}
 
 function Dashboard({sessionId,logout,theme}:{sessionId:number,logout:()=>void,theme:ReturnType<typeof useTheme>}){

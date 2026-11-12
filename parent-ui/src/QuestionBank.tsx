@@ -300,7 +300,7 @@ export default function QuestionBank({sessionId}:{sessionId:number}){
        <Field label="音频地址（可选）"><Input value={form.audio} onChange={e=>field('audio',e.target.value)} placeholder="https://"/></Field>
       </FieldGroup>
       <FieldGroup className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-       <Field label="朗读 / 语音作答语言"><ChoiceSelect label="朗读 / 语音作答语言" value={form.language} onChange={v=>field('language',v)} options={[['zh-CN','中文'],['en-US','英语（美式）'],['en-GB','英语（英式）']]}/></Field>
+       <Field label="朗读 / 语音作答语言"><ChoiceSelect label="朗读 / 语音作答语言" value={form.language} onChange={v=>field('language',v)} options={[['zh-CN','中文'],['zh-HK','粤语（香港）'],['zh-TW','台湾国语'],['en-US','英语（美式）'],['en-GB','英语（英式）'],['','跟随设备系统语言']]}/></Field>
        <Field label="星级难度"><ChoiceSelect label="星级难度" value={String(form.difficulty)} onChange={v=>field('difficulty',Number(v))} options={[1,2,3,4,5].map(s=>[String(s),'★'.repeat(s)])}/></Field>
       </FieldGroup>
       <Field label="解析"><Textarea rows={2} value={form.tip} onChange={e=>field('tip',e.target.value)}/></Field>

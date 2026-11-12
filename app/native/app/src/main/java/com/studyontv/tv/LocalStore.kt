@@ -9,21 +9,30 @@ import org.json.JSONObject
 import java.util.Calendar
 import java.util.UUID
 
-class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLiteOpenHelper(context, databaseName, null, 8) {
+class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLiteOpenHelper(context, databaseName, null, 9) {
     companion object {
         val DEFAULT_PRAISE = listOf("太棒了！", "答对啦！", "完全正确！", "真厉害！", "好样的，继续保持！", "漂亮！你越来越熟练了")
         val DEFAULT_ENCOURAGE = listOf("没关系，记住正确答案就好", "差一点点，下一题加油！", "错误也是学习的一部分", "别灰心，再接再厉！")
+        /** 第一个孩子沿用旧版本的存储键（不带前缀），升级时不需要搬运任何数据 */
+        const val DEFAULT_CHILD = ""
+        /** 设备级共享的设置：不随当前孩子切换 */
+        private val SHARED_KEYS = setOf(
+            "admin_token", "speech_settings", "grading_settings", "bank_automation", "bank_automation_status",
+            "children", "active_child", "parent_access", "onboarded"
+        )
+        const val MAX_CHILDREN = 8
     }
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE questions(id TEXT PRIMARY KEY, subject TEXT, level TEXT, difficulty INTEGER, stem TEXT NOT NULL, options TEXT NOT NULL, answer INTEGER NOT NULL, tip TEXT, enabled INTEGER DEFAULT 1, created_at INTEGER, details TEXT)")
         db.execSQL("CREATE TABLE kv(k TEXT PRIMARY KEY, v TEXT)")
-        db.execSQL("CREATE TABLE events(id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, payload TEXT, ts INTEGER)")
+        db.execSQL("CREATE TABLE events(id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, payload TEXT, ts INTEGER, child TEXT NOT NULL DEFAULT '')")
         db.execSQL("CREATE INDEX idx_events_ts ON events(ts)")
         createReviews(db)
         createProgress(db)
         createPoints(db)
         createQuestionStats(db)
+        createChildren(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -35,6 +44,34 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         if (oldVersion < 7) createQuestionStats(db)
         // 自动淘汰改用上游的“掌握后暂停”，之前被我们淘汰（enabled=2）的题放回题库
         if (oldVersion < 8) db.execSQL("UPDATE questions SET enabled=1 WHERE enabled=2")
+        if (oldVersion < 9) {
+            // 多孩子（#132）：历史 / 使用时长 / 艾宾浩斯进度都按孩子隔离，旧的记录归第一个孩子
+            createChildren(db)
+            addColumn(db, "events", "child", "TEXT NOT NULL DEFAULT ''")
+            migrateProgressForChildren(db)
+        }
+    }
+
+    private fun addColumn(db: SQLiteDatabase, table: String, column: String, type: String) {
+        val columns = mutableSetOf<String>()
+        db.rawQuery("PRAGMA table_info($table)", null).use { while (it.moveToNext()) columns.add(it.getString(1)) }
+        if (column !in columns) db.execSQL("ALTER TABLE $table ADD COLUMN $column $type")
+    }
+
+    private fun createChildren(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS children(id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL)")
+    }
+
+    /** 旧的 question_progress 以 qid 为主键，多孩子后必须变成 (qid, child) 复合主键 */
+    private fun migrateProgressForChildren(db: SQLiteDatabase) {
+        val columns = mutableSetOf<String>()
+        db.rawQuery("PRAGMA table_info(question_progress)", null).use { while (it.moveToNext()) columns.add(it.getString(1)) }
+        if ("child" in columns) return
+        db.execSQL("ALTER TABLE question_progress RENAME TO question_progress_legacy")
+        createProgress(db)
+        db.execSQL("INSERT INTO question_progress(qid,child,repetitions,interval_days,ease,due_at,updated_at) " +
+            "SELECT qid,'',repetitions,interval_days,ease,due_at,updated_at FROM question_progress_legacy")
+        db.execSQL("DROP TABLE question_progress_legacy")
     }
 
     /**
@@ -96,8 +133,9 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
     }
 
     private fun createProgress(db: SQLiteDatabase) {
-        db.execSQL("CREATE TABLE question_progress(qid TEXT PRIMARY KEY, repetitions INTEGER NOT NULL, interval_days INTEGER NOT NULL, ease REAL NOT NULL, due_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)")
-        db.execSQL("CREATE INDEX idx_question_due ON question_progress(due_at)")
+        // 每个孩子各自一套复习进度（#132）；旧库在 migrateProgressForChildren 里搬过来，child='' 是第一个孩子
+        db.execSQL("CREATE TABLE IF NOT EXISTS question_progress(qid TEXT NOT NULL, child TEXT NOT NULL DEFAULT '', repetitions INTEGER NOT NULL, interval_days INTEGER NOT NULL, ease REAL NOT NULL, due_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(qid, child))")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_question_due ON question_progress(due_at)")
     }
 
     // ---- 积分账本：id 同时作为星星屋的幂等键 extId，synced=0 表示还没同步到星星屋 ----
@@ -152,7 +190,8 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         var repetitions = 0
         var interval = 0L
         var ease = 2.5
-        readableDatabase.rawQuery("SELECT repetitions,interval_days,ease FROM question_progress WHERE qid=?", arrayOf(id)).use {
+        val child = activeChild()
+        readableDatabase.rawQuery("SELECT repetitions,interval_days,ease FROM question_progress WHERE qid=? AND child=?", arrayOf(id, child)).use {
             if (it.moveToFirst()) { repetitions = it.getInt(0); interval = it.getLong(1); ease = it.getDouble(2) }
         }
         val q = quality.coerceIn(0, 5)
@@ -164,14 +203,15 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         }
         ease = (ease + 0.1 - (5 - q) * (0.08 + (5 - q) * 0.02)).coerceAtLeast(1.3)
         writableDatabase.insertWithOnConflict("question_progress", null, ContentValues().apply {
-            put("qid", id); put("repetitions", repetitions); put("interval_days", interval); put("ease", ease)
+            put("qid", id); put("child", child); put("repetitions", repetitions); put("interval_days", interval); put("ease", ease)
             put("due_at", next); put("updated_at", now)
         }, SQLiteDatabase.CONFLICT_REPLACE)
         return repetitions
     }
 
     fun repetitionStats(): JSONObject = readableDatabase.rawQuery(
-        "SELECT COUNT(*),SUM(CASE WHEN due_at<=? THEN 1 ELSE 0 END) FROM question_progress JOIN questions ON questions.id=question_progress.qid WHERE questions.enabled=1", arrayOf(System.currentTimeMillis().toString())
+        "SELECT COUNT(*),SUM(CASE WHEN due_at<=? THEN 1 ELSE 0 END) FROM question_progress JOIN questions ON questions.id=question_progress.qid WHERE questions.enabled=1 AND question_progress.child=?",
+        arrayOf(System.currentTimeMillis().toString(), activeChild())
     ).use { if (it.moveToFirst()) JSONObject().put("studied", it.getInt(0)).put("due", it.getInt(1)) else JSONObject().put("studied", 0).put("due", 0) }
 
     private fun createReviews(db: SQLiteDatabase) {
@@ -203,15 +243,110 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         return out
     }
 
-    fun get(key: String, default: String = ""): String =
+    /** 当前孩子：默认孩子用空串，沿用旧版本的存储键，升级时不用搬运数据 */
+    @Volatile private var cachedChild: String? = null
+
+    fun activeChild(): String {
+        cachedChild?.let { return it }
+        val stored = rawGet("active_child")
+        val valid = when {
+            stored.isEmpty() -> DEFAULT_CHILD
+            readableDatabase.rawQuery("SELECT 1 FROM children WHERE id=? LIMIT 1", arrayOf(stored)).use { it.moveToFirst() } -> stored
+            else -> { rawSet("active_child", DEFAULT_CHILD); DEFAULT_CHILD }   // 孩子档案被删掉了
+        }
+        cachedChild = valid
+        return valid
+    }
+
+    /** 学习相关的键按孩子隔离；朗读 / 批改 / 远程题库这类设备设置仍共用一份 */
+    private fun scoped(key: String): String {
+        if (key in SHARED_KEYS) return key
+        val child = activeChild()
+        return if (child == DEFAULT_CHILD) key else "child:$child:$key"
+    }
+
+    private fun rawGet(key: String, default: String = ""): String =
         readableDatabase.rawQuery("SELECT v FROM kv WHERE k=?", arrayOf(key)).use {
             if (it.moveToFirst()) it.getString(0) ?: default else default
         }
 
-    fun set(key: String, value: String) {
+    private fun rawSet(key: String, value: String) {
         writableDatabase.insertWithOnConflict("kv", null, ContentValues().apply {
             put("k", key); put("v", value)
         }, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    fun get(key: String, default: String = ""): String = rawGet(scoped(key), default)
+
+    fun set(key: String, value: String) = rawSet(scoped(key), value)
+
+    // ---- 多孩子档案（#132） ----
+
+    fun children(): JSONArray {
+        ensureDefaultChild()
+        val active = activeChild()
+        val out = JSONArray()
+        readableDatabase.rawQuery("SELECT id,name,created_at FROM children ORDER BY created_at,id", null).use {
+            while (it.moveToNext()) out.put(JSONObject().put("id", it.getString(0)).put("name", it.getString(1))
+                .put("createdAt", it.getLong(2)).put("active", it.getString(0) == active))
+        }
+        return out
+    }
+
+    private fun ensureDefaultChild() {
+        val exists = readableDatabase.rawQuery("SELECT 1 FROM children WHERE id=? LIMIT 1", arrayOf(DEFAULT_CHILD)).use { it.moveToFirst() }
+        if (!exists) writableDatabase.insertWithOnConflict("children", null, ContentValues().apply {
+            put("id", DEFAULT_CHILD); put("name", "孩子1"); put("created_at", System.currentTimeMillis())
+        }, SQLiteDatabase.CONFLICT_IGNORE)
+    }
+
+    private fun validName(raw: String, except: String? = null): String {
+        val name = raw.trim()
+        require(name.length in 1..12) { "孩子名字需要 1–12 个字" }
+        val taken = readableDatabase.rawQuery("SELECT id FROM children WHERE name=?", arrayOf(name)).use { c -> if (c.moveToFirst()) c.getString(0) else null }
+        require(taken == null || taken == except) { "已经有同名的孩子" }
+        return name
+    }
+
+    fun createChild(raw: String): JSONObject {
+        ensureDefaultChild()
+        val name = validName(raw)
+        val count = readableDatabase.rawQuery("SELECT COUNT(*) FROM children", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+        require(count < MAX_CHILDREN) { "最多只能添加 $MAX_CHILDREN 个孩子" }
+        val id = "c" + UUID.randomUUID().toString().replace("-", "").take(8)
+        // 新孩子沿用当前的规则（时长、时段、奖励…），不需要家长再配一遍；学习进度从零开始
+        val inherited = rawGet(scoped("config"))
+        writableDatabase.insertWithOnConflict("children", null, ContentValues().apply {
+            put("id", id); put("name", name); put("created_at", System.currentTimeMillis())
+        }, SQLiteDatabase.CONFLICT_REPLACE)
+        if (inherited.isNotEmpty()) rawSet("child:$id:config", inherited)
+        return JSONObject().put("id", id).put("name", name)
+    }
+
+    fun renameChild(id: String, raw: String): JSONObject {
+        val name = validName(raw, id)
+        val updated = writableDatabase.update("children", ContentValues().apply { put("name", name) }, "id=?", arrayOf(id))
+        require(updated > 0) { "孩子档案不存在" }
+        return JSONObject().put("id", id).put("name", name)
+    }
+
+    /** 删除孩子档案：连同他的学习记录、使用时长和复习进度一起清掉，题目本身保留 */
+    fun deleteChild(id: String): Boolean {
+        require(id != DEFAULT_CHILD) { "第一个孩子不能删除，可以改名" }
+        writableDatabase.delete("children", "id=?", arrayOf(id))
+        writableDatabase.delete("kv", "k LIKE ?", arrayOf("child:$id:%"))
+        writableDatabase.delete("events", "child=?", arrayOf(id))
+        writableDatabase.delete("question_progress", "child=?", arrayOf(id))
+        if (activeChild() == id) switchChild(DEFAULT_CHILD)
+        return true
+    }
+
+    fun switchChild(id: String) {
+        ensureDefaultChild()
+        val exists = readableDatabase.rawQuery("SELECT 1 FROM children WHERE id=? LIMIT 1", arrayOf(id)).use { it.moveToFirst() }
+        require(exists) { "孩子档案不存在" }
+        rawSet("active_child", id)
+        cachedChild = null
     }
 
     fun adminToken(): String = get("admin_token").ifEmpty {
@@ -453,11 +588,13 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         if (!subject.isNullOrEmpty()) { where.append(" AND subject=?"); args.add(subject) }
         if (!level.isNullOrEmpty()) { where.append(" AND level=?"); args.add(level) }
         val out = JSONArray()
-        val source = (if (spaced) "questions LEFT JOIN question_progress progress ON questions.id=progress.qid" else "questions") +
+        val joinArgs = mutableListOf<String>()
+        // 复习进度是每个孩子各自一份（#132），只连当前孩子那一行，否则同一个 qid 会连出多条
+        val source = (if (spaced) "questions LEFT JOIN question_progress progress ON questions.id=progress.qid AND progress.child=?".also { joinArgs.add(activeChild()) } else "questions") +
             " LEFT JOIN question_stats stats ON questions.id=stats.qid"
         val order = if (spaced) "CASE WHEN progress.due_at<=${System.currentTimeMillis()} THEN 0 WHEN progress.qid IS NULL THEN 1 ELSE 2 END, progress.due_at ASC, RANDOM()"
             else when (sortBy) { "newest" -> "questions.created_at DESC, questions.rowid DESC"; "oldest" -> "questions.created_at ASC, questions.rowid ASC"; else -> "RANDOM()" }
-        readableDatabase.rawQuery("SELECT questions.*,COALESCE(stats.presented,0) AS presented,COALESCE(stats.answered,0) AS answered_count,COALESCE(stats.correct,0) AS correct_count FROM $source WHERE $where ORDER BY $order LIMIT ${limit.coerceIn(1, 5000)}", args.toTypedArray()).use { c ->
+        readableDatabase.rawQuery("SELECT questions.*,COALESCE(stats.presented,0) AS presented,COALESCE(stats.answered,0) AS answered_count,COALESCE(stats.correct,0) AS correct_count FROM $source WHERE $where ORDER BY $order LIMIT ${limit.coerceIn(1, 5000)}", (joinArgs + args).toTypedArray()).use { c ->
             while (c.moveToNext()) {
                 val details = c.getString(c.getColumnIndexOrThrow("details"))
                 val item = if (details.isNullOrEmpty()) JSONObject() else JSONObject(details)
@@ -586,8 +723,9 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
                 (key == "image" && value.startsWith("data:image/") && value.length <= 500000)) { "图片或音频地址无效" }
             details.put(key, value)
         }
+        // #126：支持粤语 / 台湾国语；留空表示跟随设备系统语言（粤语系统不再被强制读成普通话）
         val language = item.optString("language", "zh-CN")
-        require(language in listOf("zh-CN", "en-US", "en-GB")) { "朗读/识别语言需要为中文或英文" }
+        require(language in SpeechReader.LANGUAGES) { "朗读/识别语言需要为中文、粤语或英文，留空表示跟随系统" }
         details.put("language", language)
         writableDatabase.insertWithOnConflict("questions", null, ContentValues().apply {
             put("id", id); put("subject", item.optString("subject", "常识"))
@@ -652,7 +790,9 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
     }
 
     fun logEvent(type: String, payload: JSONObject) {
-        writableDatabase.execSQL("INSERT INTO events(type,payload,ts) VALUES(?,?,?)", arrayOf(type, payload.toString(), System.currentTimeMillis()))
+        // 事件按当前孩子记账：历史、使用时长、完成组数都只统计这个孩子自己的
+        writableDatabase.execSQL("INSERT INTO events(type,payload,ts,child) VALUES(?,?,?,?)",
+            arrayOf(type, payload.toString(), System.currentTimeMillis(), activeChild()))
     }
 
     fun recentEvents(limit: Int = 50): JSONArray {
@@ -668,7 +808,8 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         var answered = 0
         var correct = 0
         var rounds = 0
-        readableDatabase.rawQuery("SELECT type,payload FROM events WHERE ts>=? AND ts<?", arrayOf(start.toString(), end.toString())).use { c ->
+        readableDatabase.rawQuery("SELECT type,payload FROM events WHERE ts>=? AND ts<? AND child=?",
+            arrayOf(start.toString(), end.toString(), activeChild())).use { c ->
             while (c.moveToNext()) {
                 val p = try { JSONObject(c.getString(1)) } catch (e: Exception) { JSONObject() }
                 when (c.getString(0)) {
@@ -686,7 +827,8 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
 
     fun todayStats(): JSONObject = stats(startOfToday(), Long.MAX_VALUE)
     // status() 每秒都会调用，这里直接计数，不再解析今天的全部事件
-    fun roundsDoneToday(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM events WHERE type='quiz_pass' AND ts>=?", arrayOf(startOfToday().toString())).use {
+    fun roundsDoneToday(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM events WHERE type='quiz_pass' AND ts>=? AND child=?",
+        arrayOf(startOfToday().toString(), activeChild())).use {
         if (it.moveToFirst()) it.getInt(0) else 0
     }
 

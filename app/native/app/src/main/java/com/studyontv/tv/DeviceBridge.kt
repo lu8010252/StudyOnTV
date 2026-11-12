@@ -133,7 +133,7 @@ open class DeviceBridge(protected val activity: Activity, private val connection
     }
 
     @JavascriptInterface
-    fun readAloud(text: String) = SpeechReader.read(activity, text, "zh-CN", ::speechNotice)
+    fun readAloud(text: String) = SpeechReader.read(activity, text, "", ::speechNotice)
 
     @JavascriptInterface
     fun readInLanguage(text: String, language: String) = SpeechReader.read(activity, text, language, ::speechNotice)
@@ -163,6 +163,25 @@ open class DeviceBridge(protected val activity: Activity, private val connection
     }
 
     companion object {
+        /**
+         * 打开系统设置（#130）。很多电视 / 投影 / 平板把原生设置菜单精简掉了，
+         * 家长找不到「应用管理 → 权限」这类入口，应用里需要一个能把完整设置调起来的按钮。
+         * 逐级回退：系统设置 → 本应用详情页；都打不开时返回 false，由调用方提示。
+         */
+        fun openSystemSettings(context: Context): Boolean {
+            try { GateService.openingSystemPage(parentAuthorized = true) } catch (_: Exception) { }
+            val options = listOf(
+                Intent(android.provider.Settings.ACTION_SETTINGS),
+                Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:${context.packageName}"))
+            )
+            for (intent in options) try {
+                context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                Diag.info("UI", "opened system settings ${intent.action}")
+                return true
+            } catch (_: Exception) { }
+            Diag.warn("UI", "no system settings activity on this device")
+            return false
+        }
         /** 把记下的受控应用拉回前台；失败只记日志，不影响管控 */
         fun launchPackage(context: android.content.Context, pkg: String): Boolean = try {
             val intent = context.packageManager.getLaunchIntentForPackage(pkg)

@@ -8,6 +8,7 @@ import org.json.JSONObject
 object FeatureRegression {
     fun run(context: Context) {
         migration(context)
+        childMigration(context)
         val name = "feature-regression.db"
         context.deleteDatabase(name)
         val store = LocalStore(context, name)
@@ -126,9 +127,100 @@ object FeatureRegression {
             check(!SpeechReader.save(store, JSONObject().put("mode", "system").put("clearKeys", true)).getBoolean("azureKeySet"))
             val config = BankAutomation.save(store, JSONObject().put("sources", JSONArray().put(JSONObject().put("name", "测试").put("url", "https://example.test/bank.json"))))
             check(config.getJSONArray("sources").length() == 1)
+            // #125：自动补题题型筛选
+            val typed = BankAutomation.save(store, JSONObject().put("sources", JSONArray()).put("types", JSONArray().put("single").put("boolean")))
+            check(typed.getJSONArray("types").length() == 2 && typed.getJSONArray("types").getString(1) == "boolean")
+            try { BankAutomation.save(store, JSONObject().put("sources", JSONArray()).put("types", JSONArray()));error("empty types accepted") } catch (_: IllegalArgumentException) { }
+            check(BankAutomation.settings(store).getJSONArray("types").length() == 2) { "保存失败不能改掉已存的题型" }
+            // #126：朗读语言支持粤语，且留空表示跟随系统
+            check(SpeechReader.save(store, JSONObject().put("mode", "system").put("readLanguage", "zh-HK")).getString("readLanguage") == "zh-HK")
+            try { SpeechReader.save(store, JSONObject().put("mode", "system").put("readLanguage", "ja-JP"));error("invalid read language accepted") } catch (_: IllegalArgumentException) { }
+            check(SpeechReader.settings(store).getString("readLanguage") == "zh-HK")
+            SpeechReader.save(store, JSONObject().put("mode", "system").put("readLanguage", ""))
+            check(SpeechReader.settings(store).getString("readLanguage").isEmpty()) { "留空 = 跟随每道题的语言" }
+            store.upsertQuestion(JSONObject("""{"id":"canto","q":"粵語題目","a":["A","B"],"k":0,"language":"zh-HK"}"""))
+            store.deleteQuestions(listOf("canto"))
+            children(store, engine)
             try { BankAutomation.save(store, JSONObject().put("sources", JSONArray().put(JSONObject().put("name", "invalid").put("url", "file:///tmp/bank.json"))));error("invalid source accepted") } catch (_: IllegalArgumentException) { }
         } finally { store.close();context.deleteDatabase(name) }
     }
+    /** #132：多孩子档案——学习状态、规则、事件、复习进度都按孩子隔离 */
+    private fun children(store: LocalStore, engine: LearningEngine) {
+        check(store.activeChild() == LocalStore.DEFAULT_CHILD) { "默认孩子沿用旧存储键" }
+        val first = JSONObject(store.children().getJSONObject(0).toString())
+        check(store.children().length() == 1 && first.getString("name").isNotEmpty() && first.getBoolean("active"))
+
+        engine.saveConfig(JSONObject().put("dailyMinutes", 25))
+        store.set("used_ms", "60000")
+        val firstRounds = store.roundsDoneToday()
+        val second = store.createChild("小红").getString("id")
+        check(store.children().length() == 2)
+        try { store.createChild("小红"); error("duplicate child name accepted") } catch (_: IllegalArgumentException) { }
+
+        store.switchChild(second)
+        check(store.get("used_ms").ifEmpty { "0" } == "0") { "使用时长必须按孩子分开" }
+        check(store.config().getInt("dailyMinutes") == 25) { "新孩子沿用家长的规则，不用重配" }
+        engine.saveConfig(JSONObject().put("dailyMinutes", 10))
+        check(store.config().getInt("dailyMinutes") == 10)
+
+        // 事件统计只看当前孩子
+        store.logEvent("quiz_pass", JSONObject())
+        check(store.roundsDoneToday() == 1)
+        store.switchChild(LocalStore.DEFAULT_CHILD)
+        check(store.config().getInt("dailyMinutes") == 25) { "改一个孩子的规则不能影响另一个" }
+        check(store.roundsDoneToday() == firstRounds) { "完成组数不能串到别的孩子头上" }
+
+        // 复习进度按孩子分开
+        val studied = store.repetitionStats().getInt("studied")
+        store.upsertQuestion(JSONObject("""{"id":"sr","q":"间隔重复","a":["A","B"],"k":0}"""))
+        store.recordProgress("sr", 5)
+        check(store.repetitionStats().getInt("studied") == studied + 1)
+        val total = store.questions().length()
+        check(store.questions(spaced = true).length() == total) { "联表后不能把别的孩子的进度行连出来" }
+        store.switchChild(second)
+        check(store.repetitionStats().getInt("studied") == 0) { "复习进度必须按孩子隔离" }
+
+        // 删除孩子：连记录一起清掉，题目保留，第一个孩子不能删
+        store.switchChild(LocalStore.DEFAULT_CHILD)
+        store.deleteChild(second)
+        check(store.children().length() == 1 && store.questions().length() == total)
+        try { store.deleteChild(LocalStore.DEFAULT_CHILD); error("default child deleted") } catch (_: IllegalArgumentException) { }
+        try { store.switchChild("missing"); error("missing child accepted") } catch (_: IllegalArgumentException) { }
+        store.set("used_ms", "0")
+    }
+
+    /** 旧库（v6）升级：事件与复习进度补上 child 列，旧数据归第一个孩子 */
+    private fun childMigration(context: Context) {
+        val name = "children-migration-regression.db"
+        context.deleteDatabase(name)
+        try {
+            val file = context.getDatabasePath(name)
+            file.parentFile?.mkdirs()
+            val db = android.database.sqlite.SQLiteDatabase.openOrCreateDatabase(file, null)
+            db.execSQL("CREATE TABLE questions(id TEXT PRIMARY KEY, subject TEXT, level TEXT, difficulty INTEGER, stem TEXT NOT NULL, options TEXT NOT NULL, answer INTEGER NOT NULL, tip TEXT, enabled INTEGER DEFAULT 1, created_at INTEGER, details TEXT)")
+            db.execSQL("CREATE TABLE kv(k TEXT PRIMARY KEY, v TEXT)")
+            db.execSQL("CREATE TABLE events(id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, payload TEXT, ts INTEGER)")
+            db.execSQL("CREATE TABLE reviews(id TEXT PRIMARY KEY, nonce TEXT UNIQUE, state TEXT NOT NULL, payload TEXT NOT NULL, ts INTEGER)")
+            db.execSQL("CREATE TABLE question_progress(qid TEXT PRIMARY KEY, repetitions INTEGER NOT NULL, interval_days INTEGER NOT NULL, ease REAL NOT NULL, due_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)")
+            db.execSQL("CREATE TABLE question_stats(qid TEXT PRIMARY KEY, presented INTEGER NOT NULL DEFAULT 0, answered INTEGER NOT NULL DEFAULT 0, correct INTEGER NOT NULL DEFAULT 0, last_at INTEGER NOT NULL DEFAULT 0)")
+            db.execSQL("INSERT INTO questions(id,stem,options,answer) VALUES('old','旧题','[\"A\",\"B\"]',0)")
+            db.execSQL("INSERT INTO kv(k,v) VALUES('config','{\"dailyMinutes\":33}')")
+            db.execSQL("INSERT INTO events(type,payload,ts) VALUES('quiz_pass','{}',${System.currentTimeMillis()})")
+            db.execSQL("INSERT INTO question_progress(qid,repetitions,interval_days,ease,due_at,updated_at) VALUES('old',1,1,2.5,0,0)")
+            db.version = 6
+            db.close()
+            LocalStore(context, name).use { store ->
+                check(store.config().getInt("dailyMinutes") == 33) { "升级不能丢配置" }
+                check(store.activeChild() == LocalStore.DEFAULT_CHILD)
+                check(store.children().length() == 1) { "升级后要有第一个孩子" }
+                check(store.roundsDoneToday() == 1) { "旧的使用记录归第一个孩子" }
+                check(store.repetitionStats().getInt("studied") == 1) { "旧的复习进度归第一个孩子" }
+                store.recordProgress("old", 5)
+                check(store.repetitionStats().getInt("studied") == 1) { "复合主键下重复答题不能插出第二行" }
+            }
+        } finally { context.deleteDatabase(name) }
+    }
+
     private fun migration(context: Context) {
         val name = "migration-regression.db"
         context.deleteDatabase(name)

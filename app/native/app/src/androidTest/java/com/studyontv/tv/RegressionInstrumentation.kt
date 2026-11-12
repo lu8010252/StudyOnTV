@@ -10,11 +10,13 @@ import org.json.JSONObject
 class RegressionInstrumentation : Instrumentation() {
     private var probe = false
     private var video = false
+    private var children = false
     private var videoUrl = ""
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
         probe = arguments?.getString("probe") == "1"
         video = arguments?.getString("video") == "1"
+        children = arguments?.getString("children") == "1"
         videoUrl = arguments?.getString("url") ?: ""
         start()
     }
@@ -23,6 +25,11 @@ class RegressionInstrumentation : Instrumentation() {
         val results = Bundle()
         if (probe) {
             results.putString("stream", BugProbe.run(targetContext))
+            finish(Activity.RESULT_OK, results)
+            return
+        }
+        if (children) {
+            results.putString("stream", ChildrenProbe.run(targetContext))
             finish(Activity.RESULT_OK, results)
             return
         }

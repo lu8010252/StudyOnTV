@@ -86,14 +86,16 @@ object AiTtsRegression {
         // 留空沿用
         SpeechReader.save(store, JSONObject().put("mode", "azure").put("azureKey", ""))
         check(JSONObject(store.get("speech_settings", "{}")).getString("azureKey") == "azure-secret")
-        check(SpeechReader.recognitionLanguage("zh-TW") in listOf("zh-CN", "en-US", "en-GB")) { "白名单外语言必须降级到白名单内的语言" }
+        check(SpeechReader.recognitionLanguage("zh-HK") == "zh-HK") { "粤语题目按粤语识别（#126）" }
+        check(SpeechReader.recognitionLanguage("ja-JP") in SpeechReader.whitelist) { "白名单外语言必须降级到白名单内的语言" }
     }
 
     /** 语言回落：缺失 / 不支持时回落默认语言并标记降级，两种情况都失败时不抛异常 */
     private fun languageFallback() {
         check(SpeechReader.recognitionLanguage("zh-CN") == "zh-CN")
         check(SpeechReader.recognitionLanguage("en-GB") == "en-GB")
-        check(SpeechReader.recognitionLanguage("") == "zh-CN")
+        check(SpeechReader.recognitionLanguage("") in SpeechReader.whitelist) { "没标语言的题目按白名单内的语言识别" }
+        check(SpeechReader.recognitionLanguage("").let { it == SpeechReader.defaultLanguage() || it == "zh-CN" }) { "系统语言在白名单内时跟随系统（粤语 / 繁体系统不再强转普通话）" }
         check(SpeechReader.recognitionLanguage("ja-JP") != "ja-JP") { "白名单外的语言不能原样静默使用" }
 
         val missing = SpeechReader.resolveLanguage("ja-JP", "zh-CN") {

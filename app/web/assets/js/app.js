@@ -42,20 +42,21 @@
   }
   function pill() {
     var c = state.config, st = state.learning;
+    var who = (state.children && state.children.length > 1) ? (childName() + ' · ') : '';
     var left = Math.max(0, (c.roundsPerDay || 3) - (st.roundsDoneToday || 0));
     if ($('ver') && st.version) $('ver').textContent = 'v' + st.version + (st.monitor ? ' · 计时：' + st.monitor : '') + (st.diag ? ' · ' + st.diag : '');
-    if (st.override && st.override.mode === 'unlock') { $('topPill').textContent = '家长已解锁 · ' + left2(st.override.remainingSeconds); return; }
-    if (st.override && st.override.mode === 'indefinite') { $('topPill').textContent = '管控已关闭'; return; }
+    if (st.override && st.override.mode === 'unlock') { $('topPill').textContent = who + '家长已解锁 · ' + left2(st.override.remainingSeconds); return; }
+    if (st.override && st.override.mode === 'indefinite') { $('topPill').textContent = who + '管控已关闭'; return; }
     var point = st.activePoint;
     var pointName = point && point.name ? point.name : '';
     if (st.free) {
-      if (!pointName) { $('topPill').textContent = '自由时段'; return; }
-      $('topPill').textContent = (point.mode === 'exempt' ? '大人豁免 · ' : '网课时间 · ') + pointName + (point.until ? ' 至 ' + point.until : '');
+      if (!pointName) { $('topPill').textContent = who + '自由时段'; return; }
+      $('topPill').textContent = who + (point.mode === 'exempt' ? '大人豁免 · ' : '网课时间 · ') + pointName + (point.until ? ' 至 ' + point.until : '');
       return;
     }
     var remSec = (st.remainingSeconds || 0) + (st.freeQuotaSeconds || 0);
     var remStr = remSec > 0 ? (remSec < 3600 ? '剩 ' + Math.ceil(remSec / 60) + ' 分钟' : '剩 ' + Math.floor(remSec / 3600) + ' 小时 ' + Math.ceil((remSec % 3600) / 60) + ' 分') + ' · ' : '';
-    $('topPill').textContent = (pointName ? '网课时间 · ' + pointName + ' 至 ' + (point.until || '') + ' · ' : '') + remStr + '还剩 ' + left + ' 组' + (st.extraPool > 0 ? ' · 加练池 ' + st.extraPool + ' 题' : '') +
+    $('topPill').textContent = who + (pointName ? '网课时间 · ' + pointName + ' 至 ' + (point.until || '') + ' · ' : '') + remStr + '还剩 ' + left + ' 组' + (st.extraPool > 0 ? ' · 加练池 ' + st.extraPool + ' 题' : '') +
       (st.points && st.points.enabled && st.points.balance >= 0 ? ' · ⭐ ' + st.points.balance : '');
   }
   function left2(seconds) {
@@ -64,9 +65,19 @@
   }
   function loadState(callback) {
     request('/api/state', null, function (error, result) {
-      if (!error) { state.config = result.config; state.learning = result.learning; state.speech = result.speech || {}; pill(); applyTheme(result.config.theme); applyFont(); }
+      if (!error) {
+        state.config = result.config; state.learning = result.learning; state.speech = result.speech || {};
+        // 多孩子（#132）：孩子列表和当前是谁由设备端算好，页面只负责显示 / 切换
+        state.children = result.children || []; state.activeChild = result.activeChild || '';
+        pill(); applyTheme(result.config.theme); applyFont();
+      }
       if (callback) callback(error, result);
     });
+  }
+  function childName(id) {
+    var list = state.children || [];
+    for (var i = 0; i < list.length; i++) if (list[i].id === (id === undefined ? state.activeChild : id)) return list[i].name;
+    return '';
   }
   function applyFont() {
     var scale = Math.max(75, Math.min(200, +state.config.fontScale || 100));
@@ -160,7 +171,7 @@
     var qLength = (item.q || '').length;
     $('qText').className = 'question' + (qLength > 120 ? ' longer' : qLength > 56 ? ' long' : '');
     nativeCall('stopReading');
-    if (state.speech && state.speech.autoRead) nativeCall('readInLanguage', [item.q, item.language || 'zh-CN']);
+    if (state.speech && state.speech.autoRead) nativeCall('readInLanguage', [item.q, item.language || '']);
     renderMedia(item);
     var options = $('qOptions'); options.innerHTML = '';
     var longest = 0;
@@ -377,7 +388,39 @@
     }
     $('lockDesc').textContent = when ? '下次可用：' + when : reason === 'timeup' ? '完成学习任务后才能使用设备' : '现在暂不可用';
     $('lockNote').textContent = state.config.allDay ? '' : '可用时段 ' + state.config.windowStart + ' — ' + state.config.windowEnd;
-    $('lockActions').innerHTML = reason === 'timeup' ? '<button class="btn btn-primary focusable" data-action="retry">开始答题</button>' : '';
+    if (reason === 'timeup' && (state.children || []).length > 1) {
+      // 多个孩子时用「开始学习 · 名字」代替「开始答题」：谁开始就记在谁头上
+      $('lockActions').innerHTML = '';
+      appendChildChooser(true);
+      $('lockNote').textContent = '选择自己的名字开始，进度和使用时间按人分开记录';
+    } else {
+      $('lockActions').innerHTML = reason === 'timeup' ? '<button class="btn btn-primary focusable" data-action="retry">开始答题</button>' : '';
+    }
+    focusDefault();
+  }
+  /**
+   * 有多个孩子时，先问一句「是谁在学」再开始：每个人的进度、额度、历史都是分开的。
+   * 只在每次打开学习页时问一次，同一轮答题不会反复打断。
+   */
+  function appendChildChooser(start) {
+    (state.children || []).forEach(function (kid) {
+      var button = document.createElement('button');
+      button.className = 'btn ' + (kid.active ? 'btn-primary' : 'btn-ghost') + ' focusable';
+      button.setAttribute('data-action', 'start-as-child');
+      button.setAttribute('data-child', kid.id);
+      button.textContent = start ? '开始学习 · ' + kid.name : kid.name;
+      $('lockActions').appendChild(button);
+    });
+  }
+  function chooseChild() {
+    state.lockReason = state.learning.reason || 'timeup';   // 让 2 秒轮询不要把它冲掉
+    state.wasFree = !!state.learning.free;
+    show('lock'); icon($('lockIcon'), 'pencil');
+    $('lockTitle').textContent = '是谁在学？';
+    $('lockDesc').textContent = '每个孩子单独记录学习进度和使用时间';
+    $('lockActions').innerHTML = '';
+    appendChildChooser(false);
+    $('lockNote').textContent = '选自己的名字开始；家长可以在「设置 → 孩子」里添加或改名';
     focusDefault();
   }
   // 家长暂停了管控（比如大人要看电视）：拦截页换成提示，可以直接回桌面
@@ -466,7 +509,7 @@
         else start();
       });
     }
-    if (action === 'voice') nativeCall('answerVoice', [state.draft ? state.draft.text : '', state.round ? state.round.question.q : '', state.round ? state.round.question.language || 'zh-CN' : 'zh-CN']);
+    if (action === 'voice') nativeCall('answerVoice', [state.draft ? state.draft.text : '', state.round ? state.round.question.q : '', state.round ? state.round.question.language || '' : '']);
     if (action === 'handwrite') nativeCall('answerInput', [false]);
     if (action === 'choose-level') start(el.getAttribute('data-level'));
     if (action === 'type-answer' && !state.busy) nativeCall('answerText', [state.draft ? state.draft.text : '', state.round ? state.round.question.q : '']);
@@ -476,8 +519,22 @@
     if (action === 'clear-drawing') { state.draft.drawing = ''; renderQuestion(); }
     if (action === 'watch-lesson') nativeCall('watchLesson');
     if (action === 'play-audio' && state.round) nativeCall('playAudio', [state.round.question.audio || '']);
-    if (action === 'read-aloud') nativeCall('readInLanguage', [state.round ? state.round.question.q : '', state.round ? state.round.question.language || 'zh-CN' : 'zh-CN']);
+    if (action === 'read-aloud') nativeCall('readInLanguage', [state.round ? state.round.question.q : '', state.round ? state.round.question.language || '' : '']);
     if (action === 'retry') start();
+    if (action === 'start-as-child' && !state.busy) {
+      var kidId = el.getAttribute('data-child');
+      var wantStart = !state.chosen || state.lockReason === 'timeup';
+      state.chosen = true;
+      if (kidId === state.activeChild) { if (wantStart) start(); return; }
+      state.busy = true;
+      request('/api/children/switch', { id: kidId }, function (error, result) {
+        state.busy = false;
+        if (error) { toast(error); return; }
+        state.children = result.items || []; state.activeChild = result.active || ''; pill();
+        // 点名字就是为了开始：切换成功后直接开这一轮，不必再点一次
+        if (wantStart) start(); else route();
+      });
+    }
     if (action === 'skip-review') { request('/api/quiz/skip', {}, function (error, result) { if (error) { toast(error); return; } state.awaiting = false; state.reviewed = false; state.busy = false; start(); }); }
     if (action === 'return-learning') nativeCall('backToQuiz');
     if (action === 'home') nativeCall('exitToLauncher');
@@ -495,6 +552,7 @@
         if (state.config.blockSettingsDuringControl !== false && !state.learning.free) lock('settings');
         else { state.settingsGate = false; start(); }
       } else if (hash.indexOf('#/lock') === 0 && !state.learning.free) lock(state.learning.reason || 'timeup');
+      else if ((state.children || []).length > 1 && !state.chosen) chooseChild();
       else start();
     });
   }

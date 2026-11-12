@@ -15,6 +15,8 @@ object InputSupport {
     fun open(context: Context, web: WebView, voice: Boolean) = openText(context, web, "", "")
     fun openText(context: Context, web: WebView, draft: String, prompt: String) =
         AnswerInput.open(context, web, TvTextInputActivity::class.java) {
-            putExtra("draft", draft); putExtra("prompt", prompt); putExtra("language", AnswerInput.language())
+            putExtra("draft", draft); putExtra("prompt", prompt)
+            // 题目没标语言时跟随设备系统语言（#126），进输入页前统一换成白名单内的标签
+            putExtra("language", SpeechReader.recognitionLanguage(AnswerInput.language()))
         }
 }

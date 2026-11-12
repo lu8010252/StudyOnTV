@@ -12,14 +12,23 @@ let device:any={name:'客厅电视 · 开发预览',flavor:'tv',version:'0.3.10'
   brandTip:'小米电视：设置 → 应用 → 应用管理 → 题了个题 → 自启动，开启；省电策略设为「无限制」'}};
 let grading:any={mode:'parent',passScore:60,provider:'deepseek',endpoint:'https://api.deepseek.com/v1',model:'deepseek-flash',hasKey:false,providers:builtinProviders};
 let integration:any={enabled:false,read:true,control:false,hasToken:false};
-let speech:any={mode:'system',autoRead:false,azureKeySet:false,aliyunSecretSet:false};
-let automation:any={sources:[],autoAi:false,minimum:30,batch:10,masteryAttempts:5,masteryAccuracy:90,topic:'',running:false,status:{}};
+let speech:any={mode:'system',autoRead:false,readLanguage:'',azureKeySet:false,aliyunSecretSet:false};
+let children:any[]=[{id:'',name:'孩子1',createdAt:Date.now()-86400000,active:true},{id:'c2',name:'小红',createdAt:Date.now(),active:false}];
+let automation:any={sources:[],autoAi:false,minimum:30,batch:10,masteryAttempts:5,masteryAccuracy:90,topic:'',types:['single','text'],running:false,status:{}};
 const update={current:'0.3.10',version:'0.3.10',checking:false,hasUpdate:false,mirrors:[],log:[],api:''};
 
 // In-memory preview data: no device requests or persistent authentication.
 export async function previewApi(path:string,method:string,body:any){
  const route=path.split('?')[0];
- if(route==='/api/state')return structuredClone({config,learning,questions:questions.length,repetition:{studied:8,due:3}});
+ if(route==='/api/state')return structuredClone({config,learning,questions:questions.length,repetition:{studied:8,due:3},children,activeChild:children.find(c=>c.active)?.id||''});
+ if(route==='/api/children'){
+  if(method==='POST'){const name=String(body.name||'').trim();if(!name||children.some(c=>c.name===name))throw new Error('名字为空或重复');children.push({id:'preview-'+children.length,name,createdAt:Date.now(),active:false});}
+  else if(method==='PUT'){children=children.map(c=>c.id===body.id?{...c,name:String(body.name||'').trim()}:c);}
+  return structuredClone({items:children,active:children.find(c=>c.active)?.id||''});
+ }
+ if(route==='/api/children/switch'){children=children.map(c=>({...c,active:c.id===body.id}));return structuredClone({ok:true,items:children,active:body.id});}
+ if(route==='/api/children/delete'){children=children.filter(c=>c.id!==body.id);return structuredClone({ok:true,items:children,active:children.find(c=>c.active)?.id||''});}
+ if(route==='/api/system-settings')return{ok:true};
  if(route==='/api/remote'){
   if(body.action==='credit'){learning.remainingSeconds=Math.max(0,learning.remainingSeconds+body.minutes*60);learning.todayLimitMinutes=(learning.todayLimitMinutes??config.dailyMinutes)+body.minutes;return structuredClone({learning});}
   learning.override=body.action==='cancel'?null:{mode:body.action,remainingSeconds:(body.minutes||30)*60,at:Date.now()};

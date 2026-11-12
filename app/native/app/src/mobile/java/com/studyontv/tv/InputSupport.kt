@@ -16,6 +16,8 @@ object InputSupport {
     // 手机版之前丢了题干（#81）：与 TV 版保持一致，把 prompt 一起带过去
     fun openText(context: Context, web: WebView, draft: String, prompt: String) =
         AnswerInput.open(context, web, AnswerInputActivity::class.java) {
-            putExtra("draft", draft); putExtra("prompt", prompt); putExtra("language", AnswerInput.language())
+            putExtra("draft", draft); putExtra("prompt", prompt)
+            // 题目没标语言时跟随设备系统语言（#126），进输入页前统一换成白名单内的标签
+            putExtra("language", SpeechReader.recognitionLanguage(AnswerInput.language()))
         }
 }
