@@ -92,6 +92,25 @@ object FeatureRegression {
             check(engine.videoProgress(lessonId, true).getLong("remainingSeconds") == 0L)
             check(engine.completeVideo(lessonId).getDouble("rewardMinutes") > 0)
             try { engine.completeVideo(lessonId);error("video reward duplicated") } catch (_: IllegalArgumentException) { }
+            // 家长改「每次视频学习分钟」要立刻生效：以前直接复用旧任务，改时长等于没改
+            engine.saveConfig(JSONObject().put("learningContent", "video").put("videoMinutes", 1)
+                .put("educationalVideos", JSONArray().put("https://example.test/lesson.mp4")))
+            val retry = engine.start().getJSONObject("videoLesson")
+            val retryId = retry.getString("id")
+            store.set("video_lesson", JSONObject(store.get("video_lesson")).put("watchedMs", 30000).toString())
+            engine.saveConfig(JSONObject().put("learningContent", "video").put("videoMinutes", 5)
+                .put("educationalVideos", JSONArray().put("https://example.test/lesson.mp4")))
+            val longer = engine.start().getJSONObject("videoLesson")
+            check(longer.getString("id") == retryId) { "同一天同一地址应复用同一个任务: $longer" }
+            check(longer.getLong("requiredSeconds") == 300L) { "改时长应立即生效: $longer" }
+            check(longer.getLong("remainingSeconds") == 270L) { "已经看过的 30 秒不能因为改时长丢掉: $longer" }
+            // 任务跨天或被重建：播放页要能自己退出，而不是每秒抛一次异常把人卡在黑屏上
+            store.set("video_lesson", JSONObject(store.get("video_lesson")).put("day", 1).toString())
+            val expired = engine.videoProgress(retryId, true)
+            check(expired.optBoolean("expired")) { "过期任务应返回 expired: $expired" }
+            check(!expired.has("remainingSeconds")) { "过期任务不能带 remainingSeconds，否则会被当成已完成: $expired" }
+            try { engine.completeVideo(retryId);error("expired lesson must not grant reward") } catch (_: IllegalArgumentException) { }
+            store.set("video_lesson", "")
             remoteSync(store)
             store.set("active_round", JSONObject().put("id", "deleted-round").put("question", JSONObject().put("bank", "测试")).toString())
             TimePolicy(store) { -1 }.deadline("feedback_deadline", 60000)

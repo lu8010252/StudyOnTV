@@ -9,12 +9,26 @@ import org.json.JSONObject
 /** 无第三方测试依赖；只使用独立数据库，不修改家庭题库。 */
 class RegressionInstrumentation : Instrumentation() {
     private var probe = false
-    override fun onCreate(arguments: Bundle?) { super.onCreate(arguments); probe = arguments?.getString("probe") == "1"; start() }
+    private var video = false
+    private var videoUrl = ""
+    override fun onCreate(arguments: Bundle?) {
+        super.onCreate(arguments)
+        probe = arguments?.getString("probe") == "1"
+        video = arguments?.getString("video") == "1"
+        videoUrl = arguments?.getString("url") ?: ""
+        start()
+    }
 
     override fun onStart() {
         val results = Bundle()
         if (probe) {
             results.putString("stream", BugProbe.run(targetContext))
+            finish(Activity.RESULT_OK, results)
+            return
+        }
+        // 公益视频播放冒烟：-e video 1 -e url <可访问的 mp4 直链>
+        if (video) {
+            results.putString("stream", VideoProbe.run(targetContext, videoUrl))
             finish(Activity.RESULT_OK, results)
             return
         }
