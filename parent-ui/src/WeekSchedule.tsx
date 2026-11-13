@@ -51,6 +51,10 @@ export default function WeekSchedule({value,onChange,holidayMode,onHolidayMode}:
     {TEMPLATES.map(([label,make])=><Button key={label} type="button" size="sm" variant="outline" onClick={()=>onChange(make())}>{label}</Button>)}
    </ToolbarGroup>
   </Toolbar>
+  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+   <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-sm" style={{background:'var(--primary)'}}/>绿色：可以看（到点答题解锁）</span>
+   <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-sm" style={{background:'var(--secondary)'}}/>灰色：不开放</span>
+  </div>
   <div className="week-wrap min-w-0">
    <div className="week-scale">{[0,6,12,18,24].map(h=><span key={h}>{String(h).padStart(2,'0')}:00</span>)}</div>
    <div onPointerMove={move} onPointerLeave={()=>{paint.current=null;}}>
@@ -63,12 +67,12 @@ export default function WeekSchedule({value,onChange,holidayMode,onHolidayMode}:
   <FieldDescription className="text-xs">点击或拖动格子设置，每格 30 分钟；点星期几可以整行切换。每周共 {hours} 小时。</FieldDescription>
   <Field orientation="responsive" className="border-t border-border/60 pt-4">
    <FieldContent>
-    <FieldTitle className="items-center"><CalendarDays className="size-4 text-muted-foreground"/>法定节假日</FieldTitle>
-    <FieldDescription className="text-xs">{info?.count?`已同步 ${info.year} 年 ${info.count} 天${info.source?' · '+info.source:''}`:'未同步，默认按周日安排'}</FieldDescription>
+    <FieldTitle className="items-center"><CalendarDays className="size-4 text-muted-foreground"/>节假日</FieldTitle>
+    <FieldDescription className="text-xs">{info?.count?`已同步 ${info.year} 年 ${info.count} 天假期${info.source?' · '+info.source:''}`:'还没同步，节假日先按周日时间算'}</FieldDescription>
    </FieldContent>
    <div className="flex flex-wrap items-center gap-3">
-    <Field orientation="horizontal" className="w-auto gap-2"><FieldLabel htmlFor="holiday-sunday" className="font-normal">按周日安排</FieldLabel><Switch id="holiday-sunday" checked={holidayMode!=='normal'} onCheckedChange={v=>onHolidayMode(v?'sunday':'normal')}/></Field>
-    <Button type="button" size="sm" variant="outline" onClick={sync} disabled={busy}><RefreshCw className={busy?'animate-spin':''}/>{busy?'同步中…':'同步今年'}</Button>
+    <Field orientation="horizontal" className="w-auto gap-2"><FieldLabel htmlFor="holiday-sunday" className="font-normal">节假日按周日时间</FieldLabel><Switch id="holiday-sunday" checked={holidayMode!=='normal'} onCheckedChange={v=>onHolidayMode(v?'sunday':'normal')}/></Field>
+    <Button type="button" size="sm" variant="outline" onClick={sync} disabled={busy} title="从公开节假日数据拉取今年的放假安排（调休上班日不放假），之后节假日按周日时间算"><RefreshCw className={busy?'animate-spin':''}/>{busy?'同步中…':'同步今年节假日'}</Button>
    </div>
   </Field>
  </FieldSet>;

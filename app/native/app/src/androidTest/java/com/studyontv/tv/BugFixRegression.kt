@@ -242,7 +242,7 @@ object BugFixRegression {
             // 反复启动（服务被杀 / 开机自启）都不能把旧数据冲掉
             repeat(3) { attempt ->
                 LocalStore(context, name).use { migrated ->
-                    check(migrated.readableDatabase.version == 7) { "第${attempt + 1}次打开应当升级到 v7" }
+                    check(migrated.readableDatabase.version == 8) { "第${attempt + 1}次打开应当升级到 v8" }
                     check(migrated.get("active_round") == activeRound.toString()) { "升级后必须保留进行中的一轮" }
                     check(migrated.get("credit_ms") == "900000") { "升级后必须保留剩余时间" }
                     check(migrated.get("used_ms") == "600000") { "升级后必须保留已用时长" }

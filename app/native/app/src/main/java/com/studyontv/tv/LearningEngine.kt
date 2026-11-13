@@ -484,7 +484,15 @@ class LearningEngine(private val store: LocalStore) {
         val selectedLevel = round.optString("level")
         val banks = scope("quizBanks")
         val effLevels = if (selectedLevel.isEmpty()) levels else if (levels.isEmpty() || selectedLevel in levels) listOf(selectedLevel) else listOf("\u0000")
-        var question = store.pickQuestion(skip, last, config.optBoolean("spacedRepetitionEnabled"), Tune.minStar(store), subjects, effLevels, banks)
+        // 这一题是不是加练题：必须在选题前算出来，错题优先靠它决定要不要只从错题里出（上游 #136）
+        val extraEnabled = round.optJSONObject("rules")?.optBoolean("extraEnabled", true) ?: true
+        val extraStage = if (round.optString("mode") == "count") false else if (round.optString("mode") == "practice") number("extra_pool") > 0
+            else extraEnabled && round.optInt("answered") >= round.getInt("target")
+        val spaced = config.optBoolean("spacedRepetitionEnabled")
+        // 错题优先：加练题先出错题库里的题，错题不够时再按正常顺序补
+        var question = (if (config.optBoolean("wrongFirst") && extraStage)
+                store.pickQuestion(skip, last, spaced, Tune.minStar(store), subjects, effLevels, banks, wrongOnly = true) else null)
+            ?: store.pickQuestion(skip, last, spaced, Tune.minStar(store), subjects, effLevels, banks)
             ?: throw IllegalArgumentException(
                 if (subjects.isNotEmpty() || levels.isNotEmpty()) "当前答题范围没有题目，请检查题库的科目 / 年级或调整答题范围" else "题库为空，请由家长添加题目")
         recent.put(question.optString("id"))
@@ -496,9 +504,7 @@ class LearningEngine(private val store: LocalStore) {
         if (config.optBoolean("shuffleOptions")) question = QuestionOptions.shuffled(question)
         store.presented(question.getString("id"))
         round.put("question", question).put("nonce", UUID.randomUUID().toString())
-        val extraEnabled = round.optJSONObject("rules")?.optBoolean("extraEnabled", true) ?: true
-        round.put("extra", if (round.optString("mode") == "count") false else if (round.optString("mode") == "practice") number("extra_pool") > 0
-            else extraEnabled && round.optInt("answered") >= round.getInt("target"))
+        round.put("extra", extraStage)
     }
 
     private fun publicRound(round: JSONObject): JSONObject {
@@ -541,6 +547,7 @@ class LearningEngine(private val store: LocalStore) {
         if (round?.has("pendingReview") == true) return JSONObject().put("pending", true).put("reviewId", round.getString("pendingReview")).put("status", st)
         if (round != null && round.optInt("answered") == 0 && round.getJSONObject("rules").optInt("version") != c.optInt("version")) round = null
         if (round == null || round.optString("mode") != c.getString("playMode")) {
+            var selectedLevel = ""
             if (c.optBoolean("childSelectLevel")) {
                 val allowed = c.optJSONArray("quizLevels") ?: JSONArray()
                 val subjects = c.optJSONArray("quizSubjects") ?: JSONArray()
@@ -551,11 +558,12 @@ class LearningEngine(private val store: LocalStore) {
                     .filter { accepts(allowed, it.optString("level")) && accepts(subjects, it.optString("subject")) && accepts(banks, it.optString("bank", "默认题库")) }
                     .map { it.optString("level") }.filter { it.isNotBlank() }.distinct().sorted()
                 require(choices.isNotEmpty()) { "请先为启用题目标注年级，或关闭孩子选择年级" }
-                if (level == null) return JSONObject().put("chooseLevel", JSONArray(choices)).put("status", st)
-                require(level in choices) { "请选择家长允许的年级" }
+                if (level == null && choices.size > 1) return JSONObject().put("chooseLevel", JSONArray(choices)).put("status", st)
+                selectedLevel = level ?: choices.single()
+                require(selectedLevel in choices) { "请选择家长允许的年级" }
             }
             round = JSONObject().put("id", UUID.randomUUID().toString()).put("mode", c.getString("playMode"))
-                .put("level", if (c.optBoolean("childSelectLevel")) level else "")
+                .put("level", selectedLevel)
                 .put("target", c.getInt("questionsPerRound")).put("answered", 0).put("correct", 0)
                 .put("streak", 0).put("earnedMs", 0).put("rules", c)
             nextQuestion(round)

@@ -411,7 +411,8 @@ class LanServer(
             }
             path == "/api/device" && method == "GET" -> return json(out, 200, JSONObject().put("name", Prefs.deviceName(context))
                 .put("version", BuildConfig.VERSION_NAME).put("flavor", BuildConfig.FLAVOR).put("ip", localIp() ?: "").put("port", boundPort)
-                .put("uninstallProtected", UninstallGuard.active(context)).put("deviceOwner", UninstallGuard.owner(context)).put("autostart", Watchdog.report(context)).put("monitor", GateService.diagnostics(context))
+                .put("uninstallProtected", UninstallGuard.active(context)).put("deviceOwner", UninstallGuard.owner(context))
+                .put("launcherHidden", LauncherIcon.hidden(context)).put("autostart", Watchdog.report(context)).put("monitor", GateService.diagnostics(context))
                 .put("keepalive", KeepAlive.report(context)).put("buglyConsent", Prefs.buglyConsent(context)))
             path == "/api/device/bugly" && method == "PUT" -> {
                 val enabled = JSONObject(body).optBoolean("enabled")
@@ -430,6 +431,11 @@ class LanServer(
             path == "/api/device/uninstall-guard" && method == "PUT" -> {
                 UninstallGuard.setEnabled(context, true)
                 return json(out, 200, JSONObject().put("ok", true).put("uninstallProtected", UninstallGuard.active(context)))
+            }
+            path == "/api/device/launcher" && method == "PUT" -> {
+                // 只关桌面入口，不改应用本身的状态；家长面板可以随时恢复
+                val hidden = LauncherIcon.setHidden(context, JSONObject(body).optBoolean("hidden"))
+                return json(out, 200, JSONObject().put("ok", true).put("launcherHidden", hidden))
             }
             path == "/api/device" && method == "PUT" -> {
                 val name = JSONObject(body).optString("name").trim()

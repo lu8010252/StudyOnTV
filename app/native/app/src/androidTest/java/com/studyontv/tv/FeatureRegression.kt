@@ -6,9 +6,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 object FeatureRegression {
+    /** 单独跑隐藏桌面图标（-e launcher 1），改这块时不用等整套回归 */
+    fun launcher(context: Context) = launcherIcon(context)
+
     fun run(context: Context) {
         migration(context)
         childMigration(context)
+        levelSelection(context)
         val name = "feature-regression.db"
         context.deleteDatabase(name)
         val store = LocalStore(context, name)
@@ -141,6 +145,8 @@ object FeatureRegression {
             store.upsertQuestion(JSONObject("""{"id":"canto","q":"粵語題目","a":["A","B"],"k":0,"language":"zh-HK"}"""))
             store.deleteQuestions(listOf("canto"))
             children(store, engine)
+            wrongBank(context)
+            launcherIcon(context)
             try { BankAutomation.save(store, JSONObject().put("sources", JSONArray().put(JSONObject().put("name", "invalid").put("url", "file:///tmp/bank.json"))));error("invalid source accepted") } catch (_: IllegalArgumentException) { }
         } finally { store.close();context.deleteDatabase(name) }
     }
@@ -189,6 +195,90 @@ object FeatureRegression {
         store.set("used_ms", "0")
     }
 
+    /** #136 错题库：记录每题最近一次作答结果，错题优先，加练题从错题里出 */
+    private fun wrongBank(context: Context) {
+        val name = "feature-wrong.db"
+        context.deleteDatabase(name)
+        val store = LocalStore(context, name)
+        try {
+            val engine = LearningEngine(store)
+            engine.saveConfig(JSONObject().put("allDay", true).put("dailyLimitEnabled", false).put("roundsLimitEnabled", false)
+                .put("playMode", "practice").put("extraEnabled", true)
+                .put("wrongThreshold", 1).put("extraQuestions", 1).put("wrongReviewSeconds", 0).put("wrongFirst", true))
+            check(store.config().getBoolean("wrongFirst")) { "错题优先开关要能保存" }
+            listOf("q0", "q1", "q2", "q3").forEach {
+                store.upsertQuestion(JSONObject("""{"id":"$it","q":"$it","a":["对","错"],"k":0}"""))
+            }
+            fun statsOf(id: String): JSONObject {
+                val all = store.questions()
+                for (i in 0 until all.length()) if (all.getJSONObject(i).getString("id") == id) return all.getJSONObject(i).getJSONObject("stats")
+                error("题库里找不到 $id")
+            }
+            check(statsOf("q0").isNull("lastCorrect")) { "还没作答过的题不能算错题" }
+
+            store.answered("q0", false)
+            store.answered("q2", false)
+            check(statsOf("q0").get("lastCorrect") == false) { "答错后要记成错题" }
+            val ordered = store.questions(wrongFirst = true)
+            check(ordered.getJSONObject(0).getString("id") in listOf("q0", "q2") && ordered.getJSONObject(1).getString("id") in listOf("q0", "q2")) { "错题要排在最前面" }
+
+            var round = engine.start()
+            val firstId = round.getJSONObject("question").getString("id")
+            check(firstId in listOf("q0", "q2")) { "错题优先：第一题应当先出错题，实际 $round" }
+            var result = engine.answer(answer(round, 1)) // 答错，攒出 1 道加练题
+            check(!result.getBoolean("correct")) { "这题应当判错: $result" }
+
+            // 加练阶段：错题里还有另一道，必须从错题库里出
+            val extra = result.getJSONObject("next")
+            val extraId = extra.getJSONObject("question").getString("id")
+            check(extra.getBoolean("extra")) { "下一题应当是加练题: $extra" }
+            check(extraId != firstId && statsOf(extraId).get("lastCorrect") == false) { "加练题必须从错题里出，实际 $extra" }
+
+            result = engine.answer(answer(extra, 0)) // 答对加练题，错题库清空
+            check(result.getBoolean("correct"))
+            check(statsOf(firstId).get("lastCorrect") == false && statsOf(extraId).get("lastCorrect") == true) { "答对一次后要退出错题库" }
+            val back = result.getJSONObject("next")
+            check(back.getJSONObject("question").getString("id") == firstId) { "答错的题要重新排到前面，实际 $back" }
+
+            // 错题清空后抽题照常进行，不能把一轮卡住
+            result = engine.answer(answer(back, 0))
+            check(result.getBoolean("correct"))
+            val clean = store.questions(wrongFirst = true)
+            check((0 until clean.length()).none { clean.getJSONObject(it).getJSONObject("stats").get("lastCorrect") == false }) { "都已经答对，不该再有错题" }
+        } finally {
+            store.close()
+            context.deleteDatabase(name)
+        }
+    }
+
+    /** 隐藏桌面图标：只关启动入口 alias，MainActivity 和进程不受影响，随时可以恢复 */
+    private fun launcherIcon(context: Context) {
+        val pm = context.packageManager
+        // alias 名跟着 Manifest 包名走，不是 applicationId（调试包带 .debug 后缀也不会变）
+        val alias = pm.getPackageInfo(context.packageName, android.content.pm.PackageManager.GET_ACTIVITIES)
+            .activities!!.first { it.targetActivity == MainActivity::class.java.name }
+        val launcher = android.content.Intent(android.content.Intent.ACTION_MAIN)
+            .addCategory(android.content.Intent.CATEGORY_LAUNCHER).setPackage(context.packageName)
+        val before = LauncherIcon.hidden(context)
+        try {
+            check(LauncherIcon.setHidden(context, true)) { "隐藏后组件应当处于禁用状态" }
+            check(LauncherIcon.hidden(context)) { "隐藏状态要能读回来" }
+            check(pm.queryIntentActivities(launcher, 0).none { it.activityInfo.name == alias.name }) {
+                "隐藏后桌面不应该再列出这个入口"
+            }
+            // 应用本身还在：入口只是 alias，打开主界面和通知栏跳转都不受影响
+            check(pm.getActivityInfo(android.content.ComponentName(context, MainActivity::class.java.name), 0) != null) {
+                "隐藏图标不能动到 MainActivity"
+            }
+            check(!LauncherIcon.setHidden(context, false)) { "恢复后组件应当重新启用" }
+            check(pm.queryIntentActivities(launcher, 0).any { it.activityInfo.name == alias.name }) {
+                "恢复后桌面入口要重新出现"
+            }
+        } finally {
+            LauncherIcon.setHidden(context, before)
+        }
+    }
+
     /** 旧库（v6）升级：事件与复习进度补上 child 列，旧数据归第一个孩子 */
     private fun childMigration(context: Context) {
         val name = "children-migration-regression.db"
@@ -221,6 +311,57 @@ object FeatureRegression {
         } finally { context.deleteDatabase(name) }
     }
 
+    fun levelSelection(context: Context) {
+        val name = "level-selection-regression.db"
+        context.deleteDatabase(name)
+        val store = LocalStore(context, name)
+        try {
+            val engine = LearningEngine(store)
+            engine.saveConfig(JSONObject().put("playMode", "practice").put("childSelectLevel", true)
+                .put("quizBanks", JSONArray().put("数学")).put("quizSubjects", JSONArray().put("数学")))
+            fun expectNoLevels() {
+                try { engine.start(); error("没有可选年级时不能开始答题") }
+                catch (e: IllegalArgumentException) { check(e.message == "请先为启用题目标注年级，或关闭孩子选择年级") }
+                check(store.get("active_round").isEmpty())
+            }
+            fun add(id: String, level: String, bank: String = "数学", subject: String = "数学") {
+                store.upsertQuestion(JSONObject().put("id", id).put("q", id).put("type", "single")
+                    .put("a", JSONArray().put("yes").put("no")).put("k", 0)
+                    .put("level", level).put("bank", bank).put("subject", subject))
+            }
+            expectNoLevels()
+            add("four-a", "四年级"); add("four-b", "四年级")
+            add("other-bank", "一年级", bank = "其他")
+            add("other-subject", "二年级", subject = "英语")
+            add("paused", "三年级"); store.setEnabled(listOf("paused"), false)
+            add("unassigned", "")
+            val automatic = engine.start()
+            check(!automatic.has("chooseLevel") && automatic.getString("level") == "四年级") { "唯一可选年级应直接开始: $automatic" }
+            check(automatic.getJSONObject("question").getString("level") == "四年级") { "自动选择后不能抽到未标注年级的题" }
+            check(JSONObject(store.get("active_round")).getString("level") == "四年级")
+            check(store.config().getBoolean("childSelectLevel")) { "自动选择不能关闭多选时的年级选择功能" }
+            add("five", "五年级")
+            val resumed = engine.start("五年级")
+            check(resumed.getString("id") == automatic.getString("id") && resumed.getString("level") == "四年级") { "进行中的一轮不能切换年级" }
+            store.set("active_round", "")
+            val choices = engine.start().getJSONArray("chooseLevel")
+            check((0 until choices.length()).map { choices.getString(it) }.toSet() == setOf("四年级", "五年级"))
+            check(store.get("active_round").isEmpty()) { "等待选择时不能提前创建任务" }
+            try { engine.start("一年级"); error("不能选择范围外的年级") } catch (_: IllegalArgumentException) { }
+            check(engine.start("五年级").getJSONObject("question").getString("id") == "five")
+            store.set("active_round", "")
+            engine.saveConfig(JSONObject().put("quizLevels", JSONArray().put("四年级")))
+            check(engine.start().getString("level") == "四年级") { "家长筛选后只剩一个年级也应直接开始" }
+            store.set("active_round", "")
+            try { engine.start("五年级"); error("只有一个可选年级时也不能接受范围外的年级") } catch (_: IllegalArgumentException) { }
+            store.setEnabled(listOf("four-a", "four-b"), false)
+            expectNoLevels()
+            engine.saveConfig(JSONObject().put("childSelectLevel", false).put("quizLevels", JSONArray()))
+            val withoutSelection = engine.start()
+            check(!withoutSelection.has("chooseLevel") && withoutSelection.getString("level").isEmpty())
+        } finally { store.close(); context.deleteDatabase(name) }
+    }
+
     private fun migration(context: Context) {
         val name = "migration-regression.db"
         context.deleteDatabase(name)
@@ -237,6 +378,27 @@ object FeatureRegression {
                 check(question.getString("id") == "preserved" && question.getJSONObject("stats").getInt("presented") == 0)
             }
         } finally { context.deleteDatabase(name) }
+        // v7 老库的 question_stats 没有 last_correct，升级时要补上列，且老数据不丢
+        val v7 = "migration-v7-regression.db"
+        context.deleteDatabase(v7)
+        try {
+            LocalStore(context, v7).use { old ->
+                old.upsertQuestion(JSONObject("""{"id":"kept","q":"kept","a":["A","B"],"k":0}"""))
+                old.answered("kept", true)
+                old.writableDatabase.execSQL("DROP TABLE question_stats")
+                old.writableDatabase.execSQL("CREATE TABLE question_stats(qid TEXT PRIMARY KEY, presented INTEGER NOT NULL DEFAULT 0, answered INTEGER NOT NULL DEFAULT 0, correct INTEGER NOT NULL DEFAULT 0, last_at INTEGER NOT NULL DEFAULT 0)")
+                old.writableDatabase.execSQL("INSERT INTO question_stats(qid,answered,correct) VALUES('kept',1,1)")
+                old.writableDatabase.version = 7
+            }
+            LocalStore(context, v7).use { migrated ->
+                check(migrated.readableDatabase.version == 8)
+                val stats = migrated.questions().getJSONObject(0).getJSONObject("stats")
+                check(stats.getInt("answered") == 1 && stats.getInt("correct") == 1) { "升级不能丢掉旧统计: $stats" }
+                check(stats.isNull("lastCorrect")) { "旧库没有最近一次对错，应当当作未作答: $stats" }
+                migrated.answered("kept", false)
+                check(migrated.questions().getJSONObject(0).getJSONObject("stats").get("lastCorrect") == false) { "升级后要能记错题" }
+            }
+        } finally { context.deleteDatabase(v7) }
     }
     private fun remoteSync(store: LocalStore) {
         val server = java.net.ServerSocket(0, 4, java.net.InetAddress.getByName("127.0.0.1"))

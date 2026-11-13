@@ -105,7 +105,7 @@ export default function TimePoints({points,exempt,onPoints,onExempt}:{
      </div>
     </div>
    </Row>)}
-  <FieldDescription className="text-xs">按真实星期几生效（不受「法定节假日按周日安排」影响）；结束早于开始表示跨午夜，例如 23:30–00:30。</FieldDescription>
+  <FieldDescription className="text-xs">按真实星期几生效（不受「节假日按周日时间」影响）；结束早于开始表示跨午夜，例如 23:30–00:30。</FieldDescription>
 
   <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-4">
    <span className="text-sm font-medium">大人豁免时段</span>

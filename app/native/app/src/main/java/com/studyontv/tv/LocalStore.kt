@@ -9,7 +9,7 @@ import org.json.JSONObject
 import java.util.Calendar
 import java.util.UUID
 
-class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLiteOpenHelper(context, databaseName, null, 9) {
+class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLiteOpenHelper(context, databaseName, null, 10) {
     companion object {
         val DEFAULT_PRAISE = listOf("太棒了！", "答对啦！", "完全正确！", "真厉害！", "好样的，继续保持！", "漂亮！你越来越熟练了")
         val DEFAULT_ENCOURAGE = listOf("没关系，记住正确答案就好", "差一点点，下一题加油！", "错误也是学习的一部分", "别灰心，再接再厉！")
@@ -50,6 +50,8 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
             addColumn(db, "events", "child", "TEXT NOT NULL DEFAULT ''")
             migrateProgressForChildren(db)
         }
+        // 错题库（#136，上游在 v8 加的列；我们这边 v8/v9 已被占用，改在 v10 补，addColumn 已存在则跳过）
+        if (oldVersion < 10) addColumn(db, "question_stats", "last_correct", "INTEGER NOT NULL DEFAULT -1")
     }
 
     private fun addColumn(db: SQLiteDatabase, table: String, column: String, type: String) {
@@ -99,7 +101,8 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
 
     private fun createQuestionStats(db: SQLiteDatabase) {
         // IF NOT EXISTS：升级过程被打断 / 重复升级时不能整库异常，否则 /api/state、题库都读不出来
-        db.execSQL("CREATE TABLE IF NOT EXISTS question_stats(qid TEXT PRIMARY KEY, presented INTEGER NOT NULL DEFAULT 0, answered INTEGER NOT NULL DEFAULT 0, correct INTEGER NOT NULL DEFAULT 0, last_at INTEGER NOT NULL DEFAULT 0)")
+        // last_correct：最近一次作答是否正确，-1 = 还没作答过（错题库用它判断是不是错题）
+        db.execSQL("CREATE TABLE IF NOT EXISTS question_stats(qid TEXT PRIMARY KEY, presented INTEGER NOT NULL DEFAULT 0, answered INTEGER NOT NULL DEFAULT 0, correct INTEGER NOT NULL DEFAULT 0, last_at INTEGER NOT NULL DEFAULT 0, last_correct INTEGER NOT NULL DEFAULT -1)")
     }
 
     fun presented(id: String) {
@@ -109,7 +112,8 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
 
     fun answered(id: String, correct: Boolean) {
         writableDatabase.execSQL("INSERT OR IGNORE INTO question_stats(qid) VALUES(?)", arrayOf(id))
-        writableDatabase.execSQL("UPDATE question_stats SET answered=answered+1,correct=correct+?,last_at=? WHERE qid=?", arrayOf<Any>(if (correct) 1 else 0, System.currentTimeMillis(), id))
+        writableDatabase.execSQL("UPDATE question_stats SET answered=answered+1,correct=correct+?,last_correct=?,last_at=? WHERE qid=?",
+            arrayOf<Any>(if (correct) 1 else 0, if (correct) 1 else 0, System.currentTimeMillis(), id))
     }
 
     /** 题库里的题目 id：删除题库前先拿到，用来判断孩子手上那一轮是不是被删掉了。 */
@@ -524,7 +528,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
             require(input.getString("playMode") in listOf("round", "streak", "practice", "count")) { "未知玩法" }
             next.put("playMode", input.getString("playMode"))
         }
-        listOf("extraEnabled", "difficultyRewardEnabled", "allDay", "spacedRepetitionEnabled", "blockSettingsDuringControl", "shuffleOptions", "showCountdown", "dailyLimitEnabled", "roundsLimitEnabled", "restEnabled", "childSelectLevel", "trafficAssistEnabled", "backgroundAnchorEnabled", "forceFullscreenGate").forEach {
+        listOf("extraEnabled", "difficultyRewardEnabled", "allDay", "spacedRepetitionEnabled", "blockSettingsDuringControl", "shuffleOptions", "showCountdown", "dailyLimitEnabled", "roundsLimitEnabled", "restEnabled", "childSelectLevel", "trafficAssistEnabled", "backgroundAnchorEnabled", "forceFullscreenGate", "wrongFirst").forEach {
             if (input.has(it)) next.put(it, input.getBoolean(it))
         }
         for (key in listOf("praisePhrases", "encouragePhrases")) if (input.has(key)) {
@@ -582,7 +586,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
     }
 
     fun questions(subject: String? = null, level: String? = null, limit: Int = 200, spaced: Boolean = false,
-                   enabledOnly: Boolean = true, sortBy: String = "random"): JSONArray {
+                   enabledOnly: Boolean = true, sortBy: String = "random", wrongFirst: Boolean = false): JSONArray {
         val where = StringBuilder(if (enabledOnly) "enabled=1" else "1=1")
         val args = mutableListOf<String>()
         if (!subject.isNullOrEmpty()) { where.append(" AND subject=?"); args.add(subject) }
@@ -592,9 +596,11 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         // 复习进度是每个孩子各自一份（#132），只连当前孩子那一行，否则同一个 qid 会连出多条
         val source = (if (spaced) "questions LEFT JOIN question_progress progress ON questions.id=progress.qid AND progress.child=?".also { joinArgs.add(activeChild()) } else "questions") +
             " LEFT JOIN question_stats stats ON questions.id=stats.qid"
-        val order = if (spaced) "CASE WHEN progress.due_at<=${System.currentTimeMillis()} THEN 0 WHEN progress.qid IS NULL THEN 1 ELSE 2 END, progress.due_at ASC, RANDOM()"
+        val base = if (spaced) "CASE WHEN progress.due_at<=${System.currentTimeMillis()} THEN 0 WHEN progress.qid IS NULL THEN 1 ELSE 2 END, progress.due_at ASC, RANDOM()"
             else when (sortBy) { "newest" -> "questions.created_at DESC, questions.rowid DESC"; "oldest" -> "questions.created_at ASC, questions.rowid ASC"; else -> "RANDOM()" }
-        readableDatabase.rawQuery("SELECT questions.*,COALESCE(stats.presented,0) AS presented,COALESCE(stats.answered,0) AS answered_count,COALESCE(stats.correct,0) AS correct_count FROM $source WHERE $where ORDER BY $order LIMIT ${limit.coerceIn(1, 5000)}", (joinArgs + args).toTypedArray()).use { c ->
+        // 错题优先（#136）：最近一次答错的题排在最前面，答对一次就回到正常顺序
+        val order = if (wrongFirst) "CASE WHEN stats.last_correct=0 THEN 0 ELSE 1 END, $base" else base
+        readableDatabase.rawQuery("SELECT questions.*,COALESCE(stats.presented,0) AS presented,COALESCE(stats.answered,0) AS answered_count,COALESCE(stats.correct,0) AS correct_count,COALESCE(stats.last_correct,-1) AS last_correct FROM $source WHERE $where ORDER BY $order LIMIT ${limit.coerceIn(1, 5000)}", (joinArgs + args).toTypedArray()).use { c ->
             while (c.moveToNext()) {
                 val details = c.getString(c.getColumnIndexOrThrow("details"))
                 val item = if (details.isNullOrEmpty()) JSONObject() else JSONObject(details)
@@ -611,7 +617,9 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
                     .put("enabled", c.getInt(c.getColumnIndexOrThrow("enabled")) != 0)
                     .put("stats", JSONObject().put("presented", c.getInt(c.getColumnIndexOrThrow("presented")))
                         .put("answered", c.getInt(c.getColumnIndexOrThrow("answered_count")))
-                        .put("correct", c.getInt(c.getColumnIndexOrThrow("correct_count"))))
+                        .put("correct", c.getInt(c.getColumnIndexOrThrow("correct_count")))
+                        // null = 还没作答过；false = 最近一次答错（错题库），true = 最近一次答对
+                        .put("lastCorrect", c.getInt(c.getColumnIndexOrThrow("last_correct")).let { if (it < 0) JSONObject.NULL else it == 1 }))
                 if (!item.has("type")) item.put("type", "single")
                 out.put(item)
             }
@@ -643,7 +651,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
      */
     fun pickQuestion(skip: Set<String>, last: String?, spaced: Boolean, minStar: Int,
                      subjects: List<String> = emptyList(), levels: List<String> = emptyList(),
-                     banks: List<String> = emptyList()): JSONObject? {
+                     banks: List<String> = emptyList(), wrongOnly: Boolean = false): JSONObject? {
         fun query(skipIds: Collection<String>, star: Int): JSONObject? {
             val where = StringBuilder("questions.enabled=1")
             val args = ArrayList<String>()
@@ -657,10 +665,13 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
             }
             val order = if (spaced) "CASE WHEN p.due_at<=${System.currentTimeMillis()} THEN 0 WHEN p.qid IS NULL THEN 1 ELSE 2 END, p.due_at ASC, RANDOM()"
                 else "CASE WHEN p.qid IS NULL THEN 0 ELSE 1 END, COALESCE(p.updated_at,0), RANDOM()"
+            // 错题优先（#136，上游功能）：只从最近一次答错的题里抽
+            if (wrongOnly) where.append(" AND questions.id IN (SELECT qid FROM question_stats WHERE last_correct=0)")
             val list = ArrayList<JSONObject>()
             readableDatabase.rawQuery(
-                "SELECT questions.* FROM questions LEFT JOIN question_progress p ON questions.id=p.qid WHERE $where ORDER BY $order LIMIT ${if (banks.isEmpty()) 12 else 3000}",
-                args.toTypedArray()
+                // 艾宾浩斯进度是每个孩子各自一份（#132），只连当前孩子那一行
+                "SELECT questions.* FROM questions LEFT JOIN question_progress p ON questions.id=p.qid AND p.child=? WHERE $where ORDER BY $order LIMIT ${if (banks.isEmpty()) 12 else 3000}",
+                (listOf(activeChild()) + args).toTypedArray()
             ).use { c ->
                 while (c.moveToNext() && list.size < 12) {
                     val item = rowToItem(c)

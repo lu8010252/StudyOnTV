@@ -11,18 +11,28 @@ class RegressionInstrumentation : Instrumentation() {
     private var probe = false
     private var video = false
     private var children = false
+    private var levels = false
+    private var launcher = false
     private var videoUrl = ""
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
         probe = arguments?.getString("probe") == "1"
         video = arguments?.getString("video") == "1"
         children = arguments?.getString("children") == "1"
+        levels = arguments?.getString("levels") == "1"
+        launcher = arguments?.getString("launcher") == "1"
         videoUrl = arguments?.getString("url") ?: ""
         start()
     }
 
     override fun onStart() {
         val results = Bundle()
+        if (levels) {
+            FeatureRegression.levelSelection(targetContext)
+            results.putString("stream", "PASS: 年级选择（唯一年级自动开始、多年级选择、范围筛选、暂停题目、空题库、进行中任务保持年级）\n")
+            finish(Activity.RESULT_OK, results)
+            return
+        }
         if (probe) {
             results.putString("stream", BugProbe.run(targetContext))
             finish(Activity.RESULT_OK, results)
@@ -30,6 +40,17 @@ class RegressionInstrumentation : Instrumentation() {
         }
         if (children) {
             results.putString("stream", ChildrenProbe.run(targetContext))
+            finish(Activity.RESULT_OK, results)
+            return
+        }
+        // 隐藏桌面图标单项：-e launcher 1
+        if (launcher) {
+            results.putString("stream", try {
+                FeatureRegression.launcher(targetContext)
+                "PASS: 隐藏桌面图标（alias 开关、桌面入口、MainActivity 不受影响）\n"
+            } catch (e: Throwable) {
+                android.util.Log.getStackTraceString(e)
+            })
             finish(Activity.RESULT_OK, results)
             return
         }
@@ -116,7 +137,7 @@ class RegressionInstrumentation : Instrumentation() {
             GatePresentationRegression.run(targetContext)
             VendorFixRegression.run(targetContext)
             TimePointsRegression.run(targetContext)
-            results.putString("stream", "PASS: 新需求回归（加减时、开机额度、持久休息、年级、简单模式、解析停留、统计、多题库、密钥设置）及既有回归；免费额度即时调整、重复保存、上下限、时段、跨天；100 次单选/多选答案映射、判断题；清空含暂停题及复习进度；前台包名/Activity 配对与清理；#110 静音与弹窗同源；#17 休息死区与面板扣时同口径；#93 前台不返回自身包名与陈旧缓存；#92 悬浮窗真实 addView 探针；#106/#87/#81 AI 密钥不回显、朗读语言回落与失败回报；#112 网课时段分钟边界/跨午夜/多天、free 不扣时、counted 换上限、豁免优先、旧配置不回归与保存校验\n")
+            results.putString("stream", "PASS: 新需求回归（加减时、开机额度、持久休息、年级、简单模式、解析停留、统计、多题库、密钥设置）及既有回归；免费额度即时调整、重复保存、上下限、时段、跨天；100 次单选/多选答案映射、判断题；清空含暂停题及复习进度；前台包名/Activity 配对与清理；#110 静音与弹窗同源；#17 休息死区与面板扣时同口径；#93 前台不返回自身包名与陈旧缓存；#92 悬浮窗真实 addView 探针；#106/#87/#81 AI 密钥不回显、朗读语言回落与失败回报；#112 网课时段分钟边界/跨午夜/多天、free 不扣时、counted 换上限、豁免优先、旧配置不回归与保存校验；#136 错题记录、错题优先排序与加练从错题库出、答对后出库；隐藏桌面图标（alias 开关、主界面不受影响）\n")
             finish(Activity.RESULT_OK, results)
         } catch (e: Throwable) {
             results.putString("stream", android.util.Log.getStackTraceString(e))

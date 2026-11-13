@@ -217,6 +217,14 @@ export default function DevicePanel({
     },
     onError: (error: any) => toast.error(error.message),
   });
+  const launcher = useMutation({
+    mutationFn: (hidden: boolean) => api('/api/device/launcher', 'PUT', { hidden }),
+    onSuccess: (result: any) => {
+      client.invalidateQueries({ queryKey: ['device', sessionId] });
+      toast.success(result.launcherHidden ? '桌面图标已隐藏，应用仍在后台运行' : '桌面图标已恢复');
+    },
+    onError: (error: any) => toast.error(error.message),
+  });
   const rename = useMutation({
     mutationFn: (nextName: string) => api('/api/device', 'PUT', { name: nextName.trim() }),
     onSuccess: (_result, nextName) => {
@@ -466,6 +474,21 @@ export default function DevicePanel({
               ) : (
                 <span className="text-sm text-muted-foreground">未开启</span>
               )}
+            </SettingItem>
+            <SettingItem
+              title="隐藏桌面图标"
+              description="桌面和电视应用列表不再显示图标，孩子看不到也点不到；管控、后台服务照常运行。要恢复：点通知栏的「使用时间管理」通知打开应用，或在这里关闭。"
+              wideControl
+            >
+              <Switch
+                checked={!!device.data?.launcherHidden}
+                disabled={launcher.isPending || !device.data}
+                onCheckedChange={hidden => {
+                  if (hidden && !confirm('隐藏后桌面不再显示图标。恢复方法：点通知栏的「使用时间管理」通知，或在家长面板这里关闭。确认隐藏吗？')) return;
+                  launcher.mutate(hidden);
+                }}
+                aria-label="隐藏桌面图标"
+              />
             </SettingItem>
             <SettingItem
               title="浏览器练习"

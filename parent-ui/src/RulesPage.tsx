@@ -47,8 +47,8 @@ const fieldLabels:Record<string,string>={
  restMinutes:'强制休息分钟',sessionMinutes:'通过一组解锁分钟',wrongThreshold:'累计答错题数',extraQuestions:'每次增加加练题数',
  dailyLimitEnabled:'启用每日时长上限',shuffleOptions:'随机打乱选项',showCountdown:'显示剩余时间角标',
  roundsLimitEnabled:'启用每日组数上限',restEnabled:'强制休息',trafficAssistEnabled:'流量辅助识别播放',
- backgroundAnchorEnabled:'后台保活锚点窗口',blockSettingsDuringControl:'管控期间拦截系统设置',allDay:'全天可用',
- childSelectLevel:'孩子选择年级',difficultyRewardEnabled:'按题目星级奖励',extraEnabled:'答错累计加练',spacedRepetitionEnabled:'间隔重复复习',
+ backgroundAnchorEnabled:'后台保活锚点窗口',blockSettingsDuringControl:'锁定时禁止改系统设置',allDay:'全天管控',
+ childSelectLevel:'孩子选择年级',difficultyRewardEnabled:'按题目星级奖励',extraEnabled:'答错累计加练',spacedRepetitionEnabled:'间隔重复复习',wrongFirst:'错题优先',
 };
 
 const errorNames:Record<string,string>={timePoints:'网课时段',exemptWindows:'大人豁免'};
@@ -216,7 +216,7 @@ export default function RulesPage({state,sessionId}:{state:any,sessionId:number}
     <FieldSet className="gap-0">
      <FieldGroup className={fieldGroup}>
       <Field orientation="responsive" className="py-4">
-       <FieldContent><FieldTitle>孩子选择年级</FieldTitle><FieldDescription className="text-xs leading-5">每轮开始时从家长允许且有题目的年级中选择，进行中的一轮不能切换</FieldDescription></FieldContent>
+       <FieldContent><FieldTitle>孩子选择年级</FieldTitle><FieldDescription className="text-xs leading-5">每轮开始时从家长允许且有题目的年级中选择；只有一个可选年级时直接开始，进行中的一轮不能切换</FieldDescription></FieldContent>
        {toggle('childSelectLevel')}
       </Field>
       <Field orientation="responsive" className="py-4">
@@ -237,6 +237,10 @@ export default function RulesPage({state,sessionId}:{state:any,sessionId:number}
         {scopeLevels.length?scopeLevels.map(v=><FieldLabel key={v} className="cursor-pointer rounded-lg border border-border/70 px-3 py-2 font-normal transition-colors hover:bg-muted/40 has-data-[state=checked]:border-primary/40 has-data-[state=checked]:bg-primary/5"><Checkbox checked={inScope('quizLevels',v)} onCheckedChange={()=>toggleScope('quizLevels',v)}/><span>{v}</span></FieldLabel>):<FieldDescription className="text-xs">题库里还没有年级</FieldDescription>}
        </div>
       </Field>
+      <Field orientation="responsive" className="py-4">
+       <FieldContent><FieldTitle>错题优先</FieldTitle><FieldDescription className="text-xs leading-5">答错的题优先再出，加练题也从错题里选；答对一次后回到正常顺序</FieldDescription></FieldContent>
+       {toggle('wrongFirst')}
+      </Field>
      </FieldGroup>
     </FieldSet>
    </Panel>
@@ -246,8 +250,8 @@ export default function RulesPage({state,sessionId}:{state:any,sessionId:number}
     <FieldSet className="gap-0">
      <FieldGroup className={fieldGroup}>
       <Field orientation="responsive" className="py-4">
-       <FieldContent><FieldTitle>时段用途</FieldTitle><FieldDescription className="text-xs leading-5">例如只在放学后到睡前需要先答题</FieldDescription></FieldContent>
-       <Controller control={form.control} name="scheduleMode" render={({field})=><Choice label="时段用途" value={field.value||'allow'} onChange={v=>field.onChange(v)} options={[["allow","只在时段内可以使用"],["control","只在时段内需要先答题"]]}/>}/>
+       <FieldContent><FieldTitle>时间规则</FieldTitle><FieldDescription className="text-xs leading-5">只在设定时段内开放；时段外是锁定还是自由，选下面一项</FieldDescription></FieldContent>
+       <Controller control={form.control} name="scheduleMode" render={({field})=><Choice label="时间规则" value={field.value||'allow'} onChange={v=>field.onChange(v)} options={[["allow","时段内答题解锁，时段外锁定"],["control","时段内答题解锁，时段外自由看"]]}/>}/>
       </Field>
       <Field orientation="responsive" className="py-4">
        <FieldContent><FieldTitle>强制休息</FieldTitle><FieldDescription className="text-xs leading-5">累计实际观看达到阈值后必须休息；关屏、答题不计观看时间，重启不能跳过</FieldDescription></FieldContent>
@@ -272,7 +276,7 @@ export default function RulesPage({state,sessionId}:{state:any,sessionId:number}
        {toggle('backgroundAnchorEnabled')}
       </Field>
       <Field orientation="responsive" className="py-4">
-       <FieldContent><FieldTitle>管控期间拦截系统设置</FieldTitle><FieldDescription className="text-xs leading-5">自由时段不拦截，家长验证后可临时进入。需无障碍，或悬浮窗配合使用情况访问。</FieldDescription></FieldContent>
+       <FieldContent><FieldTitle>锁定时禁止改系统设置</FieldTitle><FieldDescription className="text-xs leading-5">锁定期间孩子进不了系统设置；家长验证后可临时进入。需要无障碍权限。</FieldDescription></FieldContent>
        {toggle('blockSettingsDuringControl')}
       </Field>
       <Field orientation="responsive" className="py-4">
@@ -280,7 +284,7 @@ export default function RulesPage({state,sessionId}:{state:any,sessionId:number}
        {toggle('forceFullscreenGate')}
       </Field>
       <Field orientation="responsive" className="py-4">
-       <FieldContent><FieldTitle>{c.scheduleMode==='control'?'全天都需要答题':'全天可用'}</FieldTitle></FieldContent>
+       <FieldContent><FieldTitle>全天管控</FieldTitle><FieldDescription className="text-xs leading-5">开启后不看时段，整天都按上面的规则走</FieldDescription></FieldContent>
        {toggle('allDay')}
       </Field>
       {!c.allDay&&<WeekSchedule value={c.weekSlots} onChange={v=>change('weekSlots',v)} holidayMode={c.holidayMode||'sunday'} onHolidayMode={v=>change('holidayMode',v)}/>}

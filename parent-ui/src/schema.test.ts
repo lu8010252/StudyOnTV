@@ -22,6 +22,10 @@ delete legacy.shuffleOptions;delete legacy.showCountdown;
 const migrated=ruleSchema.parse(legacy);
 assert.equal(migrated.shuffleOptions,false);
 assert.equal(migrated.showCountdown,true);
+// #136：旧版本没有「错题优先」，读出来默认关闭
+delete legacy.wrongFirst;
+assert.equal(ruleSchema.parse(legacy).wrongFirst,false);
+assert.equal(ruleSchema.parse({...defaults,wrongFirst:true}).wrongFirst,true);
 const configured=ruleSchema.parse({...defaults,shuffleOptions:true,showCountdown:false,dailyFreeMinutes:15});
 assert.equal(configured.shuffleOptions,true);
 assert.equal(configured.showCountdown,false);

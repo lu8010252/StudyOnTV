@@ -51,7 +51,7 @@ export default function QuestionBank({sessionId}:{sessionId:number}){
  const levels:any[]=[...new Set(questions.map((q:any)=>q.level).filter(Boolean))].sort();
  const banks:any[]=[...new Set(questions.map((q:any)=>q.bank||'默认题库'))].sort();
  const [bankFilter,setBankFilter]=useState('all'),[importBank,setImportBank]=useState('默认题库'),[documentBusy,setDocumentBusy]=useState(false);
- const [search,setSearch]=useState(''),[typeFilter,setTypeFilter]=useState('all'),[starFilter,setStarFilter]=useState('all'),[subjectFilter,setSubjectFilter]=useState('all'),[levelFilter,setLevelFilter]=useState('all'),[sort,setSort]=useState('default');
+ const [search,setSearch]=useState(''),[typeFilter,setTypeFilter]=useState('all'),[starFilter,setStarFilter]=useState('all'),[subjectFilter,setSubjectFilter]=useState('all'),[levelFilter,setLevelFilter]=useState('all'),[wrongFilter,setWrongFilter]=useState('all'),[sort,setSort]=useState('default');
  const [page,setPage]=useState(0),[selected,setSelected]=useState<string[]>([]),[drawer,setDrawer]=useState<string|null>(null);
  const [filtersOpen,setFiltersOpen]=useState(false);
  const [showAll,setShowAll]=useState(false);
@@ -65,11 +65,13 @@ export default function QuestionBank({sessionId}:{sessionId:number}){
  const aiProvider=(grading.data?.providers||[]).find((p:any)=>p.id===grading.data?.provider)?.name||'AI';
 
  const pausedCount=questions.filter((q:any)=>q.enabled===false).length;
- const filtered=useMemo(()=>{const k=search.trim().toLowerCase();const list=questions.filter((q:any)=>(showAll||q.enabled!==false)&&(bankFilter==='all'||(q.bank||'默认题库')===bankFilter)&&(typeFilter==='all'||(q.type||'single')===typeFilter)&&(starFilter==='all'||String(q.difficulty||2)===starFilter)&&(subjectFilter==='all'||(q.subject||'')===subjectFilter)&&(levelFilter==='all'||(q.level||'')===levelFilter)&&(!k||(q.q+' '+answerOf(q)+' '+q.tip+' '+(q.subject||'')+' '+(q.level||'')).toLowerCase().includes(k)));
+ // 错题库（#136）：最近一次答错的题
+ const wrongCount=questions.filter((q:any)=>q.stats?.lastCorrect===false).length;
+ const filtered=useMemo(()=>{const k=search.trim().toLowerCase();const list=questions.filter((q:any)=>(showAll||q.enabled!==false)&&(bankFilter==='all'||(q.bank||'默认题库')===bankFilter)&&(typeFilter==='all'||(q.type||'single')===typeFilter)&&(starFilter==='all'||String(q.difficulty||2)===starFilter)&&(subjectFilter==='all'||(q.subject||'')===subjectFilter)&&(levelFilter==='all'||(q.level||'')===levelFilter)&&(wrongFilter==='all'||q.stats?.lastCorrect===false)&&(!k||(q.q+' '+answerOf(q)+' '+q.tip+' '+(q.subject||'')+' '+(q.level||'')).toLowerCase().includes(k)));
   if(sort==='diff')return [...list].sort((a:any,b:any)=>(b.difficulty||2)-(a.difficulty||2));
   if(sort==='type')return [...list].sort((a:any,b:any)=>String(a.type).localeCompare(String(b.type))||(b.difficulty||2)-(a.difficulty||2));
   return list;
- },[questions,search,typeFilter,starFilter,subjectFilter,levelFilter,sort,showAll,bankFilter]);
+ },[questions,search,typeFilter,starFilter,subjectFilter,levelFilter,wrongFilter,sort,showAll,bankFilter]);
  const shown=filtered.slice(page*PAGE,page*PAGE+PAGE);
  const current=drawer?questions.find((q:any)=>q.id===drawer):null;
  const drawerIndex=current?filtered.findIndex((q:any)=>q.id===current.id):-1;
@@ -99,9 +101,9 @@ export default function QuestionBank({sessionId}:{sessionId:number}){
  const agentPrompt=`请给「题了个题」出 ${aiForm.count} 道题，范围：${aiForm.topic||'（填写出题范围）'}。\n只返回 JSON：{"items":[{"type":"single","q":"题干","a":["选项A","选项B"],"k":1,"difficulty":2,"tip":"解析"}]}\ntype 可用 single / multiple（correctIndices）/ boolean（a 固定 ["正确","错误"]，k 0 或 1）/ text（answers）/ subjective（modelAnswer、rubric）。\n难度 1-5，题干不要 HTML。`;
  const jsonPrompt=agentPrompt+`\n\n写好后再调用：POST ${base}/api/questions\n请求头：Content-Type: application/json、Authorization: Bearer <管理令牌>\n请求体：{"items":[题目数组]}`;
  const aiSelected=aiItems.filter((q:any)=>q.include).length;
- const extraFilterCount=[subjectFilter,levelFilter,sort].filter((value,index)=>index<2?value!=='all':value!=='default').length;
- const hasFilters=!!(search||bankFilter!=='all'||typeFilter!=='all'||starFilter!=='all'||subjectFilter!=='all'||levelFilter!=='all'||showAll||sort!=='default');
- function resetFilters(){setSearch('');setBankFilter('all');setTypeFilter('all');setStarFilter('all');setSubjectFilter('all');setLevelFilter('all');setShowAll(false);setSort('default');setPage(0);}
+ const extraFilterCount=[subjectFilter,levelFilter,wrongFilter].filter(value=>value!=='all').length+(sort!=='default'?1:0);
+ const hasFilters=!!(search||bankFilter!=='all'||typeFilter!=='all'||starFilter!=='all'||subjectFilter!=='all'||levelFilter!=='all'||wrongFilter!=='all'||showAll||sort!=='default');
+ function resetFilters(){setSearch('');setBankFilter('all');setTypeFilter('all');setStarFilter('all');setSubjectFilter('all');setLevelFilter('all');setWrongFilter('all');setShowAll(false);setSort('default');setPage(0);}
 
  return <>
   <Toolbar aria-label="题库页工具栏" className="flex-col items-stretch gap-3 sm:flex-row sm:items-center">
@@ -133,7 +135,7 @@ export default function QuestionBank({sessionId}:{sessionId:number}){
   <Card className="mt-4 gap-0 py-0 shadow-none">
    <CardHeader className="border-b px-4 py-3 sm:px-5">
     <CardTitle className="text-sm">查找与筛选</CardTitle>
-    <CardDescription>共 {questions.length} 道题，当前显示 {filtered.length} 道</CardDescription>
+    <CardDescription>共 {questions.length} 道题{wrongCount>0?`，其中 ${wrongCount} 道错题`:''}，当前显示 {filtered.length} 道</CardDescription>
     <CardAction className="col-auto row-auto">
      <Button type="button" size="sm" variant={filtersOpen||extraFilterCount?'secondary':'outline'} aria-expanded={filtersOpen} onClick={()=>setFiltersOpen(v=>!v)}>
       <SlidersHorizontal/>更多筛选{extraFilterCount>0&&<Badge variant="secondary">{extraFilterCount}</Badge>}
@@ -156,6 +158,7 @@ export default function QuestionBank({sessionId}:{sessionId:number}){
     {filtersOpen&&<FieldGroup className="mt-4 grid grid-cols-1 gap-3 border-t pt-4 sm:grid-cols-2 lg:grid-cols-4">
      <FilterField label="科目"><FilterSelect label="科目筛选" value={subjectFilter} onChange={value=>{setSubjectFilter(value);setPage(0);}} options={[['all','全部科目'],...subjects.map(v=>[v,v] as [string,string])]}/></FilterField>
      <FilterField label="年级"><FilterSelect label="年级筛选" value={levelFilter} onChange={value=>{setLevelFilter(value);setPage(0);}} options={[['all','全部年级'],...levels.map(v=>[v,v] as [string,string])]}/></FilterField>
+     <FilterField label="掌握"><FilterSelect label="掌握情况筛选" value={wrongFilter} onChange={value=>{setWrongFilter(value);setPage(0);}} options={[['all','全部题目'],['wrong',`只看错题${wrongCount>0?`（${wrongCount}）`:''}`]]}/></FilterField>
      <FilterField label="排序"><FilterSelect label="排序方式" value={sort} onChange={value=>{setSort(value);setPage(0);}} options={[['default','默认顺序'],['diff','难度从高到低'],['type','按题型']]}/></FilterField>
      <UiField orientation="horizontal" className="items-center self-end pb-2"><FieldLabel className="text-sm font-normal">包含已暂停</FieldLabel><Switch className="ms-auto" checked={showAll} onCheckedChange={setShowAll} aria-label="包含已暂停题目"/></UiField>
     </FieldGroup>}
@@ -265,7 +268,7 @@ export default function QuestionBank({sessionId}:{sessionId:number}){
      <MathText text={current.q} className="mb-5 whitespace-pre-wrap text-[16px] font-medium leading-7"/>
      {['single','multiple','boolean'].includes(current.type)&&<FieldGroup className="mb-5 gap-2">{(current.type==='boolean'?['正确','错误']:current.a||[]).map((opt:string,i:number)=>{const on=current.type==='multiple'?(current.correctIndices||[]).includes(i):i===current.k;return <UiField key={i} orientation="horizontal" className={'gap-2.5 rounded-md border p-2.5 text-sm '+(on?'border-primary/40 bg-primary/5':'')}><span className={'flex size-5 shrink-0 items-center justify-center rounded-full border text-[10px] '+(on?'border-primary bg-primary text-primary-foreground':'text-muted-foreground')}>{on?<Check className="size-3"/>:String.fromCharCode(65+i)}</span><span>{opt}</span></UiField>;})}</FieldGroup>}
      <FieldGroup className="mb-5 gap-3"><UiField><FieldTitle>{current.type==='text'?'可接受答案':current.type==='subjective'?'参考答案':'答案'}</FieldTitle><FieldDescription className="whitespace-pre-wrap text-foreground">{current.type==='text'?(current.answers||[]).join('\n'):answerOf(current)}</FieldDescription></UiField>{current.type==='subjective'&&current.rubric&&<UiField><FieldTitle>评分标准</FieldTitle><FieldDescription className="whitespace-pre-wrap text-foreground">{current.rubric}</FieldDescription></UiField>}{current.tip&&<UiField><FieldTitle>解析</FieldTitle><MathText text={current.tip} className="whitespace-pre-wrap text-sm leading-6 text-muted-foreground"/></UiField>}</FieldGroup>
-     <FieldGroup className="gap-2"><UiField><FieldTitle>题目信息</FieldTitle><FieldDescription>题库：{current.bank||'默认题库'} · 出题 {current.stats?.presented||0} 次 · 作答 {current.stats?.answered||0} 次 · 正确率 {current.stats?.answered?Math.round(current.stats.correct/current.stats.answered*100):0}%</FieldDescription></UiField><UiField><FieldTitle>题目编号</FieldTitle><FieldDescription className="break-all font-mono">{current.id}</FieldDescription></UiField></FieldGroup>
+     <FieldGroup className="gap-2"><UiField><FieldTitle>题目信息</FieldTitle><FieldDescription>题库：{current.bank||'默认题库'} · 出题 {current.stats?.presented||0} 次 · 作答 {current.stats?.answered||0} 次 · 正确率 {current.stats?.answered?Math.round(current.stats.correct/current.stats.answered*100):0}% · 最近一次：{current.stats?.lastCorrect===false?'答错':current.stats?.lastCorrect===true?'答对':'未作答'}</FieldDescription></UiField><UiField><FieldTitle>题目编号</FieldTitle><FieldDescription className="break-all font-mono">{current.id}</FieldDescription></UiField></FieldGroup>
     </div>
     <SheetFooter className="gap-0 border-t p-3">
      <Toolbar className="flex-wrap gap-2">
