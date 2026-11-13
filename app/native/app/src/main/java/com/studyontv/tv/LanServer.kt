@@ -444,7 +444,22 @@ class LanServer(
                 return json(out, 200, JSONObject().put("ok", true).put("name", name))
             }
             path == "/api/grading" && method == "PUT" -> return json(out, 200, GradingService.save(store, JSONObject(body)))
-            path == "/api/reviews" && method == "GET" -> return json(out, 200, JSONObject().put("items", store.reviews(q["state"] ?: "pending")))
+            path == "/api/reviews" && method == "GET" -> {
+                val items = store.reviews(q["state"] ?: "pending")
+                // 列表里可能有一条条整张手写图（PNG data URL），「已批改」这类历史列表用 summary 省流量：
+                // 只留 hasDrawing 标记，展开某条时再用 GET /api/reviews/{id} 取原图
+                if (q["view"] == "summary") for (i in 0 until items.length()) {
+                    val input = items.getJSONObject(i).optJSONObject("input") ?: continue
+                    if (input.optString("drawing").isNotEmpty()) input.put("hasDrawing", true)
+                    input.remove("drawing")
+                }
+                return json(out, 200, JSONObject().put("items", items))
+            }
+            path.startsWith("/api/reviews/") && method == "GET" -> {
+                val id = path.removePrefix("/api/reviews/").substringBefore('/')
+                val review = store.review(id) ?: return json(out, 404, err("not_found"))
+                return json(out, 200, review)
+            }
             path.startsWith("/api/reviews/") && method == "POST" -> {
                 val id = path.removePrefix("/api/reviews/").substringBefore('/')
                 if (path.endsWith("/retry")) {

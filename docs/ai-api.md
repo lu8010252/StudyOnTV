@@ -108,6 +108,7 @@ Body: {"passphrase":"<管理密码>"}
 - `GET /api/grading`：读取批改设置，密钥只返回是否已配置。
 - `PUT /api/grading`：保存 `mode`（`manual` / `ai`）、`endpoint`、`model`、`apiKey`、`vision`、`passScore`。省略或留空密钥表示保持原值。
 - `GET /api/reviews?state=all`：查询近期作答及批改结果。
+- `GET /api/reviews?state=all&view=summary`：同上，但不返回手写图片正文，`input.hasDrawing` 表示有图；`GET /api/reviews/<id>` 可取单条完整作答（含图片）。家长面板「批改 → 已批改」用这组接口回看分数和批改意见。
 - `POST /api/reviews/<id>/retry`：按当前 AI 设置重试。
 
 ## 玩法规则

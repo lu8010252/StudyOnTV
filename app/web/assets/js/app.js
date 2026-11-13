@@ -87,7 +87,7 @@
     document.documentElement.style.setProperty('--learn-scale', String(scale / 100));
     document.documentElement.style.fontSize = (base * scale / 100) + 'px'; state.fontScale = scale;
   }
-  window.addEventListener('resize', function () { state.fontScale = 0; applyFont(); });
+  window.addEventListener('resize', function () { state.fontScale = 0; applyFont(); window.setTimeout(fitQuiz, 0); });
   function start(level) {
     if (state.busy) return;
     state.busy = true;
@@ -209,6 +209,26 @@
     var readBtn = document.createElement('button'); readBtn.className = 'btn btn-ghost focusable'; readBtn.setAttribute('data-action', 'read-aloud'); readBtn.textContent = '朗读题目'; options.appendChild(readBtn);
     window.SOTV_MATH($('qText')); window.SOTV_MATH(options);
     focusDefault();
+    // #141：排版要等公式 / 图片渲染完再量；这一步不会改变正常字号下的显示
+    window.setTimeout(fitQuiz, 0);
+  }
+  // #141：电视上系统字体被调大、或家长把「学习页字号」调大后，题干会被顶到页头后面、选项超出屏幕。
+  // 先按原样量一次；放不下就换两档更紧凑的排版；还放不下就改成整页可滚动（舞台会跟着滚动）。
+  function fitQuiz() {
+    var wrap = document.querySelector('#screen-quiz .quiz-wrap');
+    if (!wrap) return;
+    if (!isTv() || !state.round || state.screen !== 'quiz') { wrap.className = 'quiz-wrap'; return; }
+    var head = wrap.querySelector('.quiz-head'), foot = wrap.querySelector('.quiz-foot');
+    var question = $('qText'), options = $('qOptions');
+    // 前两档要求整屏放下；最后一档允许超出，交给 #stage 滚动
+    var steps = ['', 'compact', 'compact-2'];
+    for (var i = 0; i < steps.length; i++) {
+      wrap.className = 'quiz-wrap' + (steps[i] ? ' ' + steps[i] : '');
+      var headRect = head.getBoundingClientRect(), footRect = foot.getBoundingClientRect();
+      var qRect = question.getBoundingClientRect(), optionsRect = options.getBoundingClientRect();
+      if (qRect.top >= headRect.bottom + 6 && optionsRect.bottom <= footRect.top - 6) return;
+    }
+    wrap.className = 'quiz-wrap compact-2 scroll';
   }
   function renderMedia(item) {
     var box = $('qMedia'); box.innerHTML = '';
@@ -466,6 +486,14 @@
   function reveal(el) {
     // 旧版电视 WebView 不支持 scrollIntoView({block}) 参数，手动滚动到可见
     var r = el.getBoundingClientRect(), h = window.innerHeight || document.documentElement.clientHeight;
+    var stage = $('stage');
+    // #141：电视上 body 不滚动，放不下时滚动的是 #stage；只为 #stage 滚动会失效
+    if (stage && stage.scrollHeight > stage.clientHeight + 1) {
+      var s = stage.getBoundingClientRect();
+      if (r.top < s.top + 12) stage.scrollTop += r.top - s.top - 12;
+      else if (r.bottom > s.bottom - 12) stage.scrollTop += r.bottom - s.bottom + 12;
+      return;
+    }
     if (r.top < 0) window.scrollBy(0, r.top - 24); else if (r.bottom > h) window.scrollBy(0, r.bottom - h + 24);
   }
   function setFocus(index) {

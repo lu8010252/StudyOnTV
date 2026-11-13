@@ -56,7 +56,8 @@ object KeepAlive {
             name.contains("tcl") -> "TCL 电视：设置 → 应用 → 题了个题 → 自启动，开启「允许自启动」"
             name.contains("hisense") || name.contains("vidaa") -> "海信电视：设置 → 应用管理 → 题了个题 → 权限 → 允许自启动"
             name.contains("skyworth") || name.contains("coocaa") -> "创维 / 酷开：设置 → 应用 → 题了个题 → 自启动权限，设为允许"
-            name.contains("xiaomi") || name.contains("redmi") -> "小米电视：设置 → 应用 → 应用管理 → 题了个题 → 自启动，开启；省电策略设为「无限制」"
+            // #141：HyperOS 电视有的版本把「应用管理」整个去掉了，家长找不到入口
+            name.contains("xiaomi") || name.contains("redmi") -> "小米 / Redmi 电视：设置 → 应用 → 应用管理 → 题了个题，允许自启动，省电策略设为「无限制」。新版系统没有「应用管理」入口时不用强求：本页「管控服务」「开机自启」正常即可，需要跳转时点下面的「打开系统设置」"
             name.contains("changhong") -> "长虹电视：设置 → 应用管理 → 题了个题 → 允许后台运行"
             name.contains("huawei") || name.contains("honor") -> "华为 / 荣耀智慧屏：设置 → 应用 → 应用启动管理 → 题了个题 → 手动管理，全部允许"
             name.contains("sony") -> "索尼电视：设置 → 应用 → 题了个题 → 电池 → 不受限制"

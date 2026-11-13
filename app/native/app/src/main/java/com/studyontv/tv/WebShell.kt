@@ -44,6 +44,9 @@ class WebShell(private val context: Context) {
         s.setSupportZoom(false)
         s.builtInZoomControls = false
         s.displayZoomControls = false
+        // #141：电视把系统字体调大后，WebView 会把学习页的字再放大一遍，题干被顶出屏幕；
+        // 页面自己按 0.5208vw 和「学习页字号」缩放，这里固定 100%，只认家长设置的值
+        s.textZoom = 100
         s.useWideViewPort = true
         s.loadWithOverviewMode = false
         s.userAgentString = s.userAgentString + " StudyOnTV/0.1 (AndroidTV)"
