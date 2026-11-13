@@ -371,7 +371,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
             .put("bootFreeMinutes", 0).put("dailyLimitEnabled", true).put("roundsLimitEnabled", true)
             .put("restEnabled", false).put("restWatchMinutes", 40).put("restMinutes", 10)
             .put("wrongReviewSeconds", 0).put("fontScale", 100).put("childSelectLevel", false)
-            .put("trafficAssistEnabled", false).put("backgroundAnchorEnabled", true)
+            .put("trafficAssistEnabled", false)
             // #122：部分固件（海信 VIDAA）会把普通应用的全屏悬浮窗压在硬件视频层下面，
             // 家长可强制改走全屏学习页；默认仍由 GateService 按可见性自动判断。
             .put("forceFullscreenGate", false)
@@ -528,7 +528,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
             require(input.getString("playMode") in listOf("round", "streak", "practice", "count")) { "未知玩法" }
             next.put("playMode", input.getString("playMode"))
         }
-        listOf("extraEnabled", "difficultyRewardEnabled", "allDay", "spacedRepetitionEnabled", "blockSettingsDuringControl", "shuffleOptions", "showCountdown", "dailyLimitEnabled", "roundsLimitEnabled", "restEnabled", "childSelectLevel", "trafficAssistEnabled", "backgroundAnchorEnabled", "forceFullscreenGate", "wrongFirst").forEach {
+        listOf("extraEnabled", "difficultyRewardEnabled", "allDay", "spacedRepetitionEnabled", "blockSettingsDuringControl", "shuffleOptions", "showCountdown", "dailyLimitEnabled", "roundsLimitEnabled", "restEnabled", "childSelectLevel", "trafficAssistEnabled", "forceFullscreenGate", "wrongFirst").forEach {
             if (input.has(it)) next.put(it, input.getBoolean(it))
         }
         for (key in listOf("praisePhrases", "encouragePhrases")) if (input.has(key)) {

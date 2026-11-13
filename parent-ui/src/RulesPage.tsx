@@ -47,7 +47,7 @@ const fieldLabels:Record<string,string>={
  restMinutes:'强制休息分钟',sessionMinutes:'通过一组解锁分钟',wrongThreshold:'累计答错题数',extraQuestions:'每次增加加练题数',
  dailyLimitEnabled:'启用每日时长上限',shuffleOptions:'随机打乱选项',showCountdown:'显示剩余时间角标',
  roundsLimitEnabled:'启用每日组数上限',restEnabled:'强制休息',trafficAssistEnabled:'流量辅助识别播放',
- backgroundAnchorEnabled:'后台保活锚点窗口',blockSettingsDuringControl:'锁定时禁止改系统设置',allDay:'全天管控',
+ blockSettingsDuringControl:'锁定时禁止改系统设置',allDay:'全天管控',
  childSelectLevel:'孩子选择年级',difficultyRewardEnabled:'按题目星级奖励',extraEnabled:'答错累计加练',spacedRepetitionEnabled:'间隔重复复习',wrongFirst:'错题优先',
 };
 
@@ -273,7 +273,6 @@ export default function RulesPage({state,sessionId}:{state:any,sessionId:number}
       </Field>
       <Field orientation="responsive" className="py-4">
        <FieldContent><FieldTitle>后台保活锚点窗口</FieldTitle><FieldDescription className="text-xs leading-5">部分小米固件会清理持有系统窗口的后台应用，可关闭后实测计时、到点拦截和待机恢复</FieldDescription></FieldContent>
-       {toggle('backgroundAnchorEnabled')}
       </Field>
       <Field orientation="responsive" className="py-4">
        <FieldContent><FieldTitle>锁定时禁止改系统设置</FieldTitle><FieldDescription className="text-xs leading-5">锁定期间孩子进不了系统设置；家长验证后可临时进入。需要无障碍权限。</FieldDescription></FieldContent>

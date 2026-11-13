@@ -55,7 +55,6 @@ class GateService : Service() {
     private val systemSettingsPackage by lazy {
         packageManager.resolveActivity(Intent(android.provider.Settings.ACTION_SETTINGS), 0)?.activityInfo?.packageName
     }
-    private var anchor: View? = null
     private lateinit var overlay: GateOverlay
     private var ticks = 0
     private var cpuLock: PowerManager.WakeLock? = null
@@ -80,7 +79,6 @@ class GateService : Service() {
         lastTick = now
         if (wasUsing) DeviceRuntime.learning.consume(elapsed)
         val canOverlay = OverlayAccess.canDraw(this)
-        updateAnchor(canOverlay && DeviceRuntime.store.config().optBoolean("backgroundAnchorEnabled", true))
         if (!canOverlay) overlay.hide()
         val status = DeviceRuntime.learning.status()
         val free = status.optBoolean("free")
@@ -394,23 +392,6 @@ class GateService : Service() {
         }
     }
 
-    private fun updateAnchor(allowed: Boolean) {
-        val manager = getSystemService(WINDOW_SERVICE) as WindowManager
-        if (!allowed) {
-            anchor?.let { try { manager.removeViewImmediate(it) } catch (_: Exception) { } }
-            anchor = null
-        } else if (anchor == null) {
-            val view = View(this).apply { setBackgroundColor(Color.argb(1, 0, 0, 0)); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
-            val params = WindowManager.LayoutParams(1, 1, GateOverlay.applicationWindowType(),
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN, PixelFormat.TRANSLUCENT)
-            params.gravity = Gravity.TOP or Gravity.START
-            params.title = "StudyOnTV anchor"
-            params.alpha = 0.01f
-            try { manager.addView(view, params); anchor = view } catch (_: Exception) { }
-        }
-    }
-
     // Only dismisses the gate (overlay window / accessibility layer). The countdown badge is
     // driven separately by updateCountdown() every tick; hiding it here as well would remove
     // and re-add its window on every tick, which is what caused the per-second flicker.
@@ -620,7 +601,7 @@ class GateService : Service() {
         if (Prefs.onboarded(this)) scheduleRestart(this, 5000)
         handler.removeCallbacks(tick); handler.removeCallbacks(mediaTick)
         MediaPause.release(this)
-        overlay.destroy(); WatchAccessibilityService.hideGate(); countdown.destroy(); updateAnchor(false)
+        overlay.destroy(); WatchAccessibilityService.hideGate(); countdown.destroy()
         instance = null
         Prefs.setServiceRunning(this, false)
         // 正常停止前把心跳落准，下次启动补记不会多算

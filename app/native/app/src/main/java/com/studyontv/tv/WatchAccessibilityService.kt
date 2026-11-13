@@ -14,7 +14,7 @@ class WatchAccessibilityService : AccessibilityService() {
             if (pkg != null && (pkg.contains("inputmethod") || pkg.contains("keyboard"))) return
             // 系统栏、音量条、投影自带的悬浮菜单都会弹出临时窗口，真正的前台应用并没有变，不能当成切换
             if (pkg == "com.android.systemui") return
-            // anchor / countdown / gate 悬浮窗不代表应用 Activity 在前台（#96）。
+            // countdown / gate 悬浮窗不代表应用 Activity 在前台（#96）。
             val ownOverlay = pkg == packageName && !Foreground.hasResumedActivity()
             if (!ownOverlay && (!GateService.hasGate() || pkg != packageName)) {
                 val cls = event.className?.toString()?.takeIf { it.contains("Activity") }
