@@ -6,8 +6,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.os.Build
@@ -52,6 +54,19 @@ class GateService : Service() {
     @Volatile private var ownActivityForeground = false
     @Volatile private var monitoringNow = false
     @Volatile private var settingsUntil = 0L
+    /**
+     * 屏幕是否亮着。TCL 电视「关机」（未断电）后 PowerManager 仍报 interactive，
+     * 计时会照走；系统广播和显示状态任一说熄灭就按熄灭处理。
+     */
+    @Volatile private var screenOn = true
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                Intent.ACTION_SCREEN_ON -> screenOn = true
+                Intent.ACTION_SCREEN_OFF -> screenOn = false
+            }
+        }
+    }
     private val systemSettingsPackage by lazy {
         packageManager.resolveActivity(Intent(android.provider.Settings.ACTION_SETTINGS), 0)?.activityInfo?.packageName
     }
@@ -93,7 +108,7 @@ class GateService : Service() {
         if (now < settingsUntil) { wasUsing = false; hideAll(); countdown.hide(); if (MediaPause.active) releaseMuteWithoutGate("settings"); return }
         val power = getSystemService(POWER_SERVICE) as PowerManager
         val locked = (getSystemService(KEYGUARD_SERVICE) as KeyguardManager).isKeyguardLocked
-        val awake = power.isInteractive && !locked
+        val awake = power.isInteractive && !locked && screenOn && displayOn()
         if (lastAwake != awake) { DeviceRuntime.learning.awake(awake); lastAwake = awake }
         val monitoring = canOverlay || WatchAccessibilityService.connected || Foreground.hasUsageAccess(this)
         monitorMode = when {
@@ -155,7 +170,7 @@ class GateService : Service() {
         val stateText = monitorMode + " · " + diag
         if (stateText != lastStateText) { lastStateText = stateText; note(stateText) }
         if (!awake || !monitoring || (!settingsBlocked && (ownForeground || (reason.isEmpty() && !feedbackVisible) || (pkg != null && exempt(pkg, false))))) hideAll()
-        val snapshot = "reason=$gateReason free=$free awake=$awake monitoring=$monitoring own=$ownForeground pkg=$pkg active=$active gate=${hasGate()} overlay=$canOverlay mute=${MediaPause.active} failures=$gateFailures"
+        val snapshot = "reason=$gateReason free=$free awake=$awake screen=$screenOn monitoring=$monitoring own=$ownForeground pkg=$pkg cls=${pkg?.let { Foreground.currentClass(it) }} active=$active gate=${hasGate()} overlay=$canOverlay mute=${MediaPause.active} failures=$gateFailures"
         if (snapshot != lastDiag) { lastDiag = snapshot; Diag.info("Gate", snapshot) }
         ensureGateVisible(now, gateReason, canOverlay, protecting, settingsBlocked)
         // #110：静音必须由「真的弹出来了」背书——弹窗失败或被收起后立刻解除静音，
@@ -514,18 +529,29 @@ class GateService : Service() {
     }
 
     /**
-     * 只有「厂商把播放器塞进了 HOME 包」这一个特殊情况才把桌面算成在用，
-     * 已知的系统桌面（Foreground.isLauncher）永远不算，避免在桌面挂着就被计时。
+     * 「厂商把播放器塞进了 HOME 包」的情况：桌面本身不算在用，但桌面里在放影音时算。
+     *
+     * - JUUI / 聚好看的 HOME 与影视页共用包名，Activity 类名能区分时不依赖媒体状态（#99）。
+     * - TCL 反馈：开启使用情况访问后前台一直判成桌面，看片也不计时。这类固件连影视页的
+     *   Activity 类名都拿不到，只能退到媒体播放状态兜底；已知桌面也一样处理，
+     *   否则「看片不扣时间、到点也不弹题」。桌面上没有音视频在播时仍然不计时。
      */
     private fun launcherPlaying(pkg: String): Boolean {
-        if (pkg != launcherPackage()) return false
-        if (Foreground.isLauncher(pkg)) return false
-        // JUUI / 聚好看的 HOME 与影视页共用包名；Activity 可区分时不依赖媒体状态（#99）。
+        if (pkg != launcherPackage() && !Foreground.isLauncher(pkg)) return false
         val cls = Foreground.currentClass(pkg)
         if (cls != null && cls != launcherClassCache && !cls.contains("launcher", true) &&
             !cls.startsWith("android.") && !cls.startsWith("androidx.")) return true
         return Playback.hasActive(this)
     }
+
+    /** 显示是否亮着；部分电视「关机」时 PowerManager 仍是 interactive，需要再确认一次 */
+    private fun displayOn(): Boolean = try {
+        val manager = getSystemService(DISPLAY_SERVICE) as android.hardware.display.DisplayManager
+        @Suppress("DEPRECATION")
+        val state = manager.getDisplay(android.view.Display.DEFAULT_DISPLAY)?.state
+        // 拿不到显示状态时按亮着处理，避免误停计时
+        state == null || state != android.view.Display.STATE_OFF
+    } catch (_: Exception) { true }
 
     private fun isSettings(pkg: String): Boolean = pkg == systemSettingsPackage ||
         pkg in setOf("com.android.settings", "com.android.tv.settings", "com.google.android.tv.settings")
@@ -565,6 +591,13 @@ class GateService : Service() {
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm).setContentIntent(pi).setOngoing(true).build()
         if (Build.VERSION.SDK_INT >= 34) startForeground(1001, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         else startForeground(1001, notification)
+        // 屏幕亮灭广播：用于识别 TCL「关机未断电」这类 PowerManager 仍报 interactive 的情况
+        try {
+            registerReceiver(screenReceiver, IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_ON)
+                addAction(Intent.ACTION_SCREEN_OFF)
+            })
+        } catch (e: Exception) { Diag.warn("Gate", "cannot register screen receiver: ${e.message}") }
         // 被杀期间秒表停了，先按 UsageStats 事件补记漏掉的时长（后台线程，别卡住启动）
         Thread {
             try { UsageBackfill.run(this) } catch (e: Exception) { android.util.Log.e("StudyOnTV", "UsageBackfill failed", e) }
@@ -600,6 +633,7 @@ class GateService : Service() {
         try { DeviceRuntime.learning.flushUsage() } catch (_: Exception) { }
         if (Prefs.onboarded(this)) scheduleRestart(this, 5000)
         handler.removeCallbacks(tick); handler.removeCallbacks(mediaTick)
+        try { unregisterReceiver(screenReceiver) } catch (_: Exception) { }
         MediaPause.release(this)
         overlay.destroy(); WatchAccessibilityService.hideGate(); countdown.destroy()
         instance = null
@@ -717,7 +751,9 @@ class GateService : Service() {
                 .put("lastPauseHadAudio", MediaPause.lastPauseHadAudio)
                 .put("fullscreenGateAgeSeconds", if (service == null || service.lastFullscreenAt <= 0) -1 else (now - service.lastFullscreenAt) / 1000)
                 .put("foregroundPackage", service?.foregroundPackage ?: "")
+                .put("foregroundClass", service?.foregroundPackage?.let { Foreground.currentClass(it) } ?: "")
                 .put("foregroundIdentified", service?.foregroundPackage != null)
+                .put("screenOn", service?.screenOn ?: true)
                 .put("ownActivityForeground", service?.ownActivityForeground ?: false)
                 .put("monitoringCapability", service?.monitoringNow ?: false)
                 .put("mute", mute)

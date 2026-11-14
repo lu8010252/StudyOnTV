@@ -83,7 +83,16 @@ object MediaPause {
                 // A volume key can undo stream mute while the quiz is still covering the player.
                 val audible = if (Build.VERSION.SDK_INT >= 23) !audio.isStreamMute(AudioManager.STREAM_MUSIC)
                     else audio.getStreamVolume(AudioManager.STREAM_MUSIC) > 0
-                if (audible) setMuted(audio, true)
+                if (audible) {
+                    // 遥控器音量键会先解除静音再调音量：记下用户此刻的音量，
+                    // 解锁时以它为准，不能再用静音前的旧值覆盖（音量卡在 17，用户反馈）。
+                    val p = prefs(context)
+                    val nowVolume = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
+                    if (!p.getBoolean("media_user_touched", false) || p.getInt("media_user_volume", -1) != nowVolume) {
+                        p.edit().putBoolean("media_user_touched", true).putInt("media_user_volume", nowVolume).apply()
+                    }
+                    setMuted(audio, true)
+                }
                 return
             }
             if (SystemClock.elapsedRealtime() - lastKey < 3000) return
@@ -97,7 +106,10 @@ object MediaPause {
             // Commit the recovery record before changing global audio state.
             if (!prefs(context).edit().putBoolean("media_muted", true)
                     .putInt("media_original_volume", originalVolume)
-                    .putBoolean("media_original_muted", originalMuted).commit()) return
+                    .putBoolean("media_original_muted", originalMuted)
+                    .putBoolean("media_user_touched", false)
+                    .putInt("media_user_volume", 0)
+                    .putInt("media_restore_attempts", 0).commit()) return
             muted = true
             setMuted(audio, true)
             Diag.warn("Audio", "enforce: player ignored pause, muted music stream (original volume=$originalVolume, originally muted=$originalMuted)")
@@ -117,7 +129,14 @@ object MediaPause {
             // 原始音量为 0 + 原始状态静音，才视为「用户本来就静音」；读到正音量却标记静音
             // 通常是设备误报，必须恢复，否则一次弹题后整机再无声音。
             val originallyMuted = wasMuted && savedVolume <= 0
-            if (!originallyMuted && state.contains("media_original_volume") && savedVolume > 0) {
+            val touched = state.getBoolean("media_user_touched", false)
+            val userVolume = state.getInt("media_user_volume", 0)
+            val current = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
+            // 静音只是把流静掉，音量档位一般不动；只有读回 0（少数电视静音时把档位写成 0）
+            // 才需要把原值写回去。用户自己动过音量时一律不写，否则会把孩子/家长刚调低的
+            // 音量顶回静音前的旧值（用户反馈：音量卡在 17，调低又自动恢复）。
+            val writeVolume = !originallyMuted && !touched && savedVolume > 0 && current <= 0
+            if (writeVolume) {
                 audio.setStreamVolume(AudioManager.STREAM_MUSIC,
                     savedVolume.coerceIn(0, audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)), 0)
             }
@@ -127,20 +146,39 @@ object MediaPause {
                 // 部分电视（小米 / Amlogic 等）对 ADJUST_UNMUTE 的响应不稳定，
                 // 额外调用一次 setStreamMute(false) 兜底。
                 if (Build.VERSION.SDK_INT >= 23) try { audio.setStreamMute(AudioManager.STREAM_MUSIC, false) } catch (_: Exception) { }
+                // 有的电视解除静音时会把档位弹回静音前的值（甚至归 0）：用户在静音期间
+                // 调过音量时，只在「读数没回来」或「正好弹回旧值」这两种情况下放回用户的音量，
+                // 不去覆盖静音结束后用户自己的调整。
+                val nowVolume = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
+                if (touched && userVolume > 0 && nowVolume != userVolume &&
+                    (nowVolume <= 0 || nowVolume == savedVolume)) {
+                    audio.setStreamVolume(AudioManager.STREAM_MUSIC,
+                        userVolume.coerceIn(0, audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)), 0)
+                }
                 // 新版 Android 会限制非前台应用改音量；如果这次没生效，保留记录，
                 // 等 Activity 回到前台或下一次 tick 再试，不能把恢复机会一起清掉。
+                // 但重试必须有上限：每秒重写一次会把用户刚调低的音量一直顶回原值。
                 val restoredVolume = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
-                if (savedVolume > 0 && restoredVolume <= 0) {
-                    val now = SystemClock.elapsedRealtime()
-                    if (now - lastRestoreWarnAt > 30000) {
-                        lastRestoreWarnAt = now
-                        Diag.warn("Audio", "restore deferred: volume still 0 (saved=$savedVolume)")
+                // 有的电视解除静音要连按几次才生效：只要流还是静音状态，就继续重试，
+                // 不能只看音量读数（读数正常但流仍静音时，解锁后会整机没声音）。
+                val stillMuted = if (Build.VERSION.SDK_INT >= 23) try { audio.isStreamMute(AudioManager.STREAM_MUSIC) } catch (_: Exception) { false } else false
+                if ((writeVolume && restoredVolume <= 0) || stillMuted) {
+                    val tries = state.getInt("media_restore_attempts", 0) + 1
+                    if (tries < 10) {
+                        state.edit().putInt("media_restore_attempts", tries).apply()
+                        val now = SystemClock.elapsedRealtime()
+                        if (now - lastRestoreWarnAt > 30000) {
+                            lastRestoreWarnAt = now
+                            Diag.warn("Audio", "restore deferred: volume=$restoredVolume stillMuted=$stillMuted (saved=$savedVolume try=$tries)")
+                        }
+                        return false
                     }
-                    return false
+                    Diag.warn("Audio", "restore gave up after $tries tries (saved=$savedVolume volume=$restoredVolume stillMuted=$stillMuted)")
                 }
             }
-            state.edit().remove("media_muted").remove("media_original_volume").remove("media_original_muted").commit()
-            Diag.info("Audio", "restored volume=$savedVolume wasMuted=$wasMuted originallyMuted=$originallyMuted holding=$holding")
+            state.edit().remove("media_muted").remove("media_original_volume").remove("media_original_muted")
+                .remove("media_user_touched").remove("media_user_volume").remove("media_restore_attempts").commit()
+            Diag.info("Audio", "restored volume=$savedVolume wasMuted=$wasMuted originallyMuted=$originallyMuted touched=$touched userVolume=$userVolume holding=$holding")
             true
         } catch (e: Exception) {
             android.util.Log.w("StudyOnTV", "Restore media volume failed", e)

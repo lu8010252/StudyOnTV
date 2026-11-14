@@ -60,6 +60,32 @@
             </intent-filter>
         </activity-alias>
 
+        <!-- 可选的电视桌面：alias 默认禁用，家长在面板里打开后 DesktopMode 才启用它。
+             关掉只是把 alias 禁回去，不会卸载、也不会重启进程；HomeActivity 起不来自动退回系统桌面。 -->
+        <activity
+            android:name=".HomeActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden|navigation"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="unspecified"
+            android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen" />
+
+        <activity-alias
+            android:name=".HomeAlias"
+            android:banner="@drawable/ic_banner"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@drawable/ic_launcher"
+            android:label="@string/app_name"
+            android:targetActivity=".HomeActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity-alias>
+
         <activity
             android:name=".GateActivity"
             android:configChanges="orientation|screenSize|keyboardHidden|navigation"

@@ -278,8 +278,10 @@ class LanServer(
             path == "/api/questions" && method == "POST" -> {
                 val payload = try { JSONObject(body) } catch (e: Exception) { return json(out, 200, err("bad_json")) }
                 if (payload.has("items")) {
-                    val added = store.importQuestions(payload.getJSONArray("items"))
-                    return json(out, 200, JSONObject().put("ok", true).put("added", added))
+                    // 题库市场一键添加会重复点，允许按题干去重；普通导入默认不去重（覆盖式导入）
+                    val result = store.importQuestions(payload.getJSONArray("items"), payload.optBoolean("skipDuplicates"))
+                    return json(out, 200, JSONObject().put("ok", true)
+                        .put("added", result.getInt("added")).put("skipped", result.getInt("skipped")))
                 }
                 return try {
                     val id = store.upsertQuestion(payload)
@@ -296,6 +298,20 @@ class LanServer(
             path == "/api/speech" && method == "PUT" -> return json(out, 200, SpeechReader.save(store, JSONObject(body)))
             path == "/api/bank-automation" && method == "GET" -> return json(out, 200, BankAutomation.settings(store))
             path == "/api/bank-automation" && method == "PUT" -> return json(out, 200, BankAutomation.save(store, JSONObject(body)))
+            // 题库市场：读共享题库的索引，家长点一下就加进本机题库
+            path == "/api/banks/market" && method == "GET" -> return json(out, 200, BankMarket.market(store))
+            path == "/api/banks/sources" && method == "POST" -> {
+                val payload = JSONObject(body.ifEmpty { "{}" })
+                return json(out, 200, BankMarket.addSource(store, payload.optString("name"), payload.optString("url")))
+            }
+            path == "/api/banks/sources" && method == "DELETE" -> {
+                val payload = JSONObject(body.ifEmpty { "{}" })
+                return json(out, 200, BankMarket.removeSource(store, payload.optString("url")))
+            }
+            path == "/api/banks/fetch" && method == "POST" -> {
+                val payload = JSONObject(body.ifEmpty { "{}" })
+                return json(out, 200, JSONObject().put("ok", true).put("data", BankMarket.json(payload.optString("url"))))
+            }
             path == "/api/bank-automation/sync" && method == "POST" -> {
                 BankAutomation.start(store)
                 return json(out, 200, BankAutomation.settings(store))
@@ -412,7 +428,7 @@ class LanServer(
             path == "/api/device" && method == "GET" -> return json(out, 200, JSONObject().put("name", Prefs.deviceName(context))
                 .put("version", BuildConfig.VERSION_NAME).put("flavor", BuildConfig.FLAVOR).put("ip", localIp() ?: "").put("port", boundPort)
                 .put("uninstallProtected", UninstallGuard.active(context)).put("deviceOwner", UninstallGuard.owner(context))
-                .put("launcherHidden", LauncherIcon.hidden(context)).put("autostart", Watchdog.report(context)).put("monitor", GateService.diagnostics(context))
+                .put("launcherHidden", LauncherIcon.hidden(context)).put("desktop", DesktopMode.state(context)).put("autostart", Watchdog.report(context)).put("monitor", GateService.diagnostics(context))
                 .put("keepalive", KeepAlive.report(context)).put("buglyConsent", Prefs.buglyConsent(context)))
             path == "/api/device/bugly" && method == "PUT" -> {
                 val enabled = JSONObject(body).optBoolean("enabled")
@@ -431,6 +447,19 @@ class LanServer(
             path == "/api/device/uninstall-guard" && method == "PUT" -> {
                 UninstallGuard.setEnabled(context, true)
                 return json(out, 200, JSONObject().put("ok", true).put("uninstallProtected", UninstallGuard.active(context)))
+            }
+            path == "/api/device/desktop" && method == "PUT" -> {
+                // 「把题了个题当电视桌面」是可选开关：只切一个 alias，进程不重启，关掉即回原桌面
+                val enabled = JSONObject(body).optBoolean("enabled")
+                return try {
+                    json(out, 200, DesktopMode.setEnabled(context, enabled))
+                } catch (e: Exception) {
+                    json(out, 500, err(e.message ?: "切换电视桌面失败"))
+                }
+            }
+            path == "/api/device/desktop/choose" && method == "POST" -> {
+                DesktopMode.openChooser(context)
+                return json(out, 200, DesktopMode.state(context))
             }
             path == "/api/device/launcher" && method == "PUT" -> {
                 // 只关桌面入口，不改应用本身的状态；家长面板可以随时恢复
@@ -525,7 +554,8 @@ class LanServer(
             path == "/practice-sw.js" -> "web/practice-sw.js" to "application/javascript; charset=utf-8"
             path == "/practice.appcache" -> "web/practice.appcache" to "text/cache-manifest; charset=utf-8"
             path == "/" || path == "/index.html" -> "web/index.html" to "text/html; charset=utf-8"
-            path.startsWith("/admin/assets/") -> "admin" + path.removePrefix("/admin") to mime(path)
+            path.startsWith("/admin/assets/") || path.startsWith("/admin/icons/") ||
+                path == "/admin/manifest.webmanifest" || path == "/admin/sw.js" -> "admin" + path.removePrefix("/admin") to mime(path)
             path == "/admin" -> return reply(out, 301, null, null, mapOf("Location" to "/admin/"))
             path.startsWith("/admin") -> "admin/index.html" to "text/html; charset=utf-8"
             path.startsWith("/assets/") -> "web" + path to mime(path)
@@ -555,6 +585,7 @@ class LanServer(
     private fun mime(path: String): String = when {
         path.endsWith(".css") -> "text/css; charset=utf-8"
         path.endsWith(".js") || path.endsWith(".mjs") -> "application/javascript; charset=utf-8"
+        path.endsWith(".webmanifest") -> "application/manifest+json; charset=utf-8"
         path.endsWith(".json") -> "application/json; charset=utf-8"
         path.endsWith(".png") -> "image/png"
         path.endsWith(".jpg") -> "image/jpeg"

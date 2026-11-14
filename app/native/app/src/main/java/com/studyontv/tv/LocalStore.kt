@@ -747,15 +747,48 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         return id
     }
 
-    fun importQuestions(items: JSONArray): Int {
+    /** 题干去重用的归一化：忽略空白、常见标点和大小写，避免同一道题反复导入 */
+    private fun stemKey(stem: String): String =
+        stem.lowercase().replace(Regex("[\\s，。？?！!、；;：:（）()\"'“”‘’《》<>]"), "")
+
+    /**
+     * 批量导入。`skipDuplicates` 打开时按题干去重（题库市场一键添加会重复点），
+     * 返回真正新增的条数和跳过的条数；带 id 且已存在的题仍然按覆盖处理。
+     */
+    fun importQuestions(items: JSONArray, skipDuplicates: Boolean = false): JSONObject {
         require(items.length() in 1..5000) { "每次导入 1–5000 道题" }
         val db = writableDatabase
+        val ids = HashSet<String>()
+        val stems = HashSet<String>()
+        if (skipDuplicates) {
+            db.rawQuery("SELECT id, stem FROM questions", null).use { cursor ->
+                while (cursor.moveToNext()) {
+                    ids.add(cursor.getString(0))
+                    stems.add(stemKey(cursor.getString(1) ?: ""))
+                }
+            }
+        }
+        var added = 0
         db.beginTransaction()
         try {
-            for (i in 0 until items.length()) upsertQuestion(items.getJSONObject(i))
+            for (i in 0 until items.length()) {
+                // 一次导入几十上百题时，笼统的「请填写题干」定位不到是哪道题，报错带上题号
+                val item = items.optJSONObject(i) ?: throw IllegalArgumentException("第 ${i + 1} 题：不是一条题目对象")
+                if (skipDuplicates) {
+                    val id = item.optString("id")
+                    val key = stemKey(item.optString("q"))
+                    val replaces = id.isNotEmpty() && id in ids
+                    if (!replaces && key.isNotEmpty() && !stems.add(key)) continue
+                    if (id.isNotEmpty()) ids.add(id)
+                }
+                try { upsertQuestion(item) } catch (e: IllegalArgumentException) {
+                    throw IllegalArgumentException("第 ${i + 1} 题：${e.message}")
+                }
+                added++
+            }
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
-        return items.length()
+        return JSONObject().put("added", added).put("skipped", items.length() - added)
     }
 
     fun clearQuestions(): Int {

@@ -225,6 +225,28 @@ export default function DevicePanel({
     },
     onError: (error: any) => toast.error(error.message),
   });
+  const desktop = useMutation({
+    mutationFn: (enabled: boolean) => api('/api/device/desktop', 'PUT', { enabled }),
+    onSuccess: (result: any) => {
+      client.invalidateQueries({ queryKey: ['device', sessionId] });
+      toast.success(
+        result.enabled
+          ? result.isDefault
+            ? '已设为电视桌面'
+            : '已启用，请在电视上选择「题了个题」为桌面'
+          : '已关闭，电视回到原来的桌面',
+      );
+    },
+    onError: (error: any) => toast.error(error.message),
+  });
+  const chooseDesktop = useMutation({
+    mutationFn: () => api('/api/device/desktop/choose', 'POST', {}),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: ['device', sessionId] });
+      toast.success('电视上已弹出桌面选择，用遥控器选「题了个题」');
+    },
+    onError: (error: any) => toast.error(error.message),
+  });
   const rename = useMutation({
     mutationFn: (nextName: string) => api('/api/device', 'PUT', { name: nextName.trim() }),
     onSuccess: (_result, nextName) => {
@@ -489,6 +511,45 @@ export default function DevicePanel({
                 }}
                 aria-label="隐藏桌面图标"
               />
+            </SettingItem>
+            <SettingItem
+              title="把题了个题设为电视桌面"
+              description={
+                device.data?.desktop?.isDefault
+                  ? '当前就是电视桌面：开机和按 Home 都回到「题了个题」。想换回去，把开关关掉即可。'
+                  : device.data?.desktop?.enabled
+                    ? `已启用，但系统默认桌面还是「${device.data.desktop.homeLabel || '原桌面'}」。电视上没有弹出选择框的话，请到系统设置 → 应用 → 默认应用里把桌面改成「题了个题」。`
+                    : '开启后，电视开机和按 Home 都回到「题了个题」，孩子不能再从系统桌面点开任意应用；时间用完时桌面直接显示锁屏和答题。部分电视需要手动改默认桌面，随时可以关掉。'
+              }
+              wideControl
+            >
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {device.data?.desktop?.enabled && !device.data?.desktop?.isDefault && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={chooseDesktop.isPending}
+                    onClick={() => chooseDesktop.mutate()}
+                  >
+                    去选择桌面
+                  </Button>
+                )}
+                <Switch
+                  checked={!!device.data?.desktop?.enabled}
+                  disabled={desktop.isPending || !device.data}
+                  onCheckedChange={enabled => {
+                    if (
+                      enabled &&
+                      !confirm('开启后，孩子按 Home 也回不到系统桌面，只能从「题了个题」的应用列表进入。确认开启吗？')
+                    )
+                      return;
+                    if (!enabled && !confirm('关闭后电视会回到原来的桌面，孩子可以按 Home 回到系统桌面。确认关闭吗？'))
+                      return;
+                    desktop.mutate(enabled);
+                  }}
+                  aria-label="设为电视桌面"
+                />
+              </div>
             </SettingItem>
             <SettingItem
               title="浏览器练习"

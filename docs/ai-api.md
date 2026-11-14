@@ -9,6 +9,7 @@
 设备地址：<设备连接页上的 IP:端口>
 管理密码：<首次安装时设置的密码>
 出题要求：<例如 20 道生活常识题，单选、多选、判断、填空混合，难度 1–3 星>
+题目格式参考：https://github.com/chadyi/StudyOnTV/blob/main/docs/question-format.md
 
 先 POST http://<地址>/api/auth
 Content-Type: application/json
@@ -19,11 +20,12 @@ Body: {"passphrase":"<管理密码>"}
 先 GET /api/questions?limit=5000，避免重复；然后 POST /api/questions，批量正文为 {"items":[题目对象,...]}。
 每批不超过 50 题，核对答案后导入，读取返回结果确认 added 数量。
 遇到 401 重新验证密码；遇到其他错误读取 message 后修正，不要盲目重试。
+导入完成后，问我要不要把这批题贡献到共享题库 https://github.com/chadyi/StudyOnTV-banks ，我同意再提交，不要自行上传。
 ```
 
 ## 题库格式
 
-家长面板「题库 → 示例」可以下载 JSON，也可以使用 [完整示例题库](../data/banks/open-play.json)。旧版省略 `type` 的单选题仍可导入。
+完整字段、各题型示例和校验规则见 [题库格式参考](./question-format.md)；可以直接导入的 [示例题库](../data/banks/open-play.json) 覆盖了五种题型和多个学科。旧版省略 `type` 的单选题仍可导入。
 
 ```json
 {
@@ -51,7 +53,17 @@ Body: {"passphrase":"<管理密码>"}
 | `rubric` | 主观题评分标准 |
 | `id` | 可选；再次提交同一 ID 可修改题目 |
 
+`subject`（学科）、`level`（年级）、`bank`（题库名称）、`image`（配图链接）、`audio`（音频链接）、`language`（朗读语言）等字段见 [题库格式参考](./question-format.md)。
+
 导入整批校验，任何一道题格式错误都会回滚本批，避免部分导入。可以自由编写学科、生活、安全等主题题库；奖励由家长规则设置，题库文件不能执行脚本或直接发放时长。
+
+## 出完题可以贡献
+
+导入成功后，Agent 应主动问用户：要不要把这批题贡献到共享题库 [chadyi/StudyOnTV-banks](https://github.com/chadyi/StudyOnTV-banks)。得到同意再提交，不要自行上传。
+
+- 贡献的题型、字段和校验规则与本文一致；仓库要求的 `name`、`author`、`license` 等题库元信息见 [题库格式参考](./question-format.md#贡献到共享题库)。
+- 提交前去掉孩子的姓名、学校、住址等个人信息，确认没有版权问题的题（不要整段抄教辅）。
+- 具体提交流程见仓库的 CONTRIBUTING.md；家长面板「题库 → 在线题库」可以随时添加别人分享的题库。
 
 ## API 验证
 

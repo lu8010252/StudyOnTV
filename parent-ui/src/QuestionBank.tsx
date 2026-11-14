@@ -23,6 +23,7 @@ import {Toolbar,ToolbarGroup,ToolbarSeparator} from '@/components/ui/toolbar';
 import {api} from './api';
 import BankAutomationPanel from './BankAutomationPanel';
 import {extractDocument,parseQuestionText} from './document-import';
+import {normalizeBank,parseBankJson} from './question-import';
 
 export function MathText({text,className=''}:{text:string,className?:string}){const ref=useRef<HTMLDivElement>(null);useEffect(()=>{if(!ref.current)return;ref.current.textContent=text||'';(window as any).SOTV_MATH?.(ref.current);},[text]);return <div ref={ref} className={className}/>;}
 export function answerOf(q:any){if(q.type==='subjective')return q.modelAnswer||'由家长批改';if(q.type==='text')return(q.answers||[]).join(' / ');const a=q.type==='boolean'?['正确','错误']:(q.a||[]);return q.type==='multiple'?(q.correctIndices||[]).map((i:number)=>a[i]).join('、'):a[q.k]||'';}
@@ -57,6 +58,8 @@ export default function QuestionBank({sessionId}:{sessionId:number}){
  const [showAll,setShowAll]=useState(false);
  const [form,setForm]=useState<any>(null),[importing,setImporting]=useState(false),[text,setText]=useState(''),[fileName,setFileName]=useState(''),[remove,setRemove]=useState<any>(null),[importSubject,setImportSubject]=useState(''),[importLevel,setImportLevel]=useState('');
  const file=useRef<HTMLInputElement>(null);
+ // 导入成功后补一句「跳过了哪几题」，所以跳过原因要跨一次请求保留
+ const pendingIssues=useRef<{index:number,reason:string}[]>([]);
  const [aiOpen,setAiOpen]=useState(false),[aiTab,setAiTab]=useState<'api'|'agent'>('agent');
  const [aiForm,setAiForm]=useState({topic:'',types:{single:true,multiple:true,boolean:true,text:true,subjective:false} as any,count:10,difficulty:'mixed',extra:'',withTip:true,skipDuplicates:true});
  const [aiLoading,setAiLoading]=useState(false),[aiItems,setAiItems]=useState<any[]>([]),[aiError,setAiError]=useState('');
@@ -84,21 +87,21 @@ export default function QuestionBank({sessionId}:{sessionId:number}){
  const bulkDelete=useMutation({mutationFn:(ids:string[])=>api('/api/questions/delete','POST',{ids}),onSuccess:(r:any)=>{setSelected([]);client.invalidateQueries({queryKey:['bank',sessionId]});toast.success(`已删除 ${r.deleted} 题`);},onError:(e:any)=>toast.error(e.message)});
  const bulkPause=useMutation({mutationFn:({ids,enabled}:{ids:string[],enabled:boolean})=>api('/api/questions/pause','POST',{ids,enabled}),onSuccess:(r:any,{enabled})=>{setSelected([]);client.invalidateQueries({queryKey:['bank',sessionId]});toast.success(enabled?`已恢复 ${r.updated} 题`:`已暂停 ${r.updated} 题`);},onError:(e:any)=>toast.error(e.message)});
  const save=useMutation({mutationFn:(body:any)=>api('/api/questions','POST',body),onSuccess:()=>{client.invalidateQueries({queryKey:['bank',sessionId]});setForm(null);toast.success('题目已保存');},onError:(e:any)=>toast.error(e.message)});
- const importingMutation=useMutation({mutationFn:(items:any[])=>api('/api/questions','POST',{items}),onSuccess:(r:any)=>{client.invalidateQueries({queryKey:['bank',sessionId]});setImporting(false);toast.success(`已导入 ${r.added} 题`);},onError:(e:any)=>toast.error(e.message)});
+ const importingMutation=useMutation({mutationFn:(items:any[])=>api('/api/questions','POST',{items}),onSuccess:(r:any)=>{client.invalidateQueries({queryKey:['bank',sessionId]});setImporting(false);toast.success(`已导入 ${r.added} 题`);const skipped=pendingIssues.current;pendingIssues.current=[];if(skipped.length){const shown=skipped.slice(0,3).map(i=>`第 ${i.index} 题：${i.reason}`).join('；');toast.warning(`跳过 ${skipped.length} 题（${shown}${skipped.length>3?' 等':''}）`,{duration:8000});}},onError:(e:any)=>{pendingIssues.current=[];toast.error(e.message);}});
  const deleting=useMutation({mutationFn:(id:string)=>api('/api/questions/'+encodeURIComponent(id),'DELETE'),onSuccess:()=>{setRemove(null);setDrawer(null);client.invalidateQueries({queryKey:['bank',sessionId]});toast.success('已删除');},onError:(e:any)=>toast.error(e.message)});
  const saveGenerated=useMutation({mutationFn:(items:any[])=>api('/api/questions','POST',{items}),onSuccess:(r:any)=>{client.invalidateQueries({queryKey:['bank',sessionId]});toast.success(`已保存 ${r.added} 题到题库`);setAiItems([]);setAiOpen(false);},onError:(e:any)=>toast.error(e.message)});
 
  const toggle=(id:string)=>setSelected(list=>list.includes(id)?list.filter(x=>x!==id):[...list,id]);
- function edit(q?:any,copy=false){setDrawer(null);setForm(q?{id:copy?'':q.id,type:q.type||'single',q:q.q,opts:q.type==='boolean'?['正确','错误']:[...(q.a||[])],correct:q.type==='multiple'?[...(q.correctIndices||[])]:[q.k||0],accepted:(q.answers||[]).join('\n'),difficulty:q.difficulty||2,tip:q.tip||'',modelAnswer:q.modelAnswer||'',rubric:q.rubric||'',subject:q.subject||'',level:q.level||'',bank:q.bank||'默认题库',image:q.image||'',audio:q.audio||'',language:q.language||'zh-CN'}:{...blank});}
+ function edit(q?:any,copy=false){setDrawer(null);setForm(q?{id:copy?'':q.id,type:q.type||'single',q:q.q,opts:q.type==='boolean'?['正确','错误']:[...(q.a||[])],correct:q.type==='multiple'?[...(q.correctIndices||[])]:[q.k||0],accepted:(q.answers||[]).join('\n'),difficulty:q.difficulty||2,tip:q.tip||'',modelAnswer:q.modelAnswer||'',rubric:q.rubric||'',subject:q.subject||'',level:q.level||'',bank:q.bank||'默认题库',image:q.image||'',audio:q.audio||'',language:q.language??'zh-CN'}:{...blank});}
  function field(key:string,value:any){setForm((f:any)=>({...f,[key]:value}));}
  function submit(){const f=form;const q:any={q:f.q.trim(),type:f.type,difficulty:Number(f.difficulty),tip:f.tip,subject:f.subject.trim(),level:f.level.trim(),bank:f.bank.trim()||'默认题库',image:f.image.trim(),audio:f.audio.trim(),language:f.language};if(!q.q)return toast.error('请填写题干');if(f.id)q.id=f.id;if(f.type==='subjective'){q.modelAnswer=f.modelAnswer;q.rubric=f.rubric;}else if(f.type==='text'){q.answers=f.accepted.split('\n').map((s:string)=>s.trim()).filter(Boolean);if(!q.answers.length)return toast.error('请填写至少一个可接受答案');}else{q.a=f.type==='boolean'?['正确','错误']:f.opts.map((o:string)=>o.trim());if(f.type!=='boolean'&&q.a.some((o:string)=>!o))return toast.error('选项不能为空，多余的选项请删除');if(q.a.length<2)return toast.error('至少需要两个选项');const correct=f.correct.filter((i:number)=>i<q.a.length);if(!correct.length)return toast.error('请点击选项左侧的圆圈标记正确答案');if(f.type==='multiple')q.correctIndices=[...correct].sort();else q.k=correct[0];}save.mutate(q);}
  async function pick(e:any){const f=e.target.files?.[0];if(!f)return;if(f.size>20000000)return toast.error('文件超过 20 MB，请拆分导入');setDocumentBusy(true);setFileName(f.name);try{setText(await extractDocument(f));}catch(error:any){toast.error(error.message||'文档读取失败');}finally{setDocumentBusy(false);}}
- function importNow(){try{const raw=text.replace(/^\uFEFF/,'').trim();if(!raw.startsWith('{')&&!raw.startsWith('[')){const items=parseQuestionText(raw);setText(JSON.stringify({items},null,2));toast.message(`已解析 ${items.length} 题，请检查预览 JSON，确认后再次点击导入`);return;}const parsed=JSON.parse(raw);const items=Array.isArray(parsed)?parsed:parsed.items||[parsed];if(!items.length)return toast.error('题库不能为空');importingMutation.mutate(items.map((q:any)=>({...q,bank:q.bank||importBank.trim()||'默认题库',subject:q.subject||importSubject.trim(),level:q.level||importLevel.trim()})));}catch(error:any){toast.error(error.message||'题库格式有误');}}
+ function importNow(){try{const raw=text.replace(/^\uFEFF/,'').trim();if(!raw)return toast.error('请先粘贴题库 JSON 或选择文件');if(!raw.startsWith('{')&&!raw.startsWith('[')){const items=parseQuestionText(raw);setText(JSON.stringify({items},null,2));toast.message(`已解析 ${items.length} 题，请检查预览 JSON，确认后再次点击导入`);return;}const result=normalizeBank(parseBankJson(raw));if(!result.items.length){const first=result.issues[0];return toast.error(first?`没有可导入的题目：第 ${first.index} 题：${first.reason}`:'题库不能为空');}pendingIssues.current=result.issues;const bank=importBank.trim()||'默认题库',subject=importSubject.trim(),level=importLevel.trim();importingMutation.mutate(result.items.map((q:any)=>({...q,bank:q.bank||bank,subject:q.subject||subject,level:q.level||level})));}catch(error:any){toast.error(error.message||'题库格式有误');}}
  function openAi(){setAiTab('agent');setAiError('');setAiOpen(true);}
  async function generate(){if(!aiForm.topic.trim())return toast.error('请填写出题范围');if(!Object.values(aiForm.types).some(Boolean))return toast.error('至少选择一种题型');setAiLoading(true);setAiError('');try{const result=await api('/api/questions/generate','POST',{topic:aiForm.topic,types:Object.keys(aiForm.types).filter(k=>aiForm.types[k]),count:aiForm.count,difficulty:aiForm.difficulty,extra:aiForm.extra,withTip:aiForm.withTip,skipDuplicates:aiForm.skipDuplicates},90000);setAiItems((result.items||[]).map((q:any)=>({...q,include:true})));const skipped=result.duplicates?`，跳过 ${result.duplicates} 道重复题`:'';toast.success(`生成 ${result.items.length} 题${skipped}`);}catch(e:any){setAiError(e.message);}finally{setAiLoading(false);}}
  const copy=async(value:string)=>{const r=await copyText(value);if(r==='ok')toast.success('已复制');else if(r==='empty')toast.error('没有可复制的内容');else toast.error('复制失败，请手动选中文字复制');};
  const base=location.origin;
- const agentPrompt=`请给「题了个题」出 ${aiForm.count} 道题，范围：${aiForm.topic||'（填写出题范围）'}。\n只返回 JSON：{"items":[{"type":"single","q":"题干","a":["选项A","选项B"],"k":1,"difficulty":2,"tip":"解析"}]}\ntype 可用 single / multiple（correctIndices）/ boolean（a 固定 ["正确","错误"]，k 0 或 1）/ text（answers）/ subjective（modelAnswer、rubric）。\n难度 1-5，题干不要 HTML。`;
+ const agentPrompt=`请给「题了个题」出 ${aiForm.count} 道题，范围：${aiForm.topic||'（填写出题范围）'}。\n只返回 JSON：{"items":[{"type":"single","q":"题干","a":["选项A","选项B"],"k":1,"difficulty":2,"tip":"解析"}]}\ntype 可用 single / multiple（correctIndices）/ boolean（a 固定 ["正确","错误"]，k 0 或 1）/ text（answers）/ subjective（modelAnswer、rubric）。\n难度 1-5，题干不要 HTML。完整字段和示例：https://github.com/chadyi/StudyOnTV/blob/main/docs/question-format.md`;
  const jsonPrompt=agentPrompt+`\n\n写好后再调用：POST ${base}/api/questions\n请求头：Content-Type: application/json、Authorization: Bearer <管理令牌>\n请求体：{"items":[题目数组]}`;
  const aiSelected=aiItems.filter((q:any)=>q.include).length;
  const extraFilterCount=[subjectFilter,levelFilter,wrongFilter].filter(value=>value!=='all').length+(sort!=='default'?1:0);
@@ -303,7 +306,7 @@ export default function QuestionBank({sessionId}:{sessionId:number}){
        <Field label="音频地址（可选）"><Input value={form.audio} onChange={e=>field('audio',e.target.value)} placeholder="https://"/></Field>
       </FieldGroup>
       <FieldGroup className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-       <Field label="朗读 / 语音作答语言"><ChoiceSelect label="朗读 / 语音作答语言" value={form.language} onChange={v=>field('language',v)} options={[['zh-CN','中文'],['zh-HK','粤语（香港）'],['zh-TW','台湾国语'],['en-US','英语（美式）'],['en-GB','英语（英式）'],['','跟随设备系统语言']]}/></Field>
+       <Field label="朗读 / 语音作答语言"><ChoiceSelect label="朗读 / 语音作答语言" value={form.language||'system'} onChange={v=>field('language',v==='system'?'':v)} options={[['zh-CN','中文'],['zh-HK','粤语（香港）'],['zh-TW','台湾国语'],['en-US','英语（美式）'],['en-GB','英语（英式）'],['system','跟随设备系统语言']]}/></Field>
        <Field label="星级难度"><ChoiceSelect label="星级难度" value={String(form.difficulty)} onChange={v=>field('difficulty',Number(v))} options={[1,2,3,4,5].map(s=>[String(s),'★'.repeat(s)])}/></Field>
       </FieldGroup>
       <Field label="解析"><Textarea rows={2} value={form.tip} onChange={e=>field('tip',e.target.value)}/></Field>
@@ -317,7 +320,7 @@ export default function QuestionBank({sessionId}:{sessionId:number}){
    <DialogContent className="grid max-h-[90dvh] w-[calc(100%-1.5rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-2xl">
     <DialogHeader className="border-b px-5 py-4">
      <DialogTitle>导入题库</DialogTitle>
-     <DialogDescription>支持 JSON、Word、文字版 PDF 或文本文件，先解析预览再确认导入。</DialogDescription>
+     <DialogDescription>支持 JSON、Word、文字版 PDF 或文本文件，先解析预览再确认导入。其他题库的 question / 题目、options / 选项、answer / 答案 等字段会自动转换。</DialogDescription>
     </DialogHeader>
     <div className="min-h-0 overflow-y-auto px-5 py-4">
      <FieldGroup className="gap-4">

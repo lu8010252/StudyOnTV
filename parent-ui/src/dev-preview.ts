@@ -8,6 +8,7 @@ let questions:any[]=math.items.slice(0,12).map((q,i)=>({...q,id:'preview-'+i,typ
  // #136 错题库：每 4 题里有 1 道是答错的，另有一道答对、一道没作答过，方便预览筛选
  stats:{presented:i%3+1,answered:i%3,correct:i%3===0?0:Math.max(0,i%3-1),lastCorrect:i%4===0?false:i%4===1?true:null}}));
 let device:any={name:'客厅电视 · 开发预览',flavor:'tv',version:'0.3.10',ip:'127.0.0.1',port:5173,buglyConsent:false,
+ desktop:{enabled:false,isDefault:false,homePackage:'com.android.tv.settings',homeLabel:'系统桌面'},
  monitor:{service:true,overlay:true,usage:true,accessibility:true,accessibilityEnabled:true,gate:false,lastTickSeconds:1,lastError:''},
  autostart:{known:true,ok:true,pending:false,via:'boot',startedAfterSeconds:12,bootBroadcast:true,uptimeMinutes:320,accessibility:true},
  keepalive:{ignoringBattery:true,notifications:true,usbDebugging:false,developerOptions:false,sdk:34,manufacturer:'Xiaomi',brand:'Xiaomi',model:'Mi TV 6',android:'12',
@@ -61,6 +62,8 @@ export async function previewApi(path:string,method:string,body:any){
  if(route.startsWith('/api/questions/')&&method==='DELETE'){questions=questions.filter(q=>q.id!==decodeURIComponent(route.split('/').pop()!));return{ok:true};}
  if(route==='/api/device'){if(method==='PUT')device={...device,...body};return structuredClone(device);}
  if(route==='/api/device/launcher'){device.launcherHidden=!!body.hidden;return{ok:true,launcherHidden:device.launcherHidden};}
+ if(route==='/api/device/desktop'){device.desktop={...device.desktop,enabled:!!body.enabled,isDefault:!!body.enabled&&device.desktop.isDefault};return structuredClone(device.desktop);}
+ if(route==='/api/device/desktop/choose'){if(device.desktop.enabled)device.desktop.isDefault=true;return structuredClone(device.desktop);}
  if(route==='/api/device/bugly'){device.buglyConsent=!!body.enabled;return{ok:true};}
  if(route==='/api/grading'){if(method==='PUT')grading={...grading,...body};return structuredClone(grading);}
  if(route==='/api/reviews'){

@@ -2,11 +2,33 @@
   "name": "开放题型示例",
   "version": 2,
   "items": [
-    {"type":"single","q":"计算 $\\frac{1}{2}+\\frac{1}{4}$。","a":["$\\frac{1}{4}$","$\\frac{3}{4}$","$1$"],"k":1,"difficulty":2,"tip":"先通分，再相加。"},
-    {"type":"multiple","q":"下列哪些数是偶数？","a":["2","3","4","5"],"correctIndices":[0,2],"difficulty":1},
-    {"type":"boolean","q":"三角形的内角和是 $180^\\circ$。","k":0,"difficulty":1},
-    {"type":"text","q":"水的化学式是什么？","answers":["H2O","H₂O"],"difficulty":2},
-    {"type":"subjective","q":"已知 $x^2-5x+6=0$，求 $x$ 并写出推导过程。","modelAnswer":"$(x-2)(x-3)=0$，所以 $x=2$ 或 $x=3$。","rubric":"正确因式分解 50 分，得出全部解 50 分。","difficulty":3},
-    {"type":"subjective","q":"用两三句话说明：发现有人落水时，应该怎样安全求助？","modelAnswer":"先呼叫附近成年人，拨打救援电话；在安全位置递救生物品，不贸然下水。","rubric":"能说清呼救和求助方法，并意识到不能贸然下水。","difficulty":2}
+    {"type":"single","q":"计算 $\\frac{3}{4}-\\frac{1}{4}$。","a":["$\\frac{1}{4}$","$\\frac{1}{2}$","$\\frac{3}{8}$"],"k":1,"difficulty":2,"tip":"分母相同，分子相减：$3-1=2$，得 $\\frac{2}{4}=\\frac{1}{2}$。","subject":"数学","level":"二年级","bank":"示例题库"},
+    {"type":"single","q":"「停车坐爱枫林晚」中「坐」的意思是？","a":["坐下","因为","座位","停留"],"k":1,"difficulty":2,"tip":"出自杜牧《山行》，这里的「坐」是「因为」的意思。","subject":"语文","level":"三年级","bank":"示例题库"},
+    {"type":"single","q":"Which word means 「快乐」?","a":["happy","sad","angry","tired"],"k":0,"difficulty":1,"tip":"happy 快乐的；sad 伤心的；angry 生气的；tired 累的。","subject":"英语","level":"四年级","bank":"示例题库","language":"en-US"},
+    {"type":"single","q":"植物进行光合作用主要在哪个部位？","a":["根","茎","叶","花"],"k":2,"difficulty":1,"tip":"叶是光合作用的主要器官，叶绿体吸收光能。","subject":"科学","level":"五年级","bank":"示例题库"},
+    {"type":"single","q":"家里闻到燃气味，第一步应该怎么做？","a":["马上打开抽油烟机","关掉燃气阀门并开窗通风","先打电话问邻居","用打火机检查漏气处"],"k":1,"difficulty":2,"tip":"先关阀门、开窗通风，不要开关电器，也不要使用明火。","subject":"安全","level":"二年级","bank":"示例题库"},
+    {"type":"single","q":"世界上面积最大的海洋是？","a":["大西洋","印度洋","太平洋","北冰洋"],"k":2,"difficulty":1,"tip":"太平洋面积约占地球海洋面积的一半。","subject":"地理","level":"五年级","bank":"示例题库"},
+    {"type":"single","q":"中华人民共和国成立的时间是？","a":["1945 年","1949 年","1950 年","1978 年"],"k":1,"difficulty":1,"tip":"1949 年 10 月 1 日。","subject":"历史","level":"初中","bank":"示例题库"},
+    {"type":"single","q":"一个圆的半径是 2 cm，它的面积是多少？","a":["$2\\pi\\ \\text{cm}^2$","$4\\pi\\ \\text{cm}^2$","$8\\pi\\ \\text{cm}^2$","$16\\pi\\ \\text{cm}^2$"],"k":1,"difficulty":3,"tip":"$S=\\pi r^2$，代入 $r=2$ 得 $4\\pi$。","subject":"数学","level":"六年级","bank":"示例题库"},
+
+    {"type":"multiple","q":"下列动物中，哪些是哺乳动物？","a":["鲸","蝙蝠","企鹅","海豚"],"correctIndices":[0,1,3],"difficulty":2,"tip":"鲸和海豚用肺呼吸、胎生哺乳；企鹅是鸟类。","subject":"科学","level":"三年级","bank":"示例题库"},
+    {"type":"multiple","q":"下列哪些做法有助于节约用电？","a":["随手关灯","夏天空调温度设在 26 ℃ 以上","设备长期待机不拔插头","把白炽灯换成 LED 灯"],"correctIndices":[0,1,3],"difficulty":2,"tip":"长期待机会持续耗电，不用时应关闭电源。","subject":"生活","level":"三年级","bank":"示例题库"},
+    {"type":"multiple","q":"下列哪些词语可以看成近义词？","a":["立刻","马上","逐渐","渐渐"],"correctIndices":[0,1,3],"difficulty":3,"tip":"「立刻」与「马上」、「逐渐」与「渐渐」意思相近。","subject":"语文","level":"四年级","bank":"示例题库"},
+    {"type":"multiple","q":"下列数中哪些是质数？","a":["2","9","11","15"],"correctIndices":[0,2],"difficulty":2,"tip":"质数只能被 1 和它本身整除；$9=3\\times3$，$15=3\\times5$。","subject":"数学","level":"五年级","bank":"示例题库"},
+
+    {"type":"boolean","q":"在标准大气压下，水的沸点是 100 ℃。","k":0,"difficulty":1,"tip":"海拔越高，沸点越低。","subject":"科学","level":"三年级","bank":"示例题库"},
+    {"type":"boolean","q":"地球是太阳系中离太阳最近的行星。","k":1,"difficulty":2,"tip":"离太阳最近的是水星。","subject":"科学","level":"五年级","bank":"示例题库"},
+    {"type":"boolean","q":"「三思而后行」出自《论语》。","k":0,"difficulty":3,"tip":"《论语·公冶长》：「季文子三思而后行。」","subject":"语文","level":"五年级","bank":"示例题库"},
+    {"type":"boolean","q":"声音在真空中也能传播。","k":1,"difficulty":2,"tip":"声音需要介质，真空不能传声。","subject":"科学","level":"四年级","bank":"示例题库"},
+
+    {"type":"text","q":"水的化学式是什么？","answers":["H2O","H₂O"],"difficulty":2,"tip":"两个氢原子与一个氧原子。","subject":"科学","level":"二年级","bank":"示例题库"},
+    {"type":"text","q":"一年中北半球白昼最长的一天叫什么？","answers":["夏至","夏至日"],"difficulty":2,"tip":"夏至通常在 6 月 21 日前后。","subject":"地理","level":"五年级","bank":"示例题库"},
+    {"type":"text","q":"「春眠不觉晓」的下一句是？","answers":["处处闻啼鸟"],"difficulty":1,"tip":"孟浩然《春晓》：春眠不觉晓，处处闻啼鸟。","subject":"语文","level":"二年级","bank":"示例题库"},
+    {"type":"text","q":"「谢谢」用英语怎么说？","answers":["thank you","thanks","thanks a lot"],"difficulty":1,"tip":"thank you 更正式，thanks 更口语。","subject":"英语","level":"三年级","bank":"示例题库","language":"en-US"},
+
+    {"type":"subjective","q":"已知 $x^2-5x+6=0$，求 $x$ 并写出推导过程。","modelAnswer":"$(x-2)(x-3)=0$，所以 $x=2$ 或 $x=3$。","rubric":"正确因式分解 50 分，得出全部解 50 分。","difficulty":3,"subject":"数学","level":"初中","bank":"示例题库"},
+    {"type":"subjective","q":"发现有人落水时，应该怎样安全求助？请写出两点做法。","modelAnswer":"先大声呼叫附近成年人或拨打救援电话；在岸上把救生圈、长杆等递过去，不贸然下水。","rubric":"写清呼救方式 50 分，写清岸上施救、不贸然下水 50 分。","difficulty":2,"subject":"安全","level":"二年级","bank":"示例题库"},
+    {"type":"subjective","q":"夏天白天，海边通常吹由海面吹向陆地的风，请用一两句话解释原因。","modelAnswer":"白天陆地升温比海水快，陆地上方的空气受热上升，海面上较凉的空气流过来补充，形成海风。","rubric":"答出陆地比海洋升温快 50 分，答出空气上升、海风补充 50 分。","difficulty":4,"subject":"科学","level":"六年级","bank":"示例题库"},
+    {"type":"subjective","q":"小明有 20 元，买了 3 本 5 元的笔记本，还剩多少元？请写出算式和结果。","modelAnswer":"$20-3\\times5=5$，还剩 5 元。","rubric":"列式正确 50 分，结果和单位正确 50 分。","difficulty":2,"subject":"生活","level":"三年级","bank":"示例题库"}
   ]
 }
