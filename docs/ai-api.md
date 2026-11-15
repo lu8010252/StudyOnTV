@@ -77,7 +77,8 @@ Body: {"passphrase":"<管理密码>"}
 | POST | `/api/auth` | 用管理密码换取令牌 |
 | GET | `/api/state` | 规则、当天统计、已解锁时长和加练池 |
 | PUT | `/api/config` | 保存规则 |
-| GET | `/api/questions?limit=5000` | 读取题库 |
+| GET | `/api/questions?limit=5000` | 读取题库；支持 `offset` 分页和 `search` / `bank` / `type` / `difficulty` / `subject` / `level` / `wrong=1` 服务端筛选，返回 `{items,total,offset,limit}` |
+| GET | `/api/questions/meta` | 题库名 / 科目 / 年级列表和题量计数，不返回题目内容 |
 | POST | `/api/questions` | 新增或修改单题，或批量导入 `items` |
 | DELETE | `/api/questions/{id}` | 删除题目 |
 | POST | `/api/questions/clear` | 清空全部题库，正文 `{"confirm":true}`，含暂停题并清理题目进度 |

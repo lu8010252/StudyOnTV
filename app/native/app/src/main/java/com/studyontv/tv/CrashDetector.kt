@@ -11,7 +11,7 @@ import java.io.File
  *   2. 调用原有 handler（让系统/Bugly 继续处理）
  *
  * 下次启动时 MainActivity 读取该文件，存在则弹窗询问用户是否提交。
- * 用户确认 → BuglyInit.initWithConsent()，同时删除标记。
+ * 用户确认 → Diag.uploadPendingCrash() 后台上传到自建 Worker，同时删除标记。
  * 用户拒绝 → 只删标记，不上传。
  */
 object CrashDetector {
@@ -47,5 +47,15 @@ object CrashDetector {
 
     fun clear(context: Context) {
         File(context.filesDir, PENDING_FILE).delete()
+    }
+
+    /**
+     * 把崩溃摘要重新写回 pending 文件。
+     * 上传失败时调用，让下次启动时重试。
+     */
+    fun writePending(context: Context, summary: String) {
+        try {
+            File(context.filesDir, PENDING_FILE).writeText(summary)
+        } catch (_: Exception) { }
     }
 }

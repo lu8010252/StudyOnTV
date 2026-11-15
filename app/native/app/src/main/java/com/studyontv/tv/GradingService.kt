@@ -267,7 +267,7 @@ type 只能是：single（单选，答案用 k 表示正确选项下标）、mul
         }
         val raw = reply.optJSONArray("items") ?: throw IllegalArgumentException("模型没有返回题目列表，请重试")
         val existing = HashSet<String>()
-        val bank = store.questions(null, null, 5000)
+        val bank = store.questions(null, null, 50000)
         for (i in 0 until bank.length()) bank.optJSONObject(i)?.optString("q")?.let { existing.add(it.replace(Regex("\\s+"), "")) }
         val skipDuplicates = input.optBoolean("skipDuplicates", true)
         val items = JSONArray()

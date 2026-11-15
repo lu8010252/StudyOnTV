@@ -165,6 +165,9 @@ export default function DevicePanel({
   const [name, setName] = useState('');
   const nameSession = useRef<number | null>(null);
   const submittedName = useRef('');
+  const [endpoint, setEndpoint] = useState('');
+  const [token, setToken] = useState('');
+  const crashSession = useRef<number | null>(null);
   const keepalive = device.data?.keepalive ? keepAliveSummary(device.data) : null;
 
   useEffect(() => {
@@ -174,6 +177,13 @@ export default function DevicePanel({
       submittedName.current = '';
     }
   }, [device.data?.name, sessionId]);
+
+  useEffect(() => {
+    if (device.data?.crashUpload && crashSession.current !== sessionId) {
+      setEndpoint(device.data.crashUpload.endpoint || '');
+      crashSession.current = sessionId;
+    }
+  }, [device.data?.crashUpload?.endpoint, sessionId]);
 
   const startedAt = update.data?.logAt || update.data?.checkedAt;
   useEffect(() => {
@@ -186,18 +196,21 @@ export default function DevicePanel({
         update.data.log.length &&
         update.data.log.every((item: any) => !item.ok)
       ) {
-        toast.error('检查更新失败，请稍后再试');
+        toast.error(`检查更新失败：${update.data.log[0]?.message || '网络不通，请稍后再试'}`);
       } else {
         toast.success('当前已是最新版本');
       }
     }
   }, [polling, update.data?.checking, update.data?.hasUpdate]);
 
-  const bugly = useMutation({
-    mutationFn: (enabled: boolean) => api('/api/device/bugly', 'PUT', { enabled }),
-    onSuccess: () => {
+  const crash = useMutation({
+    mutationFn: (patch: { consent?: boolean; endpoint?: string; token?: string }) =>
+      api('/api/device/crash', 'PUT', patch),
+    onSuccess: (result: any) => {
+      client.setQueryData(['device', sessionId], (old: any) =>
+        old ? { ...old, crashUpload: result.crashUpload } : old,
+      );
       client.invalidateQueries({ queryKey: ['device', sessionId] });
-      toast.success(device.data?.buglyConsent ? '崩溃报告已关闭，下次启动生效' : '崩溃报告已开启');
     },
     onError: (error: any) => toast.error(error.message),
   });
@@ -271,6 +284,18 @@ export default function DevicePanel({
     }
     submittedName.current = name;
     rename.mutate(nextName);
+  };
+  const saveEndpoint = () => {
+    const next = endpoint.trim();
+    if (!device.data || crash.isPending) return;
+    if (next === (device.data.crashUpload?.endpoint || '').trim()) return;
+    crash.mutate({ endpoint: next });
+  };
+  const saveToken = () => {
+    const next = token.trim();
+    // 令牌只写不读：留空表示不改动已保存的值
+    if (!next || crash.isPending) return;
+    crash.mutate({ token: next }, { onSuccess: () => setToken('') });
   };
 
   useEffect(() => {
@@ -371,6 +396,10 @@ export default function DevicePanel({
   const unlockCurl = `curl -X POST "${integrationBase}/api/remote" -H "Authorization: Bearer ${displayToken}" -H "Content-Type: application/json" -d '{"action":"unlock","minutes":30}'`;
   const haYaml = `sensor:\n  - platform: rest\n    name: 题了个题\n    resource: ${integrationBase}/api/state\n    headers:\n      Authorization: Bearer <集成令牌>\n    value_template: "{{ value_json.learning.remainingSeconds }}"\n    json_attributes:\n      - learning\n      - today\n    scan_interval: 60`;
   const updateInfo = update.data;
+  const failedSources = ((updateInfo?.log || []) as any[]).filter(item => item && !item.ok);
+  const adbScript = `adb connect ${device.data?.ip || '电视IP'}:5555\nadb install -r StudyOnTV-${
+    device.data?.flavor === 'tv' ? 'TV' : 'Mobile'
+  }-v${updateInfo?.latest || '新版'}.apk`;
 
   return (
     <>
@@ -381,7 +410,7 @@ export default function DevicePanel({
             icon={MonitorSmartphone}
             description={
               device.data
-                ? `${device.data.flavor === 'tv' ? '电视版' : '手机 / 平板版'} v${device.data.version} · ${device.data.ip || '未连接 WiFi'}:${device.data.port}`
+                ? `${device.data.flavor === 'tv' ? '电视版' : '手机 / 平板版'}${device.data.desktop?.supported ? ' · 内测版' : ''} v${device.data.version} · ${device.data.ip || '未连接 WiFi'}:${device.data.port}`
                 : undefined
             }
           >
@@ -567,12 +596,68 @@ export default function DevicePanel({
             </SettingItem>
             <SettingItem
               title="崩溃报告"
-              description="仅上传调用堆栈、设备型号和应用版本。"
+              description={
+                device.data?.crashUpload?.builtInEndpoint
+                  ? '崩溃后自动上传调用堆栈、设备型号和应用版本；不含题库、管理密码和答题记录。'
+                  : '崩溃后自动上传调用堆栈、设备型号和应用版本；不含题库、管理密码和答题记录。需先填好下面的上报地址。'
+              }
             >
               <Switch
                 aria-label="崩溃报告"
-                checked={!!device.data?.buglyConsent}
-                onCheckedChange={value => bugly.mutate(value)}
+                checked={!!device.data?.crashUpload?.consent}
+                disabled={crash.isPending || !device.data}
+                onCheckedChange={value => crash.mutate({ consent: value })}
+              />
+            </SettingItem>
+            <SettingItem
+              title="上报地址"
+              description={
+                device.data?.crashUpload?.pending
+                  ? '有 1 份崩溃日志待上传，下次启动会自动补传。'
+                  : device.data?.crashUpload?.builtInEndpoint
+                    ? '不填就用内置地址；填了会覆盖内置值。'
+                    : 'Cloudflare Worker 地址，留空表示只在本机保留日志。'
+              }
+              wideControl
+            >
+              <Input
+                aria-label="崩溃上报地址"
+                className="h-9 w-full sm:w-80"
+                placeholder={device.data?.crashUpload?.builtInEndpoint || 'https://sotv-crash.xxx.workers.dev/crash'}
+                autoComplete="off"
+                spellCheck={false}
+                value={endpoint}
+                onChange={event => setEndpoint(event.target.value)}
+                onBlur={saveEndpoint}
+                onKeyDown={event => {
+                  if (event.key === 'Enter') event.currentTarget.blur();
+                }}
+              />
+            </SettingItem>
+            <SettingItem
+              title="访问令牌"
+              description={
+                device.data?.crashUpload?.builtInToken
+                  ? '已内置令牌，留空不改；填了会覆盖它。'
+                  : device.data?.crashUpload?.hasToken
+                    ? '已保存令牌。留空表示不修改。'
+                    : '与 Worker 里的 SECRET_TOKEN 一致，防止上报地址被外人滥用。'
+              }
+              wideControl
+            >
+              <Input
+                aria-label="崩溃上报令牌"
+                type="password"
+                className="h-9 w-full sm:w-80"
+                placeholder={device.data?.crashUpload?.hasToken ? '已保存，留空不修改' : '粘贴 Worker 的访问令牌'}
+                autoComplete="off"
+                spellCheck={false}
+                value={token}
+                onChange={event => setToken(event.target.value)}
+                onBlur={saveToken}
+                onKeyDown={event => {
+                  if (event.key === 'Enter') event.currentTarget.blur();
+                }}
               />
             </SettingItem>
             <SettingItem title="设备名称" description="修改后自动保存。" wideControl>
@@ -793,6 +878,55 @@ export default function DevicePanel({
               >
                 <span className="text-xs text-muted-foreground">在学习页右上角选择“更新”即可安装。</span>
               </SettingItem>
+            )}
+            {updateInfo?.installError && (
+              <SettingItem
+                title="上次安装失败"
+                description={`${updateInfo.installError}。电视上点「立即更新」会再试一次；系统不给装的话，需要到 设置 → 应用 → 安装未知应用 里允许「题了个题」。`}
+              >
+                {null}
+              </SettingItem>
+            )}
+            {failedSources.length > 0 && (
+              <SettingItem
+                title="上次检查没成功"
+                description={
+                  <>
+                    {failedSources.map(item => `${item.source}：${item.message}`).join('；')}。
+                    常见原因是电视没联网、路由器拦了 DNS，或者发布服务器暂时不可用，过一会儿再点「检查更新」即可。
+                  </>
+                }
+              >
+                {null}
+              </SettingItem>
+            )}
+            {(updateInfo?.hasUpdate || updateInfo?.installError) && (
+              <>
+              <SettingItem
+                wideControl
+                title="电视上装不上时，用电脑安装"
+                description="在电视上打开 设置 → 系统 → 开发者选项，开启「USB 调试」和「网络调试」，然后在电脑终端里依次执行："
+              >
+                <div className="flex w-full flex-wrap justify-end gap-2 sm:w-auto">
+                  {updateInfo?.url && (
+                    <Button variant="outline" asChild>
+                      <a href={updateInfo.url} target="_blank" rel="noreferrer">
+                        下载安装包
+                      </a>
+                    </Button>
+                  )}
+                  <Button variant="outline" onClick={() => copy(adbScript)}>
+                    <Copy />
+                    复制命令
+                  </Button>
+                </div>
+              </SettingItem>
+              <div className="pb-4">
+                <pre className="overflow-x-auto rounded-lg border border-border/70 bg-muted/40 p-3 text-xs leading-5">
+                  {adbScript}
+                </pre>
+              </div>
+              </>
             )}
           </SettingsCard>
         )}

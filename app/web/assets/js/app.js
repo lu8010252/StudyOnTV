@@ -2,8 +2,37 @@
   'use strict';
   var $ = function (id) { return document.getElementById(id); };
   var all = function (selector) { return Array.prototype.slice.call(document.querySelectorAll(selector)); };
-  var state = { screen: '', round: null, config: {}, learning: {}, busy: false, selected: [], version: 0, awaiting: false, reviewed: false, review: null, draft: null };
+  var state = { screen: '', round: null, config: {}, learning: {}, busy: false, selected: [], version: 0, awaiting: false, reviewed: false, review: null, draft: null, unlockPending: false };
   var toastTimer, nextTimer, taps = 0, lastTap = 0, upTaps = 0, lastUpTap = 0;
+  // 断电 / 被系统清后台后恢复当前这组题。用 localStorage 而不是 sessionStorage：
+  // 进程被杀后 WebView 是新的会话，sessionStorage 活不下来。
+  var ROUND_KEY = 'sotv_round';
+  function saveRound() {
+    if (!state.round) return clearRound();
+    try {
+      window.localStorage.setItem(ROUND_KEY, JSON.stringify({
+        round: state.round, quizGeneration: state.learning.quizGeneration || 0
+      }));
+    } catch (e) {}
+  }
+  function clearRound() { try { window.localStorage.removeItem(ROUND_KEY); } catch (e) {} }
+  function savedRound() {
+    try {
+      var saved = JSON.parse(window.localStorage.getItem(ROUND_KEY) || 'null');
+      // nonce 和 quizGeneration 都对得上，说明服务端还停在这一题，恢复才不会答到已经换掉的题
+      if (saved && saved.round && saved.round.nonce && saved.round.question &&
+          saved.quizGeneration === (state.learning.quizGeneration || 0)) return saved.round;
+    } catch (e) {}
+    return null;
+  }
+  function supportsGrid() {
+    var style = document.documentElement.style;
+    return !!(style && (typeof style.grid !== 'undefined' || typeof style.gridTemplateColumns !== 'undefined'));
+  }
+  function canVoice() { return !!(window.SOTVNative && typeof window.SOTVNative.answerVoice === 'function'); }
+  function canRead() { return !!(window.SOTVNative && typeof window.SOTVNative.readInLanguage === 'function'); }
+  // 答题 / 锁定页的家长解锁入口（默认关闭，家长在「时间计划」里打开）
+  function canUnlock() { return !!(window.SOTVNative && typeof window.SOTVNative.askParentPassword === 'function' && typeof window.SOTVNative.quizUnlock === 'function'); }
   function nativeCall(name, args) {
     var bridge = window.SOTVNative;
     try { if (bridge && typeof bridge[name] === 'function') return bridge[name].apply(bridge, args || []); } catch (e) {}
@@ -95,9 +124,11 @@
       state.busy = false;
       if (error) {
         show('quiz'); $('qText').textContent = error;
+        $('qOptions').className = 'options solo';
         $('qOptions').innerHTML = '<button class="btn btn-primary focusable" data-action="retry">重试</button>';
         return;
       }
+      clearRound();   // 新的一轮 / 锁屏：上一组题的恢复点作废（下面真的出题时会重新保存）
       state.learning = result.status || state.learning;
       pill();
       if (result.videoLesson) {
@@ -151,14 +182,16 @@
   }
   // 题库被家长删空 / 答题范围没有题目：给出明确提示并允许重试，绝不能停在旧题上
   function quizEmpty(message) {
-    state.round = null; state.busy = false;
+    state.round = null; state.busy = false; clearRound();
     show('quiz');
     $('qText').textContent = message || '题库为空，请由家长添加题目';
+    $('qOptions').className = 'options solo';
     $('qOptions').innerHTML = '<button class="btn btn-primary focusable" data-action="retry">重试</button>';
     focusDefault();
   }
   function renderQuestion() {
     var round = state.round, item = round.question;
+    saveRound();   // 记住当前这组题，App 被系统清掉后还能接着答
     if (window._pendingInput) { state.draft = { nonce: round.nonce, text: window._pendingInput.text || '', drawing: window._pendingInput.drawing || '' }; window._pendingInput = null; }
     else if (!state.draft || state.draft.nonce !== round.nonce) state.draft = { nonce: round.nonce, text: '', drawing: '' };
     state.selected = [];
@@ -174,9 +207,12 @@
     if (state.speech && state.speech.autoRead) nativeCall('readInLanguage', [item.q, item.language || '']);
     renderMedia(item);
     var options = $('qOptions'); options.innerHTML = '';
-    var longest = 0;
+    var longest = 0, optionCount = (item.a || []).length;
     (item.a || []).forEach(function (value) { longest = Math.max(longest, String(value).length); });
-    options.className = 'options' + ((item.a || []).length > 4 ? ' many' : '') + (longest > 26 ? ' wordy' : '');
+    // 5 个以上选项用紧凑排版；只有 1 个选项时铺满一行；
+    // 极老 WebView 不支持 CSS Grid，加 no-grid 退回原来的两列 flex
+    options.className = 'options' + (optionCount > 4 ? ' many' : '') + (optionCount === 1 ? ' solo' : '') +
+      (longest > 26 ? ' wordy' : '') + (supportsGrid() ? '' : ' no-grid');
     if (item.type === 'text' || item.type === 'subjective') {
       var input = document.createElement('textarea'); input.id = 'writtenAnswer'; input.className = 'written-answer';
       input.placeholder = item.type === 'subjective' ? '写下您的思路和答案…' : '请输入答案'; input.maxLength = 10000; input.autocomplete = 'off'; input.rows = 4;
@@ -188,9 +224,25 @@
         input.placeholder = '按 OK 键输入答案';
       }
       options.appendChild(input);
+      if (isTv()) {
+        // 已有草稿时 placeholder 不显示，操作方法必须常驻可见
+        var hint = document.createElement('div'); hint.className = 'tv-input-hint';
+        hint.textContent = '▶  遥控器 OK 键打开键盘输入';
+        options.appendChild(hint);
+      }
       var tools = document.createElement('div'); tools.className = 'input-tools';
-      tools.innerHTML = '<button class="btn btn-ghost focusable" data-action="voice">语音输入 / 重录</button>' + (!isTv() ? '<button class="btn btn-ghost focusable" data-action="handwrite">手写作答</button>' : '');
-      options.appendChild(tools);
+      if (isTv()) {
+        // 电视端只有原生层真的支持语音才给按钮，文案直接说明按 OK 会做什么
+        if (canVoice()) {
+          var voiceBtn = document.createElement('button'); voiceBtn.className = 'btn btn-ghost focusable';
+          voiceBtn.setAttribute('data-action', 'voice'); voiceBtn.textContent = '按 OK 语音作答';
+          tools.appendChild(voiceBtn);
+        }
+      } else {
+        tools.innerHTML = '<button class="btn btn-ghost focusable" data-action="voice">语音输入 / 重录</button>' +
+          '<button class="btn btn-ghost focusable" data-action="handwrite">手写作答</button>';
+      }
+      if (tools.childNodes.length) options.appendChild(tools);
       if (state.draft.drawing) {
         var image = document.createElement('img'); image.className = 'drawing-preview'; image.src = state.draft.drawing; options.appendChild(image);
         var clear = document.createElement('button'); clear.className = 'btn btn-ghost focusable'; clear.setAttribute('data-action', 'clear-drawing'); clear.textContent = '清除手写'; options.appendChild(clear);
@@ -206,7 +258,12 @@
       });
       if (item.type === 'multiple') addSubmit(options, '确认所选答案');
     }
-    var readBtn = document.createElement('button'); readBtn.className = 'btn btn-ghost focusable'; readBtn.setAttribute('data-action', 'read-aloud'); readBtn.textContent = '朗读题目'; options.appendChild(readBtn);
+    // 「朗读」固定放在页脚，不再混进选项区，避免遥控器在选项之间误选
+    var readAloudBtn = $('readAloudBtn');
+    if (readAloudBtn) {
+      readAloudBtn.className = 'btn btn-ghost focusable read-aloud-btn';
+      readAloudBtn.style.display = canRead() ? '' : 'none';
+    }
     window.SOTV_MATH($('qText')); window.SOTV_MATH(options);
     focusDefault();
     // #141：排版要等公式 / 图片渲染完再量；这一步不会改变正常字号下的显示
@@ -250,6 +307,13 @@
       all('#qOptions [data-opt]').forEach(function (el) {
         el.classList.toggle('selected', state.selected.indexOf(+el.getAttribute('data-opt')) >= 0);
       });
+      // 多选：选完一项把焦点移到「确认所选答案」，让遥控器用户知道下一步要按提交
+      if (isTv()) {
+        var list = focusables();
+        for (var i = 0; i < list.length; i++) {
+          if (list[i].getAttribute('data-action') === 'submit') { setFocus(i); break; }
+        }
+      }
     } else { state.selected = [index]; submit(); }
   }
   function submit() {
@@ -309,8 +373,10 @@
     updateFeedbackClock();
     go.className = 'btn ' + (right ? 'btn-primary' : 'btn-danger') + ' focusable';
     if (window.SOTV_MATH) { window.SOTV_MATH($('fbAnswer')); window.SOTV_MATH($('fbTip')); }
-    // 选项已经作答，焦点只留在“继续”上
+    // 选项已经作答，焦点只留在“继续”上（页脚的朗读也一起停用，否则方向键会落到反馈条后面）
     all('#qOptions .focusable').forEach(function (el) { el.classList.remove('focusable'); el.classList.add('answered'); });
+    var readAloudBtn = $('readAloudBtn');
+    if (readAloudBtn) readAloudBtn.classList.remove('focusable');
     var list = focusables(); for (var i = 0; i < list.length; i++) if (list[i] === go) { setFocus(i); break; }
     if (!isTv()) go.focus();
   }
@@ -340,7 +406,7 @@
     state.busy = false;
     if (state.screen !== 'quiz') return;
     if (result.finished) {
-      state.round = null;
+      state.round = null; clearRound();
       if (result.passed) {
         if (result.status.reason) { lock(result.status.reason); toast('奖励已保存，达到可用时段后使用'); return; }
         var reward = Math.round((result.rewardMinutes || 0) * 10) / 10;
@@ -375,7 +441,7 @@
   }
   function lock(reason) {
     state.lockReason = reason;
-    show('lock'); state.round = null;
+    show('lock'); state.round = null; clearRound();
     if (reason === 'feedback') { start(); return; }
     if (reason === 'rest') {
       icon($('lockIcon'), 'clock'); $('lockTitle').textContent = '休息一下';
@@ -388,6 +454,7 @@
       $('lockDesc').textContent = '家长验证后可临时进入，或返回学习页继续。';
       $('lockNote').textContent = '';
       $('lockActions').innerHTML = '<button class="btn btn-primary focusable" data-action="return-learning">返回学习页</button>';
+      appendUnlockButton();
       focusDefault(); return;
     }
     if (reason === 'locked') {
@@ -397,14 +464,19 @@
       $('lockDesc').textContent = ov.remainingSeconds > 0 ? left2(ov.remainingSeconds) + '后自动恢复' : '需要使用时，请找家长解锁';
       $('lockNote').textContent = '';
       $('lockActions').innerHTML = '';
+      appendUnlockButton();
       focusDefault(); return;
     }
     icon($('lockIcon'), reason === 'schedule' ? 'clock' : 'hourglass');
     $('lockTitle').textContent = reason === 'schedule' ? '还没到可用时间' : reason === 'rounds' ? '今天的任务已全部完成' : reason === 'quota' ? '今天的使用时间已用完' : '使用时间到了';
     var when = '';
     if (state.learning.nextAvailableAt) {
-      var date = new Date(state.learning.nextAvailableAt);
-      when = (date.getMonth() + 1) + ' 月 ' + date.getDate() + ' 日 ' + ('0' + date.getHours()).slice(-2) + ':' + ('0' + date.getMinutes()).slice(-2);
+      // 服务端按家长设置的时区算好文案，设备时区不对时也能和规则对得上
+      when = state.learning.nextAtText || '';
+      if (!when) {
+        var date = new Date(state.learning.nextAvailableAt);
+        when = (date.getMonth() + 1) + ' 月 ' + date.getDate() + ' 日 ' + ('0' + date.getHours()).slice(-2) + ':' + ('0' + date.getMinutes()).slice(-2);
+      }
     }
     $('lockDesc').textContent = when ? '下次可用：' + when : reason === 'timeup' ? '完成学习任务后才能使用设备' : '现在暂不可用';
     $('lockNote').textContent = state.config.allDay ? '' : '可用时段 ' + state.config.windowStart + ' — ' + state.config.windowEnd;
@@ -414,9 +486,22 @@
       appendChildChooser(true);
       $('lockNote').textContent = '选择自己的名字开始，进度和使用时间按人分开记录';
     } else {
-      $('lockActions').innerHTML = reason === 'timeup' ? '<button class="btn btn-primary focusable" data-action="retry">开始答题</button>' : '';
+      $('lockActions').innerHTML = reason === 'timeup' ? '<button class="btn btn-primary focusable" data-action="start-quiz">开始答题</button>' : '';
     }
+    appendUnlockButton();
     focusDefault();
+  }
+  /**
+   * 锁定页的「家长验证解锁」（Issue #201）：家长直接用遥控器输密码临时解锁 30 分钟，
+   * 不必再切到手机面板。只有家长在设置里打开 allowQuizUnlock 才显示，默认关闭。
+   */
+  function appendUnlockButton() {
+    if (!state.config.allowQuizUnlock || !canUnlock()) return;
+    var button = document.createElement('button');
+    button.className = 'btn btn-ghost focusable';
+    button.setAttribute('data-action', 'parent-unlock');
+    button.textContent = '家长验证解锁';
+    $('lockActions').appendChild(button);
   }
   /**
    * 有多个孩子时，先问一句「是谁在学」再开始：每个人的进度、额度、历史都是分开的。
@@ -543,12 +628,20 @@
     if (action === 'type-answer' && !state.busy) nativeCall('answerText', [state.draft ? state.draft.text : '', state.round ? state.round.question.q : '']);
     if (action === 'update-go') { var u = window.currentUpdate; if (u) nativeCall('installUpdate', [u.url, u.latest, u.notes || '']); }
     if (action === 'update-close') { $('updateTip').className = 'update-tip'; try { if (window.currentUpdate) window.localStorage.setItem('sotv_update_dismissed', window.currentUpdate.latest); } catch (e) {} if (el.classList.contains('focused')) focusDefault(); }
+    if (action === 'parent-unlock') {
+      if (!canUnlock()) { toast('当前设备不支持密码解锁'); return; }
+      state.unlockPending = true;
+      // 原生页没打开 / 用户一直没提交时不能让标记一直挂着，否则下一次答题输入会被当成密码
+      window.setTimeout(function () { state.unlockPending = false; }, 180000);
+      nativeCall('askParentPassword');
+    }
     if (action === 'permissions' || action === 'password') nativeCall(action === 'permissions' ? 'openPermissions' : 'changePassword');
     if (action === 'clear-drawing') { state.draft.drawing = ''; renderQuestion(); }
     if (action === 'watch-lesson') nativeCall('watchLesson');
     if (action === 'play-audio' && state.round) nativeCall('playAudio', [state.round.question.audio || '']);
     if (action === 'read-aloud') nativeCall('readInLanguage', [state.round ? state.round.question.q : '', state.round ? state.round.question.language || '' : '']);
-    if (action === 'retry') start();
+    // retry 用于错误 / 空题库的重试，start-quiz 用于「时间到了」页的「开始答题」；两者都重新取题
+    if (action === 'retry' || action === 'start-quiz') start();
     if (action === 'start-as-child' && !state.busy) {
       var kidId = el.getAttribute('data-child');
       var wantStart = !state.chosen || state.lockReason === 'timeup';
@@ -576,6 +669,19 @@
     if (hash.indexOf('#/pair') === 0) return pair();
     loadState(function (error) {
       if (error) { $('qText').textContent = error; return; }
+      // 答题途中被系统清掉再打开：服务端还停在同一题、当前也确实该答题时，恢复原来那组
+      if (!state.settingsGate && hash.indexOf('#/lock') !== 0 && !state.learning.reason && !state.learning.free &&
+          !state.learning.awaitingReview && !((state.children || []).length > 1 && !state.chosen)) {
+        var restored = savedRound();
+        if (restored) {
+          // 同一会话里切走再回来（SOTV_RESUME）不提示；只有真的重启后恢复才提示
+          var freshStart = !state.round || state.round.nonce !== restored.nonce;
+          state.round = restored;
+          show('quiz'); renderQuestion();
+          if (freshStart) toast('已恢复到刚才的题目');
+          return;
+        }
+      }
       if (state.settingsGate) {
         if (state.config.blockSettingsDuringControl !== false && !state.learning.free) lock('settings');
         else { state.settingsGate = false; start(); }
@@ -620,7 +726,9 @@
     route();
     window.setInterval(function () {
       $('clock').textContent = new Date().toTimeString().slice(0, 5);
-      if ((state.busy && !state.feedback) || state.screen === 'pair') return;
+      if (state.screen === 'pair') return;
+      // 题目提交中：等作答响应回来再轮询，否则 start() 可能把还在途中的提交状态重置掉
+      if (state.busy && !state.feedback) return;
       var version = state.config.version, quizGeneration = state.learning.quizGeneration || 0, wasFree = !!state.learning.free;
       loadState(function (error) {
         if (error) return;
@@ -661,6 +769,25 @@
   window.SOTV_INPUT = function (result, token) {
     // 原生侧靠这个标记确认注入成功，失败会重试（部分电视 WebView 切回来时 JS 尚未就绪）
     if (token) window.__sotvAck = token;
+    // 家长解锁：回传的是密码，不能写进答题草稿
+    if (state.unlockPending) {
+      state.unlockPending = false;
+      var pass = (result && result.text) || '';
+      if (!pass) { toast('已取消解锁'); return; }
+      var reply = null;
+      try { reply = JSON.parse(nativeCall('quizUnlock', [pass]) || 'null'); } catch (e) {}
+      if (reply && reply.ok) {
+        if (reply.status) state.learning = reply.status;
+        state.lockReason = '';
+        toast('已临时解锁 30 分钟');
+        nativeCall('resumePrevious');
+        route();
+        return;
+      }
+      toast(reply && reply.error === 'wrong' ? '密码错误，连续错误 5 次后需等待一分钟' : '解锁失败，请确认家长已在设置里开启');
+      focusDefault();
+      return;
+    }
     if (!state.round) { window._pendingInput = result; return; }
     state.draft = { nonce: state.round.nonce, text: result.text || '', drawing: result.drawing || '' };
     window._pendingInput = null;
@@ -670,7 +797,10 @@
   };
   window.SOTV_UPDATE = function (info) { if (!info || !info.latest) return; window.currentUpdate = info;
     try { if (!info.force && window.localStorage.getItem('sotv_update_dismissed') === info.latest) return; } catch (e) {} $('updateText').textContent = '发现新版本 v' + info.latest; $('updateTip').className = 'update-tip show'; };
-  window.TV = { move: move, select: function () { activate(); }, back: function () { if (!state.learning.reason && (state.learning.remainingSeconds > 0 || state.learning.free)) nativeCall('exitToLauncher'); else toast('现在暂不可用'); }, state: state };
+  // 朗读失败（没有系统语音、云端 Key 不对、语言不支持…）直接显示在电视上，不能再「点了没声音」
+  window.SOTV_SPEECH_NOTICE = function (info) { if (!info || info.ok !== false) return; toast(String(info.message || '朗读失败，请重试')); };
+  window.SOTV_NAVIGATION_BLOCKED = function (message) { toast(message || '现在暂不可用'); return true; };
+  window.TV = { move: move, select: function () { activate(); }, back: function () { if (state.learning.canExit === true) nativeCall('exitToLauncher'); else if (nativeCall('navigationBlocked') !== true) window.SOTV_NAVIGATION_BLOCKED(); }, state: state };
   window.SOTV_RESUME = function () { if (document.readyState === 'complete' && !state.busy && state.screen !== 'pair') route(); };
   window.addEventListener('hashchange', route);
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();

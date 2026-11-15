@@ -25,6 +25,24 @@ object GatePresentationRegression {
         diagnosticsFields(context)
         pureDecisions()
         overlayFailureLeavesNoMute(context)
+        systemSettingsGuard(context)
+    }
+
+    /**
+     * 从 GateService 抽出的 SystemSettingsGuard / AudioController：
+     * 识别口径、家长验证后的放行窗口、服务重建后的静音计时都必须和原来一致。
+     */
+    private fun systemSettingsGuard(context: Context) {
+        check(SystemSettingsGuard.isSettings(context, "com.android.settings")) { "系统设置包名必须能识别" }
+        check(!SystemSettingsGuard.isSettings(context, "com.example.player")) { "普通播放器不能算系统设置" }
+        SystemSettingsGuard.revoke()
+        check(!SystemSettingsGuard.active()) { "没有放行时设置页要被拦截" }
+        SystemSettingsGuard.grant()
+        check(SystemSettingsGuard.active()) { "家长验证后要放行设置页" }
+        SystemSettingsGuard.revoke()
+        check(!SystemSettingsGuard.active()) { "回到自家页面要立刻收回放行" }
+        AudioController.reset()
+        check(AudioController.mismatchSince == -1L && AudioController.lastMismatchAt == -1L) { "服务重建后静音计时必须清零" }
     }
 
     /** 1. 诊断字段：既有字段不能丢，#110 新增字段必须存在且类型正确 */

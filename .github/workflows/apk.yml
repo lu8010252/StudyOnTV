@@ -17,6 +17,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 17 }
+      # 上游已不再把面板构建产物（admin/）提交进仓库，所以打包前先构建家长面板，Gradle 会把 admin/ 打进 APK
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: parent-ui/package-lock.json
+      - name: 构建家长面板（输出到 admin/）
+        working-directory: parent-ui
+        run: |
+          npm ci
+          npm run build
       - name: 安装 SDK 平台（用 runner 自带的 Android SDK）
         run: |
           SDKM=$(ls "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | head -1)

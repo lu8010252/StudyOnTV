@@ -1,0 +1,14 @@
+# Cloudflare Worker：题了个题 Telegram 机器人
+# 部署前先看 README.md；敏感值请用 wrangler secret put 写入，不要写在这个文件里。
+
+name = "studyontv-telegram"
+main = "worker.js"
+compatibility_date = "2026-11-15"
+workers_dev = true
+
+# 非敏感配置可以取消注释后写在这里，例如：
+# [vars]
+# ALLOWED_CHAT_IDS = "123456789"
+#
+# TELEGRAM_BOT_TOKEN、TELEGRAM_WEBHOOK_SECRET、STUDYONTV_URL、STUDYONTV_TOKEN
+# 一律用 wrangler secret put 配置，避免提交到 Git。

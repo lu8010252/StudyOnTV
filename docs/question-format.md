@@ -101,7 +101,7 @@
 
 导入是整批事务：任何一道题不合格，本批全部回滚，不会只导入一部分。
 
-- 每次 1–5000 题，单个文件不超过 20 MB。
+- 每次 1–50000 题，单个文件不超过 20 MB。
 - 题干不能为空，最长 5000 字。
 - 单选、多选、判断必须有 2–8 个非空选项，答案下标不能越界。
 - 填空题至少一个非空答案。
@@ -142,7 +142,7 @@
 
 ## 贡献到共享题库
 
-出好的题可以顺手分享：共享题库仓库 [chadyi/StudyOnTV-banks](https://github.com/chadyi/StudyOnTV-banks) 统一收录，家长在面板「题库 → 在线题库」里点一下就能添加。
+出好的题可以顺手分享：共享题库仓库 [chadyi/StudyOnTV-banks](https://github.com/chadyi/StudyOnTV-banks)（[Gitee 镜像](https://gitee.com/chadyi/StudyOnTV-banks)）统一收录，家长在面板「题库 → 在线题库」里点一下就能添加。
 
 - 文件放 `banks/` 目录，`version` 为 2，`name`、`author`、`license` 三个字段必填，`license` 建议 CC BY 4.0 或 CC BY-SA 4.0。
 - 合并后仓库的 `index.json` 会自动更新，App 里刷新在线题库就能看到。

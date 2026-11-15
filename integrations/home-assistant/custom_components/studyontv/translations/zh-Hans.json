@@ -1,0 +1,81 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "连接题了个题",
+        "description": "填写电视的局域网地址，以及在设备「设置 → 家庭自动化」里生成的集成令牌。",
+        "data": {
+          "host": "主机",
+          "port": "端口",
+          "token": "集成令牌"
+        },
+        "data_description": {
+          "host": "电视的 IP 地址或主机名，不要带 http://、路径或端口。",
+          "port": "设备面板的 HTTP 端口，默认 8099。",
+          "token": "以 sotv_ 开头的令牌，必须包含只读权限。"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "令牌被拒绝（401/403）。请确认设备端已启用家庭自动化，并且令牌有只读权限。",
+      "cannot_connect": "无法连接设备。请检查 IP、端口，以及电视上的题了个题是否正在运行。",
+      "rate_limited": "设备正在限流（429）。请等待一分钟再试。",
+      "unknown": "未知错误。"
+    },
+    "abort": {
+      "already_configured": "这台设备（主机:端口）已经添加过了。"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "题了个题选项",
+        "description": "设置轮询间隔。每次轮询会请求 /api/state 和 /api/device 各一次。",
+        "data": {
+          "scan_interval": "扫描间隔（秒）"
+        },
+        "data_description": {
+          "scan_interval": "10 到 600 秒，默认 30 秒。"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "remaining_minutes": {
+        "name": "剩余可用分钟"
+      },
+      "used_minutes_today": {
+        "name": "今日已用分钟"
+      },
+      "learning_status": {
+        "name": "学习状态",
+        "state": {
+          "available": "可以看",
+          "quota": "今日配额已用完",
+          "rounds": "今日答题组数已用完",
+          "schedule": "不在可用时段",
+          "timeup": "可看时长已用完",
+          "locked": "家长已暂停",
+          "rest": "强制休息中",
+          "feedback": "待查看答题反馈",
+          "unknown": "未知状态"
+        }
+      },
+      "rounds_today": {
+        "name": "今日答题组数"
+      },
+      "question_count": {
+        "name": "题库题数"
+      },
+      "next_available": {
+        "name": "下次可用时间"
+      }
+    },
+    "binary_sensor": {
+      "device_online": {
+        "name": "设备在线"
+      }
+    }
+  }
+}

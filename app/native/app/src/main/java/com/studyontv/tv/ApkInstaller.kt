@@ -125,6 +125,77 @@ object ApkInstaller {
     }
 
     fun install(ctx: Context, file: File): Boolean {
+        lastError = ""
+        Prefs.setUpdateInstallError(ctx, "")
+        if (!canInstall(ctx)) {
+            // Android 8 起「安装未知应用」是按应用授权的，没开的话调起安装器只会失败，先把话说清楚
+            lastError = "系统还没允许「题了个题」安装应用"
+            Diag.warn("Install", "canRequestPackageInstalls=false, install not started")
+            return false
+        }
+        GateService.allowInstallPage()
+        if (installSession(ctx, file)) return true
+        return installView(ctx, file)
+    }
+
+    /** Android 8+ 需要「允许安装未知应用」；更老的版本是全局的「未知来源」，这里不做判断 */
+    fun canInstall(ctx: Context): Boolean = try {
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.O || ctx.packageManager.canRequestPackageInstalls()
+    } catch (_: Exception) { true }
+
+    /** 「允许安装未知应用」的系统设置页；各家电视入口不同，失败就退到本应用详情页 */
+    fun permissionIntent(ctx: Context): Intent {
+        val direct = Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
+            .setData(Uri.parse("package:" + ctx.packageName))
+        if (ctx.packageManager.resolveActivity(direct, 0) != null) return direct
+        return Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+            .setData(Uri.parse("package:" + ctx.packageName))
+    }
+
+    /**
+     * 优先走 PackageInstaller 会话：安装结果会回调到 [UpdateInstallReceiver]，失败原因能落到日志和面板里。
+     * 少数定制电视的 PackageInstaller 有问题（创建会话抛异常），这时退回 ACTION_VIEW 交给系统安装器。
+     */
+    private fun installSession(ctx: Context, file: File): Boolean {
+        try {
+            val installer = ctx.packageManager.packageInstaller
+            val params = android.content.pm.PackageInstaller.SessionParams(
+                android.content.pm.PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+            params.setAppPackageName(ctx.packageName)
+            val sessionId = installer.createSession(params)
+            installer.openSession(sessionId).use { session ->
+                file.inputStream().use { input ->
+                    session.openWrite("base.apk", 0, file.length()).use { output ->
+                        input.copyTo(output, 64 * 1024)
+                        session.fsync(output)
+                    }
+                }
+                val intent = Intent(ctx, UpdateInstallReceiver::class.java)
+                    .setAction(ACTION_INSTALL_RESULT)
+                val flags = if (Build.VERSION.SDK_INT >= 31)
+                    android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_MUTABLE
+                else android.app.PendingIntent.FLAG_UPDATE_CURRENT
+                val pending = android.app.PendingIntent.getBroadcast(ctx, sessionId, intent, flags)
+                session.commit(pending.intentSender)
+            }
+            Diag.info("Install", "install session committed size=${file.length()} api=${Build.VERSION.SDK_INT}")
+            return true
+        } catch (e: Exception) {
+            Diag.warn("Install", "session install failed, falling back to ACTION_VIEW: ${e.javaClass.simpleName} ${e.message}")
+            lastError = "安装会话失败：" + (e.message ?: e.javaClass.simpleName).take(80)
+            return false
+        }
+    }
+
+    /** 会话走不通时（例如电视限制了后台拉起确认页）退回系统安装器 */
+    fun fallbackToView(ctx: Context): Boolean {
+        val file = apkFile(ctx)
+        if (!file.exists()) { lastError = "安装包已丢失，请重新下载"; return false }
+        return installView(ctx, file)
+    }
+
+    /** 老路径：把安装包交给系统安装器。没有安装结果的回调，只能保证「已调起」 */
+    private fun installView(ctx: Context, file: File): Boolean {
         return try {
             val uri: Uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 ApkProvider.uriFor(ctx, file)
@@ -135,11 +206,16 @@ object ApkInstaller {
                 setDataAndType(uri, "application/vnd.android.package-archive")
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            GateService.openingSystemPage()
             ctx.startActivity(intent)
+            lastError = ""
+            Diag.info("Install", "ACTION_VIEW installer started")
             true
         } catch (e: Exception) {
+            lastError = "这台电视没有可用的安装器，请用「手动下载」到电视上安装"
+            Diag.error("Install", "no installer activity", e)
             false
         }
     }
+
+    const val ACTION_INSTALL_RESULT = "com.studyontv.tv.INSTALL_RESULT"
 }

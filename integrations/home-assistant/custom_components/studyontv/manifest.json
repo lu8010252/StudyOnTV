@@ -1,0 +1,11 @@
+{
+  "domain": "studyontv",
+  "name": "StudyOnTV",
+  "version": "1.0.0",
+  "documentation": "https://github.com/chadyi/StudyOnTV",
+  "issue_tracker": "https://github.com/chadyi/StudyOnTV/issues",
+  "codeowners": [],
+  "config_flow": true,
+  "iot_class": "local_polling",
+  "requirements": []
+}

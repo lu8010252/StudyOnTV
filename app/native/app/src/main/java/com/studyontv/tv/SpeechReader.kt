@@ -57,20 +57,39 @@ object SpeechReader {
     private var currentLanguage = ""
     private var lastUtteranceId = ""
     private var retriedDefault = false
-    private val attributes get() = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+    // 走媒体流而不是无障碍流：华为智慧屏、TCL 这类电视上无障碍流常常没有输出，
+    // 表现就是「点了朗读没声音」；媒体流一定会经过电视的扬声器 / HDMI。
+    private val attributes get() = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
+
+    /** DeepSeek 语音（合成 + 转写）的两种音色，见 https://api-docs.deepseek.com/zh-cn/guides/tts */
+    val DEEPSEEK_VOICES = listOf("stella", "tide")
+    /** 语音转写通路：system 用系统识别器、deepseek 上传给 DeepSeek、auto 填了 Key 就走 DeepSeek */
+    val RECOGNIZE_MODES = listOf("system", "deepseek", "auto")
 
     fun settings(store: LocalStore): JSONObject = JSONObject(store.get("speech_settings", "{}"))
         .apply {
             if (!has("mode")) put("mode", "system")
             if (!has("readLanguage")) put("readLanguage", "")
-            for (key in listOf("azureKey", "aliyunSecret")) { put(key + "Set", optString(key).isNotEmpty()); remove(key) }
+            if (!has("deepseekVoice")) put("deepseekVoice", "stella")
+            if (!has("recognizeMode")) put("recognizeMode", "system")
+            for (key in listOf("azureKey", "aliyunSecret", "deepseekKey")) { put(key + "Set", optString(key).isNotEmpty()); remove(key) }
         }
     fun save(store: LocalStore, input: JSONObject): JSONObject {
         val next = JSONObject(store.get("speech_settings", "{}"))
         val mode = input.optString("mode", "system")
-        require(mode in listOf("auto", "system", "azure", "aliyun")) { "未知朗读通路" }
+        require(mode in listOf("auto", "system", "deepseek", "azure", "aliyun")) { "未知朗读通路" }
         next.put("mode", mode).put("autoRead", input.optBoolean("autoRead"))
+        if (input.has("recognizeMode")) {
+            val recognize = input.optString("recognizeMode", "system")
+            require(recognize in RECOGNIZE_MODES) { "未知语音识别通路" }
+            next.put("recognizeMode", recognize)
+        }
+        if (input.has("deepseekVoice")) {
+            val voice = input.optString("deepseekVoice").trim().ifEmpty { "stella" }
+            require(voice in DEEPSEEK_VOICES) { "不支持的 DeepSeek 音色" }
+            next.put("deepseekVoice", voice)
+        }
         // #126：设备级朗读语言。空 = 跟随题目设置，"system" = 跟随设备系统语言（粤语系统读粤语）
         if (input.has("readLanguage")) {
             val readLanguage = input.optString("readLanguage").trim()
@@ -81,10 +100,10 @@ object SpeechReader {
             require(input.getString(key).length <= 200); next.put(key, input.getString(key).trim())
         }
         require(next.optString("azureRegion").matches(Regex("[a-z0-9-]*"))) { "Azure 区域格式错误" }
-        for (key in listOf("azureKey", "aliyunSecret")) if (input.has(key) && input.optString(key).isNotBlank()) {
+        for (key in listOf("azureKey", "aliyunSecret", "deepseekKey")) if (input.has(key) && input.optString(key).isNotBlank()) {
             require(input.getString(key).length <= 500); next.put(key, input.getString(key).trim())
         }
-        if (input.optBoolean("clearKeys")) { next.remove("azureKey"); next.remove("aliyunSecret") }
+        if (input.optBoolean("clearKeys")) { next.remove("azureKey"); next.remove("aliyunSecret"); next.remove("deepseekKey") }
         store.set("speech_settings", next.toString())
         token = ""; tokenExpires = 0
         return settings(store)
@@ -106,6 +125,7 @@ object SpeechReader {
             val config = try { JSONObject(DeviceRuntime.store.get("speech_settings", "{}")) } catch (_: Throwable) { JSONObject() }
             val mode = config.optString("mode", "system")
             val chosen = if (mode == "auto") when {
+                deepseekKey(config).isNotEmpty() -> "deepseek"
                 config.optString("azureKey").isNotEmpty() -> "azure"
                 config.optString("aliyunSecret").isNotEmpty() -> "aliyun"
                 else -> "system"
@@ -117,7 +137,7 @@ object SpeechReader {
                 else -> override
             }
             if (chosen == "system") systemRead(app, clean, spoken, request)
-            else cloudPart(app, clean.chunked(150), 0, spoken, config, chosen, request)
+            else cloudPart(app, cloudChunks(clean, chosen), 0, spoken, config, chosen, request)
         }
     }
 
@@ -156,6 +176,9 @@ object SpeechReader {
 
     fun stop() { main.post { stopNow() } }
 
+    /** 需要直接弹在电视屏幕上（而不是只写诊断）的失败：老电视上「点了朗读没声音」最常见的就是这几类 */
+    private val TOAST_REASONS = setOf("engine-unavailable", "language-unavailable", "language-check-failed", "utterance-error", "cloud-unavailable")
+
     /** 当前/最近一次朗读结果：{ok,mode,requested,language,degraded,reason,message,at}，桥方法 speechStatus 直接返回它 */
     fun status(): JSONObject = last?.let { JSONObject(it.toString()) } ?: JSONObject()
         .put("ok", true).put("mode", "").put("requested", "").put("language", "").put("degraded", false)
@@ -168,8 +191,25 @@ object SpeechReader {
         JSONObject().put("ok", false).put("mode", mode).put("requested", requested).put("language", language)
             .put("degraded", degraded).put("reason", reason).put("message", message).put("at", System.currentTimeMillis())
 
-    /** 设备默认语言（TTS 语言缺失时的回落目标） */
-    fun defaultLanguage(): String = Locale.getDefault().toLanguageTag().takeIf { it.isNotBlank() } ?: "zh-CN"
+    /**
+     * BCP47 标签标准化：`zh-Hans-CN` / `zh-Hant-TW` 这类带文字扩展的标签，部分 TTS 引擎的
+     * `setLanguage` 会直接返回 LANG_MISSING_DATA，表现就是「明明装了中文语音包却读不出来」(#128)。
+     */
+    fun normalizeLanguageTag(raw: String): String {
+        val tag = raw.trim()
+        return when {
+            tag.isEmpty() -> "zh-CN"
+            tag.startsWith("zh-Hans") || tag == "zh" || tag == "zh-CN" -> "zh-CN"
+            tag.startsWith("zh-Hant-TW") || tag == "zh-TW" -> "zh-TW"
+            tag.startsWith("zh-Hant-HK") || tag == "zh-HK" || tag.startsWith("zh-Hant-MO") -> "zh-HK"
+            tag.startsWith("en-US") || tag == "en" -> "en-US"
+            tag.startsWith("en-GB") || tag.startsWith("en-") -> "en-GB"
+            else -> tag
+        }
+    }
+
+    /** 设备默认语言（TTS 语言缺失时的回落目标），已做 BCP47 标准化 */
+    fun defaultLanguage(): String = normalizeLanguageTag(Locale.getDefault().toLanguageTag())
 
     /** 语言回落结果：degraded=true 表示请求的语言用不了，已经换成别的（或彻底失败，accepted=false） */
     data class LanguagePlan(val requested: String, val language: String, val accepted: Boolean, val degraded: Boolean, val reason: String)
@@ -211,6 +251,10 @@ object SpeechReader {
         // 成功只更新状态；只有失败才写诊断 + 推给网页（避免正常朗读也被当成提示）
         if (ok) return
         Diag.warn("Speech", "failed mode=$mode reason=$reason requested=${requested.ifEmpty { "-" }} used=${language.ifEmpty { "-" }} message=$message")
+        // 页面上没有 SOTV_SPEECH_NOTICE 时（老版本网页）至少让电视屏幕上有个提示，不能点了没反应
+        if (reason in TOAST_REASONS) main.post {
+            try { cachedContext?.let { Toast.makeText(it, message, Toast.LENGTH_LONG).show() } } catch (_: Exception) { }
+        }
         val callback = notice ?: return
         val copy = JSONObject(payload.toString())
         main.post { try { callback(copy) } catch (_: Exception) { } }
@@ -287,7 +331,8 @@ object SpeechReader {
     private fun speakSystem(context: Context, text: String, language: String, request: Int, mode: String) {
         val engine = system
         if (engine == null) {
-            notify(false, mode, "engine-unavailable", language, "", false, "系统语音不可用，无法朗读")
+            notify(false, mode, "engine-unavailable", language, "", false,
+                "这台电视没有内置的系统语音，读不出来；家长可以在面板「题目朗读」里选 DeepSeek 语音")
             return
         }
         val plan = try {
@@ -314,13 +359,144 @@ object SpeechReader {
         notify(true, mode, if (plan.degraded) "language-fallback" else "ok", plan.requested.ifEmpty { plan.language }, plan.language, plan.degraded, "")
     }
 
+    private fun currentSettings(): JSONObject = try { JSONObject(DeviceRuntime.store.get("speech_settings", "{}")) } catch (_: Exception) { JSONObject() }
+
+    /**
+     * 云端合成的分段。DeepSeek 一次最多读 1 万字，按句子攒到 400 字再请求，避免长题被切成十几段；
+     * 其他通路保持原来的 150 字。
+     */
+    fun cloudChunks(text: String, mode: String = "azure"): List<String> =
+        if (mode == "deepseek") packedSentences(text, 400) else text.chunked(150)
+
+    private val SENTENCE_ENDS = "。！？!?；;\n"
+
+    private fun packedSentences(text: String, limit: Int): List<String> {
+        val pieces = ArrayList<String>(); val current = StringBuilder()
+        fun flush() { val piece = current.toString().trim(); if (piece.isNotEmpty()) pieces.add(piece); current.setLength(0) }
+        for (ch in text) {
+            current.append(ch)
+            if (ch in SENTENCE_ENDS || current.length >= limit) flush()
+        }
+        flush()
+        val packed = ArrayList<String>(); val buffer = StringBuilder()
+        for (piece in pieces) {
+            if (buffer.isNotEmpty() && buffer.length + piece.length > limit) { packed.add(buffer.toString()); buffer.setLength(0) }
+            buffer.append(piece)
+        }
+        if (buffer.isNotEmpty()) packed.add(buffer.toString())
+        return packed.ifEmpty { listOf(text) }
+    }
+
+    /**
+     * DeepSeek 的 Key：朗读设置里填了就用它；没填时借用 AI 批改里同一家服务商（DeepSeek）的 Key，
+     * 家长不用为了朗读再填一遍。
+     */
+    fun deepseekKey(config: JSONObject = currentSettings()): String {
+        val own = config.optString("deepseekKey").trim()
+        if (own.isNotEmpty()) return own
+        if (!config.optBoolean("reuseGradingKey", true)) return ""
+        return try {
+            val grading = JSONObject(DeviceRuntime.store.get("grading_settings", "{}"))
+            if (grading.optString("provider") == "deepseek") grading.optString("apiKey").trim() else ""
+        } catch (_: Exception) { "" }
+    }
+
+    /** 语音转写要用的 DeepSeek Key；空串表示继续用系统识别器（电视上常常没有） */
+    fun recognizeKey(store: LocalStore): String {
+        val config = try { JSONObject(store.get("speech_settings", "{}")) } catch (_: Exception) { JSONObject() }
+        return if (config.optString("recognizeMode", "system") == "system") "" else deepseekKey(config)
+    }
+
+    /** DeepSeek 语音合成：返回 wav 字节（metrics 见 https://api-docs.deepseek.com/zh-cn/guides/tts） */
+    private fun deepseekBytes(config: JSONObject, text: String, language: String): ByteArray {
+        val key = deepseekKey(config)
+        require(key.isNotEmpty()) { "还没填 DeepSeek API Key" }
+        // 接口没有语种参数，语种由文本自动判断；只传音色和格式
+        val voice = config.optString("deepseekVoice").trim().takeIf { it in DEEPSEEK_VOICES } ?: "stella"
+        val body = JSONObject().put("text", text).put("voice_id", voice).put("format", "wav").toString()
+        return postBytes("https://api.deepseek.com/v1/tools/tts", key, body, "语音合成")
+    }
+
+    private fun postBytes(url: String, key: String, body: String, what: String): ByteArray {
+        val bytes = body.toByteArray(Charsets.UTF_8)
+        val connection = URL(url).openConnection() as HttpURLConnection
+        try {
+            connection.requestMethod = "POST"
+            connection.connectTimeout = 8000
+            connection.readTimeout = 30000
+            connection.doOutput = true
+            connection.setRequestProperty("Authorization", "Bearer $key")
+            connection.setRequestProperty("Content-Type", "application/json")
+            connection.setFixedLengthStreamingMode(bytes.size)
+            connection.outputStream.use { it.write(bytes) }
+            val code = connection.responseCode
+            if (code !in 200..299) {
+                val detail = try { connection.errorStream?.use { input -> String(input.readBytes(), Charsets.UTF_8) } } catch (_: Exception) { null }
+                throw IllegalStateException("DeepSeek $what 失败（HTTP $code${deepseekHint(code)}）${detail?.take(160)?.let { "：$it" }.orEmpty()}")
+            }
+            return connection.inputStream.use { input ->
+                val out = java.io.ByteArrayOutputStream(); val buffer = ByteArray(8192)
+                while (true) {
+                    val size = input.read(buffer); if (size < 0) break
+                    out.write(buffer, 0, size)
+                    require(out.size() <= 4_000_000) { "DeepSeek $what 返回的数据过大" }
+                }
+                out.toByteArray().also { require(it.size > 44) { "DeepSeek $what 返回的数据是空的" } }
+            }
+        } finally { connection.disconnect() }
+    }
+
+    private fun deepseekHint(code: Int): String = when (code) {
+        401, 403 -> "，API Key 不正确"
+        413 -> "，内容太大"
+        429 -> "，请求太频繁，稍后再试"
+        503, 504 -> "，服务繁忙，稍后再试"
+        else -> ""
+    }
+
+    /**
+     * DeepSeek 语音识别：上传 16 位 PCM WAV，返回识别出的文字。
+     * 接口限制音频 ≤8 MiB、≤120 秒，一次整段识别（https://api-docs.deepseek.com/zh-cn/guides/asr）。
+     * 会阻塞，调用方放到后台线程。
+     */
+    fun transcribe(key: String, wav: ByteArray): String {
+        require(key.isNotEmpty()) { "还没填 DeepSeek API Key" }
+        require(wav.size > 44) { "没有录到声音" }
+        require(wav.size <= 8 * 1024 * 1024) { "录音太长，请分段说" }
+        val boundary = "----sotv" + UUID.randomUUID().toString().replace("-", "")
+        val head = ("--$boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"answer.wav\"\r\n" +
+            "Content-Type: audio/wav\r\n\r\n").toByteArray(Charsets.UTF_8)
+        val tail = "\r\n--$boundary--\r\n".toByteArray(Charsets.UTF_8)
+        val connection = URL("https://api.deepseek.com/v1/tools/asr").openConnection() as HttpURLConnection
+        try {
+            connection.requestMethod = "POST"
+            connection.connectTimeout = 8000
+            connection.readTimeout = 60000
+            connection.doOutput = true
+            connection.setRequestProperty("Authorization", "Bearer $key")
+            connection.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+            connection.setFixedLengthStreamingMode(head.size + wav.size + tail.size)
+            connection.outputStream.use { it.write(head); it.write(wav); it.write(tail) }
+            val code = connection.responseCode
+            val body = try {
+                (if (code in 200..299) connection.inputStream else connection.errorStream)?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
+            } catch (_: Exception) { "" }
+            if (code !in 200..299) throw IllegalStateException("DeepSeek 语音识别失败（HTTP $code${deepseekHint(code)}）${body.take(160).let { if (it.isNotEmpty()) "：$it" else "" }}")
+            return JSONObject(body).optString("text").trim().also { require(it.isNotEmpty()) { "没有听清，请再说一遍" } }
+        } finally { connection.disconnect() }
+    }
+
     private fun cloudPart(context: Context, parts: List<String>, index: Int, language: String, config: JSONObject, mode: String, request: Int) {
         if (index >= parts.size || generation != request) return
         worker.execute {
             if (generation != request) return@execute
             try {
-                val bytes = if (mode == "azure") azure(config, parts[index], language) else aliyun(config, parts[index])
-                val file = File.createTempFile("reading-", ".mp3", context.cacheDir)
+                val bytes = when (mode) {
+                    "deepseek" -> deepseekBytes(config, parts[index], language)
+                    "azure" -> azure(config, parts[index], language)
+                    else -> aliyun(config, parts[index])
+                }
+                val file = File.createTempFile("reading-", if (mode == "deepseek") ".wav" else ".mp3", context.cacheDir)
                 file.writeBytes(bytes)
                 main.post {
                     if (generation != request) { file.delete(); return@post }
@@ -347,8 +523,10 @@ object SpeechReader {
                     }
                 }
             } catch (e: Exception) {
-                // 显式选择的云端通路失败一律静默回落系统语音（只记诊断，不打断答题）
+                // 云端合成失败：记诊断并告诉屏幕上的人原因，再回落系统语音（电视上常常没有，会再报一次）
                 Diag.warn("Speech", "cloud synth failed mode=$mode ${e.javaClass.simpleName}: ${e.message.orEmpty().take(120)}, fallback to system")
+                notify(false, mode, "cloud-unavailable", language, "", true,
+                    "云端朗读失败：${(e.message ?: e.javaClass.simpleName).take(80)}")
                 main.post { systemRead(context, parts.drop(index).joinToString(""), language, request, mode) }
             }
         }

@@ -8,6 +8,16 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
+    <!-- 同步自愈：adb 一次性授权（pm grant com.studyontv.tv android.permission.WRITE_SECURE_SETTINGS），
+         授权后 App 被固件摘掉无障碍时能自己写回去；未授权时 heal() 静默跳过 -->
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+    <!-- 复活账户：addAccountExplicitly 在旧版本需要这条（安装时权限，无需用户确认） -->
+    <uses-permission android:name="android.permission.AUTHENTICATE_ACCOUNTS" />
+    <!-- 同步框架自愈：缺 READ/WRITE_SYNC_SETTINGS 时 setSyncAutomatically/addPeriodicSync 会抛
+         SecurityException，同步适配器永远不启用（安装时权限，必须声明） -->
+    <uses-permission android:name="android.permission.READ_SYNC_SETTINGS" />
+    <uses-permission android:name="android.permission.WRITE_SYNC_SETTINGS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -15,6 +25,9 @@
     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS"
         tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- 语音输入：家长填了 DeepSeek Key 时自己录音上传识别（不填仍然走系统识别器） -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-feature android:name="android.software.leanback" android:required="false" />
@@ -24,6 +37,10 @@
     <queries>
         <intent><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.HOME" /></intent>
         <intent><action android:name="android.settings.SETTINGS" /></intent>
+        <!-- 不计时白名单：家长面板要列出已安装的可启动应用 -->
+        <intent><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent>
+        <!-- 本地语音诊断：Android 11+ 不声明就查不到任何 TTS 引擎（#128） -->
+        <intent><action android:name="android.intent.action.TTS_SERVICE" /></intent>
     </queries>
 
     <application

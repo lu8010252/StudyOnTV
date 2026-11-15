@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 带电视桌面的包是内测功能：桌面图标、应用信息里都带「内测」，和默认包区分开 -->
+<resources>
+    <string name="app_name">题了个题 · 内测</string>
+</resources>

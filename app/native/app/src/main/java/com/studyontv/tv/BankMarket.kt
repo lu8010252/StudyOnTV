@@ -111,7 +111,37 @@ object BankMarket {
         } catch (_: Exception) { false }
     }
 
+    /**
+     * 同一个文件在 Gitee 镜像上也有一份：国内直连 jsDelivr / raw.githubusercontent.com 经常超时。
+     * 只映射官方题库仓库的地址，家长自己填的题库源原样使用。
+     */
+    internal fun giteeMirror(url: String): String? {
+        val match = Regex("^https://(?:cdn\\.jsdelivr\\.net/gh|raw\\.githubusercontent\\.com)/(chadyi/StudyOnTV-banks)(?:@main|/main)/(.+)$").find(url) ?: return null
+        return "https://gitee.com/${match.groupValues[1]}/raw/main/${match.groupValues[2]}"
+    }
+
+    /** 上一次走镜像成功了就先试镜像，免得每次都在超时上白等 8 秒 */
+    @Volatile
+    private var mirrorFirst = false
+
     private fun fetchText(raw: String): String {
+        val primary = raw.trim()
+        val mirror = giteeMirror(primary)
+        val order = if (mirror == null) listOf(primary) else if (mirrorFirst) listOf(mirror, primary) else listOf(primary, mirror)
+        var last: Exception? = null
+        for (candidate in order) {
+            try {
+                val text = download(candidate)
+                mirrorFirst = candidate == mirror
+                return text
+            } catch (e: Exception) {
+                last = e
+            }
+        }
+        throw IllegalArgumentException(last?.message ?: "下载失败")
+    }
+
+    private fun download(raw: String): String {
         val url = validate(raw)
         val connection = url.openConnection() as HttpURLConnection
         return try {

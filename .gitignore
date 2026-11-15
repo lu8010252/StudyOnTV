@@ -7,10 +7,6 @@
 /app/native/local.properties
 *.iml
 
-# 已废弃的两版服务端（保留在本地，不入库）
-/server/
-/server-py/
-
 # 杂项
 .DS_Store
 Thumbs.db
@@ -26,9 +22,9 @@ __pycache__/
 StudyOnTV-*.apk
 *.idsig
 *.jks
-studyontv-release.jks
 
-/app/server/
+# parent-ui build 产物输出到 admin/，构建后不入库（CI 在构建 Android 前先 build）
+/admin/
 
 /parent-ui/dist/
 /parent-ui/**/._*
@@ -53,4 +49,9 @@ studyontv-release.jks
 # Local agent worktrees / scratch output
 /.claude/
 /tmp-check/
+
+# 崩溃上报：自建 Cloudflare Worker 只在本机维护，连同端点/令牌和拉下来的报告都不入库
+/crash-collector/
+/.crash-local.json
+/.crash-reports/
 

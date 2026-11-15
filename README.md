@@ -20,6 +20,8 @@
 Android 平板、手机和电视使用同一套规则，分别安装对应版本：
 
 - [**手机/平板/TV GitHub 下载（首选）**](https://github.com/chadyi/StudyOnTV/releases/latest)
+- [**Gitee 镜像**](https://gitee.com/chadyi/StudyOnTV)（国内访问 GitHub 慢时用这个：代码、tag 和每次版本的安装包都一样）
+- [**共享题库仓库 Gitee 镜像**](https://gitee.com/chadyi/StudyOnTV-banks)（App 里拉官方题库会自动在 GitHub / Gitee 之间来回试，不用手动改）
 
 如果无法访问 GitHub，可使用蒲公英备用下载：
 
@@ -50,7 +52,7 @@ Android 平板、手机和电视使用同一套规则，分别安装对应版本
 - **开机恢复**：接收 Android 开机、部分系统快速开机和覆盖升级广播，尝试恢复管理服务；厂商自启动及遥控器待机清后台场景见安装指南。
 - **密码管理**：首次设置管理密码，扫码面板和 API 都要验证。学习页标题连点 5 次，或焦点在最上方时遥控器「上」短按 5 次，可重新打开家长验证入口；面板里也可以修改密码。
 
-[玩法说明](./docs/gameplay.md) · [抽题偏好](./docs/pause-and-tune.md) · [星星屋积分同步](./docs/points-sync.md) · [新增需求使用说明](./docs/feature-requests.md) · [后台恢复与 tv-vigil 分析](./docs/background-recovery.md) · [iPad / 旧 Android / MAXHUB 支持范围](./docs/platform-support.md) · [题库与批改 API](./docs/ai-api.md) · [家庭自动化联动](./docs/integration.md) · [与 Home Assistant 联动](./docs/home-assistant.md) · [示例题库](./data/banks/open-play.json)
+[玩法说明](./docs/gameplay.md) · [抽题偏好](./docs/pause-and-tune.md) · [星星屋积分同步](./docs/points-sync.md) · [新增需求使用说明](./docs/feature-requests.md) · [后台恢复与 tv-vigil 分析](./docs/background-recovery.md) · [iPad / 旧 Android / MAXHUB 支持范围](./docs/platform-support.md) · [题库与批改 API](./docs/ai-api.md) · [家庭自动化联动](./docs/integration.md) · [与 Home Assistant 联动](./docs/home-assistant.md) · [远程管理电视](./docs/remote-access.md) · [示例题库](./data/banks/open-play.json) · [题库格式参考](./docs/question-format.md)
 
 管理页面由被控设备在局域网内提供。离线题目直接在设备上完成；AI 批改需要网络和家长配置的服务。
 
@@ -104,7 +106,7 @@ Android 平板、手机和电视使用同一套规则，分别安装对应版本
 | 每组题量 | 一组几道题 |
 | 答对比例 | 答对多少题才算通过（百分比） |
 | 每天最多答几组 | 答完上限即锁定 |
-| 时段用途 | 仅时段内可用 / 仅时段内需要答题；按周设置，半小时一格，可选节假日按周日 |
+| 时间规则 | 时段内答题解锁，时段外锁定或自由看；按周设置，半小时一格，可选节假日按周日时间；时区可单独指定 |
 | 系统设置保护 | 管控期间拦截，家长验证后临时放行；需无障碍或悬浮窗配合使用情况访问 |
 | 间隔重复 | 开启后优先抽取到期复习题，再补新题 |
 | 玩法 | 按组闯关、连续答对、自由练习 |
@@ -117,6 +119,7 @@ Android 平板、手机和电视使用同一套规则，分别安装对应版本
 ## 题库
 
 - 手机上新增、删除、即时生效
+- **在线题库**：面板「题库 → 在线题库」可直接从共享题库仓库导入，也能添加自己的题库源
 - **导出 JSON** 发给群里其他家长，对方「导入」一贴即用
 - 内置 50 题：唐诗填空、100 以内加减法、英语基础单词
 - 让 AI 批量出题：把 [接口说明](./docs/ai-api.md) 发给 WorkBuddy / Codex 等 Agent，让它直接往被控设备里写题
@@ -148,7 +151,7 @@ A：可以按设备条件开启悬浮窗或无障碍，并允许后台运行。�
 A：已接入 Android 开机与部分快速开机广播。请先打开 App 完成首次设置，并按厂商要求允许自启动、后台运行。小米等电视的遥控器待机、厂商清后台未必发送开机广播，需要在实际设备上验证，详见 [安装指南](./docs/install.md)。
 
 **Q：支持哪些设备？**
-A：Android 5.0+ 的平板、手机和电视。厂商后台限制需要在实际设备上确认，鸿蒙 NEXT / Tizen / webOS 待支持。
+A：Android 5.0+ 的平板、手机和电视。厂商后台限制需要在实际设备上确认，鸿蒙 NEXT / Tizen / webOS 待支持。已实测的品牌和机型见 [设备兼容性汇总](./docs/device-compat.md)。
 
 **Q：数据会传到网上吗？**
 A：题库和记录保存在被控设备。开启 AI 批改后，题目和答案会发送到家长配置的服务；项目中已有的第三方统计配置另见 [统计说明](./docs/analytics.md)。

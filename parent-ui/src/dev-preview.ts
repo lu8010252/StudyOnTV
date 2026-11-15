@@ -7,9 +7,10 @@ let learning:any={usedMinutes:18,remainingSeconds:720,roundsDoneToday:1,extraPoo
 let questions:any[]=math.items.slice(0,12).map((q,i)=>({...q,id:'preview-'+i,type:'single',subject:'数学',level:'二年级',difficulty:1,enabled:true,a:q.a.map(String),
  // #136 错题库：每 4 题里有 1 道是答错的，另有一道答对、一道没作答过，方便预览筛选
  stats:{presented:i%3+1,answered:i%3,correct:i%3===0?0:Math.max(0,i%3-1),lastCorrect:i%4===0?false:i%4===1?true:null}}));
-let device:any={name:'客厅电视 · 开发预览',flavor:'tv',version:'0.3.10',ip:'127.0.0.1',port:5173,buglyConsent:false,
- desktop:{enabled:false,isDefault:false,homePackage:'com.android.tv.settings',homeLabel:'系统桌面'},
- monitor:{service:true,overlay:true,usage:true,accessibility:true,accessibilityEnabled:true,gate:false,lastTickSeconds:1,lastError:''},
+let device:any={name:'客厅电视 · 开发预览',flavor:'tv',version:'0.3.10',ip:'127.0.0.1',port:5173,
+ crashUpload:{consent:false,endpoint:'',builtInEndpoint:'',hasToken:false,builtInToken:false,pending:false},
+ desktop:{supported:true,enabled:false,isDefault:false,homePackage:'com.android.tv.settings',homeLabel:'系统桌面'},
+ monitor:{service:true,overlay:true,usage:true,accessibility:true,accessibilityEnabled:true,notificationListener:true,notificationListenerConnected:true,gate:false,lastTickSeconds:1,lastError:''},
  autostart:{known:true,ok:true,pending:false,via:'boot',startedAfterSeconds:12,bootBroadcast:true,uptimeMinutes:320,accessibility:true},
  keepalive:{ignoringBattery:true,notifications:true,usbDebugging:false,developerOptions:false,sdk:34,manufacturer:'Xiaomi',brand:'Xiaomi',model:'Mi TV 6',android:'12',
   brandTip:'小米电视：设置 → 应用 → 应用管理 → 题了个题 → 自启动，开启；省电策略设为「无限制」'}};
@@ -18,6 +19,18 @@ let integration:any={enabled:false,read:true,control:false,hasToken:false};
 let speech:any={mode:'system',autoRead:false,readLanguage:'',azureKeySet:false,aliyunSecretSet:false};
 let children:any[]=[{id:'',name:'孩子1',createdAt:Date.now()-86400000,active:true},{id:'c2',name:'小红',createdAt:Date.now(),active:false}];
 let automation:any={sources:[],autoAi:false,minimum:30,batch:10,masteryAttempts:5,masteryAccuracy:90,topic:'',types:['single','text'],running:false,status:{}};
+let bankSources:any[]=[{name:'官方题库',url:'https://cdn.jsdelivr.net/gh/chadyi/StudyOnTV-banks@main/index.json',official:true}];
+const marketBanks=[
+ {name:'趣味常识 24 题',subject:'综合',level:'小学',count:24,author:'StudyOnTV',license:'CC BY 4.0',description:'语文、数学、科学混编的趣味小知识，适合饭后随口一问。',url:'https://cdn.jsdelivr.net/gh/chadyi/StudyOnTV-banks@main/banks/open-play.json',source:'官方题库'},
+ {name:'二年级口算 60 题',subject:'数学',level:'二年级',count:60,author:'小红妈妈',license:'CC BY-SA 4.0',description:'100 以内加减法口算，难度循序渐进。',url:'https://example.com/banks/math-2.json',source:'家长共享'}
+];
+const previewFetchedBank={name:'趣味常识',items:[
+ {q:'一年有几个季节？',type:'single',a:['2 个','3 个','4 个','5 个'],k:2,difficulty:1,subject:'科学',level:'小学'},
+ {q:'太阳从哪边升起？',type:'single',a:['东边','西边','南边','北边'],k:0,difficulty:1,subject:'科学',level:'小学'},
+ {q:'判断：水在 0℃ 时会结冰。',type:'boolean',a:['正确','错误'],k:0,difficulty:2,subject:'科学',level:'小学'}
+]};
+// 和 App 端 LocalStore.stemKey 一致：忽略空白、标点和大小写
+const stemKey=(stem:string)=>String(stem||'').toLowerCase().replace(/[\s，。？?！!、；;：:（）()"'“”‘’《》<>]/g,'');
 let previewReviews:any[]=[
  {id:'review-graded',state:'graded',ts:Date.now()-3600000,gradedAt:Date.now()-3500000,score:85,source:'ai',
   feedback:'思路正确，最后一步单位写成了米，应为千米。',
@@ -34,6 +47,12 @@ const update={current:'0.3.10',version:'0.3.10',checking:false,hasUpdate:false,m
 export async function previewApi(path:string,method:string,body:any){
  const route=path.split('?')[0];
  if(route==='/api/state')return structuredClone({config,learning,questions:questions.length,repetition:{studied:8,due:3},children,activeChild:children.find(c=>c.active)?.id||''});
+ if(route==='/api/apps')return{items:[
+  {package:'com.android.systemui.screensaver',name:'系统屏保'},
+  {package:'com.example.onlineclass',name:'网课 · 数学同步'},
+  {package:'com.example.video',name:'云视听小电视'},
+  {package:'com.example.music',name:'音乐'},
+ ]};
  if(route==='/api/children'){
   if(method==='POST'){const name=String(body.name||'').trim();if(!name||children.some(c=>c.name===name))throw new Error('名字为空或重复');children.push({id:'preview-'+children.length,name,createdAt:Date.now(),active:false});}
   else if(method==='PUT'){children=children.map(c=>c.id===body.id?{...c,name:String(body.name||'').trim()}:c);}
@@ -49,9 +68,45 @@ export async function previewApi(path:string,method:string,body:any){
  }
  if(route==='/api/config'){if(method==='PUT')config={...config,...body,version:config.version+1};return structuredClone({config});}
  if(route==='/api/questions'){
-  if(method==='POST'){const items=body.items||[body];for(const item of items){const index=questions.findIndex(q=>q.id===item.id);if(index>=0)questions[index]={...item};else questions.push({...item,id:'preview-'+crypto.randomUUID()});}return{ok:true,added:items.length};}
-  return structuredClone({items:questions,total:questions.length});
+  if(method==='POST'){const items=body.items||[body];let added=0;for(const item of items){const index=questions.findIndex(q=>q.id===item.id);if(index>=0){questions[index]={...item};added++;continue;}if(body.skipDuplicates&&questions.some(q=>stemKey(q.q)===stemKey(item.q)))continue;questions.push({...item,id:'preview-'+crypto.randomUUID()});added++;}return{ok:true,added,skipped:items.length-added};}
+  // 真机上是服务端筛选 + 分页，预览里用同一套参数在内存里模拟
+  const query=new URLSearchParams(path.split('?')[1]||'');
+  const keyword=(query.get('search')||'').trim().toLowerCase();
+  const all=query.get('all')==='1'||query.get('enabledOnly')==='false';
+  let list=questions.filter(q=>(all||q.enabled!==false)
+   &&(!keyword||(q.q+' '+q.tip+' '+(q.a||[]).join(' ')+' '+(q.subject||'')+' '+(q.level||'')).toLowerCase().includes(keyword))
+   &&(!query.get('bank')||(q.bank||'默认题库')===query.get('bank'))
+   &&(!query.get('type')||(q.type||'single')===query.get('type'))
+   &&(!query.get('subject')||(q.subject||'')===query.get('subject'))
+   &&(!query.get('level')||(q.level||'')===query.get('level'))
+   &&(!query.get('difficulty')||String(q.difficulty||2)===query.get('difficulty'))
+   &&(query.get('wrong')!=='1'||q.stats?.lastCorrect===false));
+  const sort=query.get('sort')||'random';
+  if(sort==='diff')list=[...list].sort((a:any,b:any)=>(b.difficulty||2)-(a.difficulty||2));
+  else if(sort==='type')list=[...list].sort((a:any,b:any)=>String(a.type).localeCompare(String(b.type))||(b.difficulty||2)-(a.difficulty||2));
+  const offset=Number(query.get('offset')||0),limit=Number(query.get('limit')||500);
+  return structuredClone({items:list.slice(offset,offset+limit),total:list.length,offset,limit});
  }
+ if(route==='/api/questions/meta'){
+  const banks=[...new Set(questions.map((q:any)=>q.bank||'默认题库'))].sort();
+  const subjects=[...new Set(questions.map((q:any)=>q.subject).filter(Boolean))].sort();
+  const levels=[...new Set(questions.map((q:any)=>q.level).filter(Boolean))].sort();
+  return {banks,subjects,levels,total:questions.length,
+   enabled:questions.filter((q:any)=>q.enabled!==false).length,
+   paused:questions.filter((q:any)=>q.enabled===false).length,
+   wrong:questions.filter((q:any)=>q.stats?.lastCorrect===false).length};
+ }
+ if(route==='/api/banks/market')return structuredClone({sources:bankSources,banks:bankSources.length>1?marketBanks.concat({...marketBanks[1],name:'家长自编 20 题',url:'https://example.com/banks/parent.json',source:'家长共享'}):marketBanks.filter(b=>b.source==='官方题库'),failed:[]});
+ if(route==='/api/banks/sources'){
+  if(method==='POST'){const url=String(body.url||'').trim();if(!/^https?:\/\//.test(url))throw new Error('请填写 http(s) 地址');if(bankSources.some(s=>s.url===url))throw new Error('这个地址已经添加过了');bankSources.push({name:String(body.name||'').trim()||'自定义题库源',url,official:false});}
+  else if(method==='DELETE')bankSources=bankSources.filter(s=>s.official||s.url!==body.url);
+  return structuredClone({sources:bankSources});
+ }
+ if(route==='/api/banks/fetch')return{ok:true,data:structuredClone(previewFetchedBank)};
+ if(route==='/api/speech/probe')return{ok:true,engine:'com.google.android.tts',language:'zh-CN',langStatus:0,hint:'本地语音可用（com.google.android.tts）'};
+ if(route==='/api/speech/engines')return{defaultEngine:'com.google.android.tts',engines:[{name:'com.google.android.tts',label:'Google 文字转语音',default:true},{name:'com.example.voice',label:'讯飞语音',default:false}]};
+ if(route==='/api/speech/install-voice')return{ok:true};
+ if(route==='/api/speech/test')return{ok:true,mode:'system',reason:'ok',language:'zh-CN'};
  if(route==='/api/speech'){if(method==='PUT'){speech={...speech,...body,azureKeySet:body.clearKeys?false:!!body.azureKey||speech.azureKeySet,aliyunSecretSet:body.clearKeys?false:!!body.aliyunSecret||speech.aliyunSecretSet};delete speech.azureKey;delete speech.aliyunSecret;}return structuredClone(speech);}
  if(route==='/api/bank-automation'){if(method==='PUT')automation={...automation,...body};return structuredClone(automation);}
  if(route==='/api/bank-automation/sync'){automation.status={at:Date.now(),ok:true,sources:[]};return structuredClone(automation);}
@@ -64,7 +119,14 @@ export async function previewApi(path:string,method:string,body:any){
  if(route==='/api/device/launcher'){device.launcherHidden=!!body.hidden;return{ok:true,launcherHidden:device.launcherHidden};}
  if(route==='/api/device/desktop'){device.desktop={...device.desktop,enabled:!!body.enabled,isDefault:!!body.enabled&&device.desktop.isDefault};return structuredClone(device.desktop);}
  if(route==='/api/device/desktop/choose'){if(device.desktop.enabled)device.desktop.isDefault=true;return structuredClone(device.desktop);}
- if(route==='/api/device/bugly'){device.buglyConsent=!!body.enabled;return{ok:true};}
+ if(route==='/api/device/crash'){
+  const next={...device.crashUpload};
+  if('consent' in body)next.consent=!!body.consent;
+  if('endpoint' in body)next.endpoint=String(body.endpoint||'');
+  if(body.token)next.hasToken=true;
+  device.crashUpload=next;
+  return{ok:true,crashUpload:structuredClone(next)};
+ }
  if(route==='/api/grading'){if(method==='PUT')grading={...grading,...body};return structuredClone(grading);}
  if(route==='/api/reviews'){
   const query=new URLSearchParams(path.split('?')[1]||'');
@@ -74,6 +136,14 @@ export async function previewApi(path:string,method:string,body:any){
   return{items};
  }
  if(route.startsWith('/api/reviews/')&&method==='GET')return structuredClone(previewReviews.find(r=>r.id===route.split('/').pop())||{});
+ if(route==='/api/coverage'){
+  const covered=questions.filter(q=>Number(q.stats?.correct||0)>0).length;
+  const pending=questions.filter(q=>Number(q.stats?.correct||0)===0);
+  const percent=questions.length?Math.round(covered*100/questions.length):0;
+  return{total:questions.length,covered,percent,pending:pending.length,untouched:pending.filter(q=>Number(q.stats?.presented||0)===0).length,
+   banks:[{name:'默认题库',total:questions.length,covered,percent}],
+   items:pending.slice(0,20).map(q=>({id:q.id,q:q.q,bank:q.bank||'默认题库',subject:q.subject,level:q.level,presented:Number(q.stats?.presented||0),answered:Number(q.stats?.answered||0)}))};
+ }
  if(route==='/api/history')return{items:Array.from({length:7},(_,i)=>{const day=new Date();day.setDate(day.getDate()-i);return{label:day.toLocaleDateString('zh-CN',{month:'numeric',day:'numeric'}),watch:[18,32,25,40,16,35,28][i],answered:15+i*2,accuracy:80+i,rounds:2};})};
  if(route==='/api/events')return{items:[{type:'quiz_pass',ts:Date.now()-600000,payload:{minutes:10}},{type:'answer',ts:Date.now()-700000,payload:{correct:true}}]};
  if(route==='/api/update'||route==='/api/update/check')return structuredClone(update);

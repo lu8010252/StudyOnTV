@@ -14,13 +14,17 @@ import android.webkit.WebView
 
 class ParentActivity : Activity() {
     private var verified = false
+    private var initialSetup = false
+    /** Read by the key filter: no password/preferences lookup may happen in that callback. */
+    val requiresParentVerification: Boolean get() = !initialSetup && !verified
     private var web: WebView? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         DeviceRuntime.ensure(this)
-        if (AdminAuth.configured(this) && AdminAuth.recentlyVerified()) { verified = true; connection() }
-        else form(!AdminAuth.configured(this))
+        initialSetup = !AdminAuth.configured(this)
+        if (!initialSetup && AdminAuth.recentlyVerified()) { verified = true; connection() }
+        else form(initialSetup)
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
@@ -73,6 +77,7 @@ class ParentActivity : Activity() {
                     error.text = "密码需要 6–64 位，两次输入须一致"; return
                 }
                 AdminAuth.setPassword(this, value)
+                initialSetup = false
                 AdminAuth.markVerified()
                 if (!Prefs.onboarded(this)) {
                     startActivity(Intent(this, OnboardingActivity::class.java)); finish(); return

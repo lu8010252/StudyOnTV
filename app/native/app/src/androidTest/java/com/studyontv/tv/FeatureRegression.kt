@@ -4,6 +4,8 @@ import android.content.Context
 import android.os.SystemClock
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Calendar
+import java.util.TimeZone
 
 object FeatureRegression {
     /** 单独跑隐藏桌面图标（-e launcher 1），改这块时不用等整套回归 */
@@ -142,12 +144,36 @@ object FeatureRegression {
             check(SpeechReader.settings(store).getString("readLanguage") == "zh-HK")
             SpeechReader.save(store, JSONObject().put("mode", "system").put("readLanguage", ""))
             check(SpeechReader.settings(store).getString("readLanguage").isEmpty()) { "留空 = 跟随每道题的语言" }
+            // DeepSeek 语音：老电视没有系统朗读时用它（夜读 / 识别都走同一份 Key）
+            val deepseek = SpeechReader.save(store, JSONObject().put("mode", "deepseek").put("deepseekKey", "sk-test").put("deepseekVoice", "tide").put("recognizeMode", "auto"))
+            check(deepseek.getString("mode") == "deepseek" && deepseek.getBoolean("deepseekKeySet") && !deepseek.has("deepseekKey")) { "DeepSeek Key 不能回传给面板: $deepseek" }
+            check(deepseek.getString("deepseekVoice") == "tide" && deepseek.getString("recognizeMode") == "auto")
+            try { SpeechReader.save(store, JSONObject().put("mode", "deepseek").put("deepseekVoice", "nova")); error("bad voice accepted") } catch (_: IllegalArgumentException) { }
+            try { SpeechReader.save(store, JSONObject().put("mode", "novoice")); error("bad mode accepted") } catch (_: IllegalArgumentException) { }
+            check(SpeechReader.recognizeKey(store) == "sk-test") { "识别通路为自动时填了 Key 就用 DeepSeek" }
+            SpeechReader.save(store, JSONObject().put("mode", "deepseek").put("recognizeMode", "system"))
+            check(SpeechReader.recognizeKey(store).isEmpty()) { "识别通路选系统时不录音上传" }
+            SpeechReader.save(store, JSONObject().put("mode", "deepseek").put("recognizeMode", "auto"))
+            // 分段：按句子攒到 400 字，拼起来要和原文一致（长题不能读丢字）
+            val long = "第一句话。第二句话，稍长一点点。".repeat(40)
+            val chunks = SpeechReader.cloudChunks(long, "deepseek")
+            check(chunks.all { it.length <= 400 } && chunks.joinToString("") == long.replace(" ", "").replace("\n", "")) { "DeepSeek 分段丢字: ${chunks.size}" }
+            check(SpeechReader.cloudChunks("短题", "deepseek") == listOf("短题"))
+            // 录音转 WAV：16 kHz / 单声道 / 16 位
+            val wav = VoiceCapture.wav(ByteArray(3200))
+            check(String(wav, 0, 4) == "RIFF" && String(wav, 8, 4) == "WAVE" && wav.size == 3244)
+            check((wav[24].toInt() and 0xff) == 0x80 && (wav[25].toInt() and 0xff) == 0x3e) { "采样率需要是 16000" }
+            check((wav[22].toInt() and 0xff) == 1 && (wav[34].toInt() and 0xff) == 16) { "单声道 16 位" }
+            try { SpeechReader.transcribe("", wav); error("empty key accepted") } catch (_: IllegalArgumentException) { }
             store.upsertQuestion(JSONObject("""{"id":"canto","q":"粵語題目","a":["A","B"],"k":0,"language":"zh-HK"}"""))
             store.deleteQuestions(listOf("canto"))
             children(store, engine)
             wrongBank(context)
+            coverage(context)
+            questionPaging(context)
             launcherIcon(context)
             try { BankAutomation.save(store, JSONObject().put("sources", JSONArray().put(JSONObject().put("name", "invalid").put("url", "file:///tmp/bank.json"))));error("invalid source accepted") } catch (_: IllegalArgumentException) { }
+            timezone(store)
         } finally { store.close();context.deleteDatabase(name) }
     }
     /** #132：多孩子档案——学习状态、规则、事件、复习进度都按孩子隔离 */
@@ -249,6 +275,95 @@ object FeatureRegression {
             store.close()
             context.deleteDatabase(name)
         }
+    }
+
+    /** 覆盖优先：还没答对过的题排在前面，家长面板的 coverage() 与出题顺序用同一套口径 */
+    private fun coverage(context: Context) {
+        val name = "feature-coverage.db"
+        context.deleteDatabase(name)
+        val store = LocalStore(context, name)
+        try {
+            val engine = LearningEngine(store)
+            engine.saveConfig(JSONObject().put("allDay", true).put("dailyLimitEnabled", false).put("roundsLimitEnabled", false)
+                .put("playMode", "practice").put("coverageFirst", true))
+            check(store.config().getBoolean("coverageFirst")) { "覆盖优先开关要能保存" }
+            listOf("c0", "c1", "c2").forEach {
+                store.upsertQuestion(JSONObject("""{"id":"$it","q":"$it","a":["对","错"],"k":0}"""))
+            }
+            // c0 已经答对过，c1 / c2 还没答对：覆盖优先时已答对的必须排到最后
+            store.answered("c0", true)
+            val ordered = store.questions(coverageFirst = true)
+            val ids = (0 until ordered.length()).map { ordered.getJSONObject(it).getString("id") }
+            check(ids.size == 3 && ids.last() == "c0") { "已答对的题应当排在最后，实际 $ids" }
+            // 覆盖统计必须在出题之前看：start() 会把出过的那道题记成 presented，untouched 就少一道
+            val cov = store.coverage()
+            check(cov.getInt("total") == 3) { "覆盖率统计的题量不对: $cov" }
+            check(cov.getInt("covered") == 1) { "答对过的题只该有 1 道: $cov" }
+            check(cov.getInt("pending") == 2) { "未答对的题该有 2 道: $cov" }
+            check(cov.getInt("untouched") == 2) { "没出过的题只该有 2 道: $cov" }
+            check(cov.getInt("percent") == 33) { "覆盖率应当是 33%: $cov" }
+            check(cov.getJSONArray("items").length() == 2) { "未答对的样本数量不对: $cov" }
+
+            val round = engine.start()
+            check(round.getJSONObject("question").getString("id") != "c0") { "第一题不该出已答对的题: $round" }
+
+            // 关掉开关后回到原来的随机顺序
+            engine.saveConfig(JSONObject().put("coverageFirst", false))
+            check(!store.config().getBoolean("coverageFirst")) { "关掉覆盖优先要能保存" }
+        } finally {
+            store.close()
+            context.deleteDatabase(name)
+        }
+    }
+
+    /**
+     * 题库页分页：筛选 / 搜索 / 分页都在 SQL 里做，只返回一页；
+     * bank / type 提成独立列后，题库筛选和删除题库不再全表解析 details。
+     */
+    private fun questionPaging(context: Context) {
+        val name = "feature-page.db"
+        context.deleteDatabase(name)
+        LocalStore(context, name).use { store ->
+            repeat(60) { i ->
+                val bank = if (i % 3 == 0) "语文" else "数学"
+                store.upsertQuestion(JSONObject()
+                    .put("id", "p$i")
+                    .put("q", if (i % 10 == 0) "分数 100% 练习 $i" else "题目 $i")
+                    .put("a", JSONArray(listOf("A", "B"))).put("k", 0)
+                    .put("bank", bank).put("level", if (i % 3 == 0) "二年级" else "一年级")
+                    .put("subject", "常识").put("type", "single"))
+            }
+            store.upsertQuestion(JSONObject("""{"id":"paused","q":"暂停题","a":["A","B"],"correctIndices":[0],"bank":"数学","type":"multiple"}"""))
+            store.setEnabled(listOf("paused"), false)
+
+            val first = store.questionPage(limit = 25, offset = 0)
+            check(first.getInt("total") == 60) { "启用题应当是 60 道: $first" }
+            check(first.getJSONArray("items").length() == 25) { "一页只该返回 25 道: $first" }
+            check(first.getInt("limit") == 25 && first.getInt("offset") == 0)
+            check(store.questionPage(limit = 25, offset = 50).getJSONArray("items").length() == 10) { "最后一页只该有 10 道" }
+            check(store.questionPage(enabledOnly = false, limit = 1).getInt("total") == 61) { "含暂停题应当是 61 道" }
+
+            // 题库 / 题型筛选走独立列
+            check(store.questionPage(bank = "数学", limit = 100).getInt("total") == 40) { "数学题库应当是 40 道" }
+            check(store.idsInBank("数学").size == 41) { "删除题库要按 bank 列找题，含已暂停的题" }
+            check(store.questionPage(type = "multiple", limit = 100).getInt("total") == 0) { "唯一的多选题已暂停，默认不该出现" }
+            check(store.questionPage(type = "multiple", enabledOnly = false, limit = 100).getInt("total") == 1) { "多选筛选要按 type 列" }
+
+            // 搜索：题干命中；% 是普通字符，不能当通配符扫全库
+            check(store.questionPage(search = "分数", limit = 100).getInt("total") == 6)
+            check(store.questionPage(search = "100%", limit = 100).getInt("total") == 6) { "百分号要当普通字符搜索" }
+            check(store.questionPage(search = "题目 7", limit = 100).getInt("total") == 1) { "搜索要能定位到单题" }
+
+            // 错题筛选与题库页计数
+            store.answered("p0", false)
+            check(store.questionPage(wrongOnly = true).getInt("total") == 1) { "错题筛选只应有 1 道" }
+            val meta = store.questionMeta()
+            check(meta.getInt("total") == 61 && meta.getInt("paused") == 1 && meta.getInt("wrong") == 1) { "题库页计数不对: $meta" }
+            val banks = meta.getJSONArray("banks")
+            check(banks.length() == 2 && banks.getString(0) == "数学" && banks.getString(1) == "语文") { "题库名列表不对: $meta" }
+            check(meta.getJSONArray("levels").length() == 2) { "年级列表不对: $meta" }
+        }
+        context.deleteDatabase(name)
     }
 
     /** 隐藏桌面图标：只关启动入口 alias，MainActivity 和进程不受影响，随时可以恢复 */
@@ -391,7 +506,7 @@ object FeatureRegression {
                 old.writableDatabase.version = 7
             }
             LocalStore(context, v7).use { migrated ->
-                check(migrated.readableDatabase.version == 8)
+                check(migrated.readableDatabase.version == 9)
                 val stats = migrated.questions().getJSONObject(0).getJSONObject("stats")
                 check(stats.getInt("answered") == 1 && stats.getInt("correct") == 1) { "升级不能丢掉旧统计: $stats" }
                 check(stats.isNull("lastCorrect")) { "旧库没有最近一次对错，应当当作未作答: $stats" }
@@ -399,6 +514,23 @@ object FeatureRegression {
                 check(migrated.questions().getJSONObject(0).getJSONObject("stats").get("lastCorrect") == false) { "升级后要能记错题" }
             }
         } finally { context.deleteDatabase(v7) }
+        // 第 9 版：bank / type 从 details 回填成独立列，老数据升级后题库筛选、删除题库要照常可用
+        val v8 = "migration-v8-regression.db"
+        context.deleteDatabase(v8)
+        try {
+            LocalStore(context, v8).use { old ->
+                // 直接按第 8 版的列写一行，bank / type 只存在 details 里
+                old.writableDatabase.execSQL(
+                    "INSERT INTO questions(id,subject,level,difficulty,stem,options,answer,tip,enabled,created_at,details) VALUES('legacy','常识','一年级',2,'老题','[\"A\",\"B\"]',0,'',1,0,?)",
+                    arrayOf(JSONObject().put("bank", "老题库").put("type", "multiple").toString()))
+                old.writableDatabase.version = 8
+            }
+            LocalStore(context, v8).use { migrated ->
+                check(migrated.readableDatabase.version == 9)
+                check(migrated.idsInBank("老题库") == listOf("legacy")) { "升级时要按 details 回填题库列" }
+                check(migrated.questionPage(bank = "老题库", type = "multiple").getInt("total") == 1) { "升级后题库筛选要能用" }
+            }
+        } finally { context.deleteDatabase(v8) }
     }
     private fun remoteSync(store: LocalStore) {
         val server = java.net.ServerSocket(0, 4, java.net.InetAddress.getByName("127.0.0.1"))
@@ -426,6 +558,62 @@ object FeatureRegression {
             check(after.length() == 1 && after.getJSONObject(0).getString("q") == "original") { "同步失败必须回滚已更新的题目" }
             check(after.getJSONObject(0).getString("id") == original.getString("id"))
         } finally { server.close();thread.join(2000) }
+    }
+    /**
+     * 时区：可用时段和「今天」的界线按配置的时区算。
+     * 场景是电视机系统时区固定在国内、人已经搬到国外，或者反过来。
+     */
+    private fun timezone(store: LocalStore) {
+        val engine = LearningEngine(store)
+        val before = store.config().optString("timezone")
+        try {
+            // 官方题库仓库在国内走 Gitee 镜像，只映射这个仓库的地址
+            check(BankMarket.giteeMirror("https://cdn.jsdelivr.net/gh/chadyi/StudyOnTV-banks@main/banks/open-play.json")
+                == "https://gitee.com/chadyi/StudyOnTV-banks/raw/main/banks/open-play.json")
+            check(BankMarket.giteeMirror("https://raw.githubusercontent.com/chadyi/StudyOnTV-banks/main/index.json")
+                == "https://gitee.com/chadyi/StudyOnTV-banks/raw/main/index.json")
+            check(BankMarket.giteeMirror("https://example.com/bank.json") == null) { "家长自己填的源不改写" }
+
+            store.saveConfig(JSONObject().put("timezone", "America/New_York"))
+            try { store.saveConfig(JSONObject().put("timezone", "Mars/Olympus"));error("unknown zone accepted") } catch (_: IllegalArgumentException) { }
+            check(DeviceClock.setting(store) == "America/New_York") { "未知时区不能写进配置" }
+            // 引擎和「今天」的起点都跟着配置的时区走
+            val newYork = TimeZone.getTimeZone("America/New_York")
+            val offset = (engine.now().get(Calendar.ZONE_OFFSET) + engine.now().get(Calendar.DST_OFFSET)) / 3600000
+            check(offset == newYork.getOffset(System.currentTimeMillis()) / 3600000) { "引擎应使用配置的时区" }
+            val day = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").apply { timeZone = newYork }
+            val start = day.format(java.util.Date(store.startOfToday()))
+            check(start.endsWith("00:00") && start == day.format(java.util.Date(System.currentTimeMillis())).take(10) + " 00:00") { "「今天」的起点按配置时区算: $start" }
+
+            // 同一个时刻：上海 09:10、纽约前一天 20:10，窗口只开 09:00–10:00
+            val instant = Calendar.getInstance(TimeZone.getTimeZone("Asia/Shanghai")).apply {
+                set(2030, Calendar.JANUARY, 7, 9, 10, 0);set(Calendar.MILLISECOND, 0)
+            }.timeInMillis
+            val slots = JSONArray().apply { repeat(7) { put("0".repeat(18) + "11" + "0".repeat(28)) } }
+            store.saveConfig(JSONObject().put("timezone", "Asia/Shanghai").put("allDay", false).put("scheduleMode", "allow")
+                .put("weekSlots", slots).put("dailyLimitEnabled", false).put("roundsLimitEnabled", false)
+                .put("dailyFreeMinutes", 0).put("bootFreeMinutes", 0).put("restEnabled", false)
+                .put("timePoints", JSONArray()).put("exemptWindows", JSONArray()))
+            store.set("remote_override", "");store.set("feedback_deadline", "")
+            engine.remote("credit", 30, "tz-test")
+            fun at(zone: String) = Calendar.getInstance(TimeZone.getTimeZone(zone)).apply { timeInMillis = instant }
+            engine.now = { at("Asia/Shanghai") }
+            check(engine.status().getString("reason").isEmpty()) { "上海时间在时段内应可用: ${engine.status()}" }
+            engine.now = { at("America/New_York") }
+            check(engine.status().getString("reason") == "schedule") { "纽约时间在时段外应锁定: ${engine.status()}" }
+            engine.now = { at("UTC") }
+            val utc = engine.status()
+            check(utc.getString("reason") == "schedule")
+            // 「下次可用」按配置的时区显示，而不是设备时区
+            check(utc.optString("nextAtText").let { it.contains("月") && it.contains("日") && it.endsWith(":00") }) { "下次可用文案: $utc" }
+            val fourAm = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
+                set(2026, Calendar.JANUARY, 5, 4, 0, 0);set(Calendar.MILLISECOND, 0)
+            }.timeInMillis
+            check(DeviceClock.format(fourAm, store) == "1 月 5 日 12:00") { "UTC 04:00 在上海应是 12:00" }
+        } finally {
+            engine.now = { DeviceClock.calendar(store) }
+            store.saveConfig(JSONObject().put("timezone", before))
+        }
     }
     private fun answer(round: JSONObject, selection: Int) = JSONObject().put("roundId", round.getString("id"))
         .put("nonce", round.getString("nonce")).put("selections", JSONArray().put(selection))

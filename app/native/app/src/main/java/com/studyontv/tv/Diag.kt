@@ -5,6 +5,8 @@ import android.os.Build
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -66,26 +68,116 @@ object Diag {
         try { dir(context).listFiles()?.forEach { it.delete() } } catch (_: Exception) { }
     }
 
+    private fun buildDeviceJson(context: Context): JSONObject =
+        JSONObject()
+            .put("app", "StudyOnTV")
+            .put("version", BuildConfig.VERSION_NAME)
+            .put("versionCode", BuildConfig.VERSION_CODE)
+            .put("flavor", BuildConfig.FLAVOR)
+            .put("package", context.packageName)
+            .put("model", Build.MODEL)
+            .put("manufacturer", Build.MANUFACTURER)
+            .put("android", Build.VERSION.RELEASE)
+            .put("sdk", Build.VERSION.SDK_INT)
+            .put("uptimeMinutes", android.os.SystemClock.elapsedRealtime() / 60000)
+            .put("monitor", GateService.diagnostics(context))
+            .put("autostart", Watchdog.report(context))
+            .put("update", Updater.status(context))
+
     fun export(context: Context): ByteArray {
         val out = java.io.ByteArrayOutputStream()
         ZipOutputStream(out).use { zip ->
             dir(context).listFiles()?.filter { it.isFile }?.forEach { file ->
                 zip.putNextEntry(ZipEntry("logs/${file.name}")); zip.write(file.readBytes()); zip.closeEntry()
             }
-            val device = JSONObject()
-                .put("app", "StudyOnTV").put("version", BuildConfig.VERSION_NAME).put("versionCode", BuildConfig.VERSION_CODE)
-                .put("flavor", BuildConfig.FLAVOR).put("package", context.packageName)
-                .put("model", Build.MODEL).put("manufacturer", Build.MANUFACTURER)
-                .put("android", Build.VERSION.RELEASE).put("sdk", Build.VERSION.SDK_INT)
-                .put("uptimeMinutes", android.os.SystemClock.elapsedRealtime() / 60000)
-                .put("monitor", GateService.diagnostics(context))
-                .put("autostart", Watchdog.report(context))
-                .put("update", Updater.status(context))
-            zip.putNextEntry(ZipEntry("device.json")); zip.write(device.toString(2).toByteArray()); zip.closeEntry()
+            zip.putNextEntry(ZipEntry("device.json")); zip.write(buildDeviceJson(context).toString(2).toByteArray()); zip.closeEntry()
             try {
                 val config = DeviceRuntime.store.config()
                 zip.putNextEntry(ZipEntry("config.json")); zip.write(config.toString(2).toByteArray()); zip.closeEntry()
             } catch (_: Exception) { }
+        }
+        return out.toByteArray()
+    }
+
+    // -------------------------------------------------------------------------
+    // 崩溃自动上传（Cloudflare Worker，零第三方依赖）
+    // -------------------------------------------------------------------------
+
+    /**
+     * 在 App 启动时调用（DeviceRuntime.ensure() 里）。
+     *
+     * 若存在待上传的崩溃标记（crash_pending 文件），且用户已同意上传、配置了 endpoint，
+     * 则在后台守护线程中把崩溃 ZIP POST 到 Cloudflare Worker。
+     * 上传成功后标记已在读取时删除；HTTP 失败会写回标记，下次启动重试。
+     *
+     * @param endpoint  Worker URL，例如 "https://sotv-crash.xxx.workers.dev/crash"
+     * @param token     Worker 里配置的 Bearer Token
+     */
+    fun uploadPendingCrash(context: Context, endpoint: String, token: String) {
+        if (!Prefs.crashUploadConsent(context)) return
+        if (endpoint.isBlank()) return
+        if (!CrashDetector.hasPending(context)) return
+
+        val thread = Thread {
+            try {
+                val summary = CrashDetector.readAndClear(context)
+                val zipBytes = buildCrashZip(context, summary)
+
+                val conn = URL(endpoint).openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.setRequestProperty("Authorization", "Bearer $token")
+                conn.setRequestProperty("Content-Type", "application/zip")
+                conn.setRequestProperty("X-App-Version", BuildConfig.VERSION_NAME)
+                conn.setRequestProperty("X-App-VersionCode", BuildConfig.VERSION_CODE.toString())
+                conn.setRequestProperty("X-Device-Model", Build.MODEL)
+                conn.setRequestProperty("X-Device-Manufacturer", Build.MANUFACTURER)
+                conn.setRequestProperty("X-Android-SDK", Build.VERSION.SDK_INT.toString())
+                conn.connectTimeout = 15_000
+                conn.readTimeout = 20_000
+                conn.doOutput = true
+
+                conn.outputStream.use { it.write(zipBytes) }
+
+                val code = conn.responseCode
+                if (code in 200..299) {
+                    info("Crash", "upload ok → $endpoint (${zipBytes.size} bytes, HTTP $code)")
+                } else {
+                    warn("Crash", "upload failed: HTTP $code — writing back pending for retry")
+                    CrashDetector.writePending(context, summary)
+                }
+                conn.disconnect()
+            } catch (e: Exception) {
+                warn("Crash", "upload error: ${e.javaClass.simpleName}: ${e.message}")
+                // 网络失败不写回 pending——本次崩溃只保留在本地日志里
+            }
+        }
+        thread.name = "crash-upload"
+        thread.isDaemon = true
+        thread.start()
+    }
+
+    /**
+     * 构建崩溃上传专用 ZIP（比完整 export 小，只含日志和设备信息）。
+     */
+    private fun buildCrashZip(context: Context, summary: String): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        ZipOutputStream(out).use { zip ->
+            // 崩溃摘要（纯文本，方便在 R2/Telegram 预览）
+            zip.putNextEntry(ZipEntry("crash_summary.txt"))
+            zip.write(summary.toByteArray())
+            zip.closeEntry()
+
+            // 最近的日志文件
+            dir(context).listFiles()?.filter { it.isFile }?.sortedBy { it.name }?.forEach { file ->
+                zip.putNextEntry(ZipEntry("logs/${file.name}"))
+                zip.write(file.readBytes())
+                zip.closeEntry()
+            }
+
+            // 设备信息
+            zip.putNextEntry(ZipEntry("device.json"))
+            zip.write(buildDeviceJson(context).toString(2).toByteArray())
+            zip.closeEntry()
         }
         return out.toByteArray()
     }

@@ -1,0 +1,118 @@
+{
+  "name": "题了个题 - 每天 21:00 学习汇总",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 21 * * *"
+            }
+          ]
+        }
+      },
+      "id": "2a7d2b1b-2100-4d02-9002-000000000201",
+      "name": "每天 21:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://192.168.1.20:8099/api/state",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "2a7d2b1b-2100-4d02-9002-000000000202",
+      "name": "读取学习状态",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [260, 0],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_STUDYONTV_CREDENTIAL_ID",
+          "name": "StudyOnTV 集成令牌"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const state = $input.first().json;\nconst today = state.today || {};\nconst learning = state.learning || {};\n\nconst rounds = Number(state.roundsDoneToday ?? 0);\nconst used = Math.round(Number(today.usedMinutes || 0));\nconst answered = Number(today.answered || 0);\nconst correct = Number(today.correct || 0);\nconst accuracy = Number(today.accuracy || 0);\nconst remaining = Number(learning.remainingSeconds || 0);\n\nconst reasons = {\n  '': '可以观看',\n  locked: '家长锁定中',\n  rest: '强制休息中',\n  feedback: '等待批改结果',\n  quota: '今日配额已用完',\n  schedule: '不在可用时段',\n  rounds: '今日答题组数已用完',\n  timeup: '可看时长已用完'\n};\nconst reason = reasons[learning.reason] || learning.reason || '未知';\nconst remainingText = remaining < 0 ? '不限时' : `${Math.max(0, Math.round(remaining / 60))} 分钟`;\n\nconst text = [\n  '题了个题 · 今日学习汇总',\n  `状态：${reason}`,\n  `剩余可看：${remainingText}`,\n  `今日已看：${used} 分钟`,\n  `今日答题：答对 ${correct} / ${answered} 题（准确率 ${accuracy}%）`,\n  `完成答题组：${rounds} 组`\n].join('\\n');\n\nreturn [{ json: { text } }];"
+      },
+      "id": "2a7d2b1b-2100-4d02-9002-000000000203",
+      "name": "整理今日汇总",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 0]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "123456789",
+        "text": "={{ $json.text }}",
+        "additionalFields": {}
+      },
+      "id": "2a7d2b1b-2100-4d02-9002-000000000204",
+      "name": "发送到 Telegram（可选）",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [780, 0],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot"
+        }
+      },
+      "disabled": true
+    }
+  ],
+  "connections": {
+    "每天 21:00": {
+      "main": [
+        [
+          {
+            "node": "读取学习状态",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "读取学习状态": {
+      "main": [
+        [
+          {
+            "node": "整理今日汇总",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "整理今日汇总": {
+      "main": [
+        [
+          {
+            "node": "发送到 Telegram（可选）",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Shanghai"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

@@ -16,6 +16,19 @@ gradle assembleTvRelease assembleMobileRelease
 
 产物在 `app/build/outputs/apk/tv/release/` 与 `app/build/outputs/apk/mobile/release/`。正式签名读取本机 `local.properties`，密钥不入库。
 
+### 带电视桌面的包（已停止发布）
+
+`assembleTvDesktop` 另出一份带「把题了个题设成电视桌面」的 TV 包（包名、签名与默认包相同，可互相覆盖安装）。**目前不随版本发布**：声明 HOME 的包会被部分电视的应用商店 / 安装器拒装，v0.3.35 起 Releases 和蒲公英都只出不含桌面的 `assembleTvRelease`。这个构建任务保留在本地，需要时仍可自己构建安装。
+
+桌面相关的 Activity、alias 和 Manifest 都在 `app/native/app/src/desktop/`，只有 `desktop` 构建类型会编译；面板通过 `BuildConfig.DESKTOP`（接口里的 `desktop.supported`）决定显不显示这个开关。
+
+这个包在系统里显示为「题了个题 · 内测」，版本号带 `-beta` 后缀（如 `0.3.35-beta`）：桌面图标、应用信息、家长面板的设备信息都能和默认包区分；版本号带后缀后，蒲公英上的正式版也不会把内测包判成「有新版本」。
+
+```bash
+cd app/native
+gradle assembleTvDesktop
+```
+
 TV 包不编译语音、手写作答活动；普通学习页不加载公式库，不运行家长面板的 React。公式遇到时才加载，学习页退到后台时释放 WebView。家长面板文件由 TV 提供给家长设备浏览器运行。
 
 ## 管理面板

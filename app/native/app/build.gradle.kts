@@ -19,8 +19,16 @@ android {
         minSdk = 21          // Android 5.0
         targetSdk = 34
         testInstrumentationRunner = "com.studyontv.tv.RegressionInstrumentation"
-        versionCode = 44
-        versionName = "0.8.12"
+        versionCode = 45
+        versionName = "0.8.13"
+        // 带电视桌面的包在 desktop 这个 buildType 里改成 true
+        buildConfigField("boolean", "DESKTOP", "false")
+        // 崩溃上报的默认地址/令牌：从 local.properties 或环境变量注入（都不入库），
+        // 留空表示不内置——设备只在本机保留日志，家长可在面板里自己填。
+        val crashEndpoint = localProps.getProperty("CRASH_ENDPOINT") ?: System.getenv("CRASH_ENDPOINT") ?: ""
+        val crashToken = localProps.getProperty("CRASH_TOKEN") ?: System.getenv("CRASH_TOKEN") ?: ""
+        buildConfigField("String", "CRASH_ENDPOINT", "\"$crashEndpoint\"")
+        buildConfigField("String", "CRASH_TOKEN", "\"$crashToken\"")
     }
 
     flavorDimensions += "device"
@@ -65,6 +73,17 @@ android {
             isMinifyEnabled = false
             val cfg = signingConfigs.getByName("release")
             if (cfg.storeFile != null) signingConfig = cfg
+        }
+        // 带电视桌面的包：默认发的包不声明 HOME（有的电视商店因此拒装），
+        // 需要桌面的人从 GitHub Release 下这个包。源码在 src/desktop/。
+        // 包名、版本号和普通包一致，两个包可以互相覆盖安装，家长数据不会丢。
+        create("desktop") {
+            initWith(getByName("release"))
+            matchingFallbacks += listOf("release")
+            // 内测包：版本号和图标名都带标记，家长一眼能和默认包区分；
+            // 版本号带 -beta 后，蒲公英上的正式版也不会把内测包判成「有新版本」
+            versionNameSuffix = "-beta"
+            buildConfigField("boolean", "DESKTOP", "true")
         }
     }
 

@@ -26,10 +26,15 @@ class AnswerInputActivity : Activity() {
     private lateinit var text: EditText
     private lateinit var ink: InkView
     private lateinit var status: TextView
+    private lateinit var voiceButton: Button
+    /** DeepSeek 录音识别（家长面板填了 Key 才有）；为空时走系统识别器 */
+    private var capture: VoiceCapture.Session? = null
     private var delivered = false
     private var voicePending = false
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
     private val voiceTimeout = Runnable { if (voicePending && !hasWindowFocus()) finish() }
+    /** 家长密码模式（#201）：单行掩码输入，不显示语音 / 手写 */
+    private val passwordMode get() = intent.getBooleanExtra("passwordMode", false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -38,7 +43,7 @@ class AnswerInputActivity : Activity() {
             setPadding(dp(20), dp(24), dp(20), dp(24))
             setBackgroundColor(TvUi.background(this@AnswerInputActivity))
         }
-        root.addView(TvUi.text(this, "填写答案", 26f, bold = true).apply { paint.isFakeBoldText = true })
+        root.addView(TvUi.text(this, if (passwordMode) "家长验证" else "填写答案", 26f, bold = true).apply { paint.isFakeBoldText = true })
         // 手机版与电视版对齐（#81）：把题干带过来并显示，长题干截断
         val prompt = intent.getStringExtra("prompt").orEmpty()
         if (prompt.isNotBlank()) root.addView(TextView(this).apply {
@@ -47,21 +52,26 @@ class AnswerInputActivity : Activity() {
             setPadding(0, dp(8), 0, 0)
         }, LinearLayout.LayoutParams(-1, -2))
         text = EditText(this).apply {
-            hint = "键盘、输入法手写，或语音转文字"; minLines = 3; TvUi.field(this)
-            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
-            if (Build.VERSION.SDK_INT >= 33) isAutoHandwritingEnabled = true
+            hint = if (passwordMode) "输入家长管理密码" else "键盘、输入法手写，或语音转文字"
+            minLines = if (passwordMode) 1 else 3; TvUi.field(this)
+            inputType = if (passwordMode) android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+                else android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            if (!passwordMode && Build.VERSION.SDK_INT >= 33) isAutoHandwritingEnabled = true
         }
         text.setText(savedInstanceState?.getString("draft") ?: intent.getStringExtra("draft").orEmpty())
         root.addView(text, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(14) })
         status = TextView(this).apply { setTextColor(TvUi.palette(this@AnswerInputActivity).warn); textSize = 14f; setPadding(0, dp(8), 0, dp(4)) }
         root.addView(status)
-        val row = LinearLayout(this)
-        row.addView(TvUi.button(this, "语音输入") { voice() }, LinearLayout.LayoutParams(0, dp(48), 1f))
-        row.addView(TvUi.button(this, "清空手写") { ink.clear() }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(10) })
-        root.addView(row)
-        root.addView(TvUi.text(this, "手写作答（含公式、图形）", 15f, TvUi.muted(this)).apply { setPadding(0, dp(18), 0, dp(8)) })
         ink = InkView(this)
-        root.addView(ink, LinearLayout.LayoutParams(-1, dp(300)))
+        if (!passwordMode) {
+            val row = LinearLayout(this)
+            voiceButton = TvUi.button(this, "语音输入") { voice() }
+            row.addView(voiceButton, LinearLayout.LayoutParams(0, dp(48), 1f))
+            row.addView(TvUi.button(this, "清空手写") { ink.clear() }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(10) })
+            root.addView(row)
+            root.addView(TvUi.text(this, "手写作答（含公式、图形）", 15f, TvUi.muted(this)).apply { setPadding(0, dp(18), 0, dp(8)) })
+            root.addView(ink, LinearLayout.LayoutParams(-1, dp(300)))
+        }
         lateinit var use: Button
         use = TvUi.button(this, "使用此答案", true) {
             run {
@@ -93,7 +103,41 @@ class AnswerInputActivity : Activity() {
         if (intent.getBooleanExtra("voice", false) && savedInstanceState == null) voice()
     }
 
+    /**
+     * 语音输入：家长面板填了 DeepSeek Key 就自己录音上传识别（不依赖系统识别服务），
+     * 没填还是走系统识别器。录着的时候再按一次就停止并开始识别。
+     */
     private fun voice() {
+        if (passwordMode) return
+        val key = try { SpeechReader.recognizeKey(DeviceRuntime.store) } catch (_: Exception) { "" }
+        if (key.isEmpty()) { systemVoice(); return }
+        if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 11); return
+        }
+        capture?.let { session ->
+            if (session.active) { session.stop(); voiceButton.text = "正在识别…"; status.text = ""; return }
+        }
+        val session = VoiceCapture.Session(key,
+            onState = { state ->
+                voiceButton.text = if (state == "recording") "停止并识别" else "正在识别…"
+                status.text = if (state == "recording") "正在录音，说完再按一次" else "正在识别…"
+            },
+            onResult = { value ->
+                capture = null; voiceButton.text = "语音输入"; status.text = ""
+                text.setText(value); text.setSelection(text.text.length)
+            },
+            onError = { message ->
+                capture = null; voiceButton.text = "语音输入"; status.text = message
+            })
+        if (!session.start()) {
+            voiceButton.text = "语音输入"
+            status.text = "没有可用的麦克风，改用系统语音识别"
+            systemVoice(); return
+        }
+        capture = session
+    }
+
+    private fun systemVoice() {
         try {
             voicePending = true
             startActivityForResult(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
@@ -106,6 +150,13 @@ class AnswerInputActivity : Activity() {
             voicePending = false
             status.text = "此设备没有语音识别服务，可使用输入法的语音按钮"
         }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != 11) return
+        if (grantResults.firstOrNull() == android.content.pm.PackageManager.PERMISSION_GRANTED) voice()
+        else { status.text = "没有麦克风权限，改用系统语音识别"; systemVoice() }
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -125,10 +176,12 @@ class AnswerInputActivity : Activity() {
 
     override fun onStop() {
         super.onStop()
-        if (!voicePending && !isChangingConfigurations && !isFinishing) finish()
+        // 录音 / 识别期间不退出页面（否则结果回不来）
+        if (!voicePending && capture == null && !isChangingConfigurations && !isFinishing) finish()
     }
 
     override fun onDestroy() {
+        capture?.cancel(); capture = null
         handler.removeCallbacks(voiceTimeout)
         if (!delivered && !isChangingConfigurations) AnswerInput.complete(intent.getStringExtra("requestId") ?: "", null)
         super.onDestroy()

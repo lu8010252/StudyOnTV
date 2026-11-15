@@ -37,16 +37,18 @@ open class MainActivity : Activity() {
         GateService.start(this)
     }
 
-    /** 每次回到学习页都检查一次（6 小时内用缓存，不会频繁联网）；电视上 Activity 很少重建，只在 onCreate 检查会漏掉 */
+    /**
+     * 检测上次崩溃标记，弹窗征求用户同意后自动上传。
+     * 已同意且配置了 endpoint 的用户不再弹窗——DeviceRuntime.ensure() 里已自动触发上传。
+     */
     private fun checkCrashReport() {
         if (!BuglyInit.configured) { CrashDetector.clear(this); return }   // 没配置自己的 Bugly，不弹窗、不上传
         if (!CrashDetector.hasPending(this)) return
-        // 已经同意过的直接初始化并清标记，不再重复弹窗
-        if (Prefs.buglyConsent(this)) {
-            CrashDetector.clear(this)
-            BuglyInit.init(this)
-            return
-        }
+
+        // 已同意：DeviceRuntime.ensure() 已自动触发上传，无需再操作
+        if (Prefs.crashUploadConsent(this)) return
+
+        // 未同意：弹窗征求同意
         val summary = CrashDetector.readAndClear(this)
         AlertDialog.Builder(this)
             .setTitle("🚨 上次运行时发生了崩溃")
@@ -54,13 +56,25 @@ open class MainActivity : Activity() {
                 "是否允许上传崩溃日志帮助修复问题？\n\n" +
                 "包含：崩溃调用堆栈、设备型号、Android 版本、应用版本号\n" +
                 "不含：题库内容、管理密码、答题记录、局域网 IP\n\n" +
-                "日志将上传至腾讯 Bugly 服务器，可随时在「设置 → 崩溃报告」关闭。"
+                "日志将上传至开发者自建服务器，可随时在「设置 → 崩溃报告」关闭。"
             )
-            .setPositiveButton("提交日志") { _, _ ->
-                BuglyInit.initWithConsent(this)
-                android.widget.Toast.makeText(this, "已提交，感谢反馈！", android.widget.Toast.LENGTH_SHORT).show()
+            .setPositiveButton("同意并上传") { _, _ ->
+                Prefs.setCrashUploadConsent(this, true)
+                Prefs.setCrashUploadConsentAsked(this, true)
+                val endpoint = Prefs.crashEndpoint(this)
+                val token = Prefs.crashToken(this)
+                // 写回标记：endpoint 已配置时由上传线程读取，未配置时留到下次启动补传
+                CrashDetector.writePending(this, summary)
+                if (endpoint.isNotBlank()) {
+                    Diag.uploadPendingCrash(this, endpoint, token)
+                    android.widget.Toast.makeText(this, "正在上传崩溃日志，感谢反馈！", android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    android.widget.Toast.makeText(this, "已记录同意，请在设置页填写上传地址后生效。", android.widget.Toast.LENGTH_LONG).show()
+                }
             }
-            .setNegativeButton("不了") { _, _ -> /* 标记已在 readAndClear 里删除 */ }
+            .setNegativeButton("不了") { _, _ ->
+                Prefs.setCrashUploadConsentAsked(this, true)
+            }
             .setCancelable(false)
             .show()
     }
@@ -127,7 +141,19 @@ open class MainActivity : Activity() {
         if (::web.isInitialized && !webReleased) web.evaluateJavascript("window.SOTV_RESUME&&SOTV_RESUME()", null)
     }
 
+    fun showNavigationBlocked(): Boolean =
+        if (::web.isInitialized && !webReleased) LearningNavigation.showBlockedNotice(web) else false
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // #143：创维 A5D Pro / 酷开开启「强制使用全屏学习页」后，遥控器关机键被全屏页吞掉。
+        // 电源 / 休眠键任何页面都不处理，原样交还系统；全屏学习页自己先退出，给固件让出正常关机路径。
+        if (isPowerKey(event.keyCode)) {
+            if (event.action == KeyEvent.ACTION_DOWN && this is GateActivity) {
+                Diag.info("Gate", "遥控器电源键：退出全屏学习页，交给系统处理")
+                finish()
+            }
+            return super.dispatchKeyEvent(event)
+        }
         // 手机 / 平板的回车键交给网页输入框
         if (!DeviceBridge.isTv(this) && event.keyCode == KeyEvent.KEYCODE_ENTER) return super.dispatchKeyEvent(event)
         val view = if (::web.isInitialized && !webReleased) web else null
@@ -137,5 +163,11 @@ open class MainActivity : Activity() {
     override fun onDestroy() {
         if (::web.isInitialized && !webReleased) web.destroy()
         super.onDestroy()
+    }
+
+    companion object {
+        /** 电源 / 休眠 / 待机键：任何页面都不能拦截，否则电视关不了机（#143） */
+        fun isPowerKey(code: Int): Boolean = code == KeyEvent.KEYCODE_POWER || code == KeyEvent.KEYCODE_SLEEP ||
+            code == KeyEvent.KEYCODE_SOFT_SLEEP
     }
 }

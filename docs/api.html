@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>题了个题 · 局域网 API</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+  <style>
+    :root {
+      --sotv-bg: #f7f8fa;
+      --sotv-surface: #ffffff;
+      --sotv-text: #1f2933;
+      --sotv-muted: #5b6773;
+      --sotv-border: #dde2e8;
+      --sotv-accent: #2f6feb;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --sotv-bg: #14171c;
+        --sotv-surface: #1b1f26;
+        --sotv-text: #e6e9ee;
+        --sotv-muted: #9aa5b1;
+        --sotv-border: #2c323b;
+        --sotv-accent: #7aa7ff;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--sotv-bg);
+      color: var(--sotv-text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    }
+    .page-header {
+      padding: 28px 24px 22px;
+      background: var(--sotv-surface);
+      border-bottom: 1px solid var(--sotv-border);
+    }
+    .page-header-inner {
+      max-width: 1180px;
+      margin: 0 auto;
+    }
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--sotv-accent);
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: .08em;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(24px, 3vw, 34px);
+      line-height: 1.2;
+      letter-spacing: -.02em;
+    }
+    .lead {
+      max-width: 780px;
+      margin: 10px 0 0;
+      color: var(--sotv-muted);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+    .lead code {
+      padding: 1px 5px;
+      border: 1px solid var(--sotv-border);
+      border-radius: 5px;
+      background: var(--sotv-bg);
+      font-size: 12px;
+    }
+    #swagger-ui {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 8px 16px 48px;
+    }
+    #swagger-ui .topbar { display: none; }
+    #swagger-ui .info { margin: 24px 0 12px; }
+    #swagger-ui .info .title { color: var(--sotv-text); }
+    .load-error {
+      display: none;
+      max-width: 760px;
+      margin: 24px auto;
+      padding: 16px 18px;
+      border: 1px solid #d9534f;
+      border-radius: 10px;
+      background: #fff5f5;
+      color: #8a1f1b;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    @media (prefers-color-scheme: dark) {
+      .load-error { background: #2a1618; color: #ffb4ae; border-color: #7a2a2a; }
+    }
+  </style>
+</head>
+<body>
+  <header class="page-header">
+    <div class="page-header-inner">
+      <p class="eyebrow">StudyOnTV · LAN HTTP API</p>
+      <h1>题了个题 · 局域网 API</h1>
+      <p class="lead">
+        设备端局域网 HTTP 接口的交互式文档。默认地址 <code>http://192.168.1.10:8099</code>，
+        可在下方 servers 里换成自己电视 / 平板的 IP。本文档只描述同一局域网内的设备接口；
+        页面样式从 unpkg CDN 加载，首次打开需要外网，接口本身不联网、也不经过云端。
+      </p>
+    </div>
+  </header>
+
+  <div id="load-error" class="load-error">
+    Swagger UI 或 <code>openapi.yaml</code> 加载失败。请确认：本页与 <code>openapi.yaml</code> 在同一目录、
+    浏览器能访问 unpkg CDN；若直接以 <code>file://</code> 打开，请改用局域网静态服务器访问本目录。
+  </div>
+
+  <div id="swagger-ui"></div>
+
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>
+    (function () {
+      var errorBox = document.getElementById('load-error');
+      if (!window.SwaggerUIBundle) {
+        errorBox.style.display = 'block';
+        return;
+      }
+      try {
+        window.ui = SwaggerUIBundle({
+          url: './openapi.yaml',
+          dom_id: '#swagger-ui',
+          deepLinking: true,
+          docExpansion: 'none',
+          defaultModelsExpandDepth: 1,
+          defaultModelExpandDepth: 1,
+          displayRequestDuration: true,
+          filter: true,
+          persistAuthorization: true,
+          tryItOutEnabled: true,
+          validatorUrl: null,
+          presets: [SwaggerUIBundle.presets.apis],
+          layout: 'BaseLayout',
+          onComplete: function () {
+            if (location.protocol === 'file:') {
+              errorBox.style.display = 'block';
+              errorBox.textContent = '你是以 file:// 打开的，浏览器通常会阻止读取 openapi.yaml。请在本目录启动一个静态服务器后访问，例如 python -m http.server 8000。';
+            }
+          }
+        });
+      } catch (e) {
+        errorBox.style.display = 'block';
+        errorBox.textContent = 'Swagger UI 初始化失败：' + (e && e.message ? e.message : e);
+      }
+    })();
+  </script>
+</body>
+</html>

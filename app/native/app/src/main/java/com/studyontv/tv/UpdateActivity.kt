@@ -21,6 +21,7 @@ class UpdateActivity : Activity() {
     private var force = false
     private var sha256 = ""
     private lateinit var status: TextView
+    private var goButton: TextView? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -91,6 +92,7 @@ class UpdateActivity : Activity() {
             startUpdate(url, go, progress)
         }
         go.textSize = if (tv) 21f else 18f
+        goButton = go
         buttons.addView(go, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(if (tv) 62 else 54)))
 
         val secondary = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -130,6 +132,23 @@ class UpdateActivity : Activity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (!::status.isInitialized) return
+        val error = Prefs.updateInstallError(this)
+        if (error.isNotEmpty()) {
+            status.text = "$error。可以点「立即更新」再试一次，或用「手动下载」装。"
+            goButton?.isEnabled = true
+            goButton?.text = "重试安装"
+        } else if (!ApkInstaller.canInstall(this)) {
+            goButton?.text = "去允许安装应用"
+            status.text = "这套电视系统默认禁止应用自己安装更新，需要先允许「题了个题」安装应用"
+        } else if (goButton?.text?.toString() == "去允许安装应用") {
+            goButton?.text = if (ApkInstaller.alreadyDownloaded(this, 0)) "开始安装" else "立即更新"
+            status.text = "下载后覆盖安装，题库和设置不会丢"
+        }
+    }
+
     private fun label(text: String, size: Float, color: Int, bottomMarginDp: Int,
                       gravity: Int = Gravity.CENTER_HORIZONTAL): TextView {
         val v = TextView(this)
@@ -149,11 +168,24 @@ class UpdateActivity : Activity() {
         if (!button.isEnabled) return
         if (url.isEmpty()) { button.text = "没有下载地址"; return }
 
+        if (!ApkInstaller.canInstall(this)) {
+            // Android 8+ 是按应用授权的：没开之前调起安装器只会失败，先去设置里打开
+            status.text = "先允许「题了个题」安装应用，允许后返回这里再点一次"
+            try {
+                startActivity(ApkInstaller.permissionIntent(this))
+            } catch (e: Exception) {
+                status.text = "这台电视找不到「安装未知应用」设置页，请到 设置 → 应用 里允许「题了个题」安装应用"
+                Diag.warn("Install", "cannot open unknown-sources settings: ${e.javaClass.simpleName}")
+            }
+            return
+        }
+
         val ready = ApkInstaller.apkFile(this)
         if (ApkInstaller.alreadyDownloaded(this, 0)) {
             Prefs.setUpdateInProgress(this, true)
             if (ApkInstaller.install(this, ready)) return
-            button.text = "请允许安装未知应用"
+            button.text = "安装失败，重试"
+            status.text = ApkInstaller.lastError.ifEmpty { "系统没有接受这次安装" }
             return
         }
 

@@ -66,10 +66,48 @@ open class DeviceBridge(protected val activity: Activity, private val connection
         }
     }
 
+    /**
+     * 锁定 / 答题页的家长解锁入口（#201）：家长直接用遥控器输入密码，临时解锁 30 分钟。
+     * 默认关闭（allowQuizUnlock），避免把密码入口摆在孩子面前；密码只在本机校验，不上报。
+     */
+    @JavascriptInterface
+    fun askParentPassword() {
+        activity.runOnUiThread {
+            if (!quizUnlockAllowed()) return@runOnUiThread
+            web?.let { InputSupport.openPassword(activity, it, "输入家长密码，验证后可临时解锁 $QUIZ_UNLOCK_MINUTES 分钟") }
+        }
+    }
+
+    /** 校验家长密码并临时解锁；返回 {ok, status} 或 {ok:false, error:disabled|wrong|failed} */
+    @JavascriptInterface
+    fun quizUnlock(value: String): String {
+        if (!quizUnlockAllowed()) return JSONObject().put("ok", false).put("error", "disabled").toString()
+        if (!AdminAuth.verify(activity, value)) return JSONObject().put("ok", false).put("error", "wrong").toString()
+        return try {
+            AdminAuth.markVerified()
+            val status = DeviceRuntime.learning.remote("unlock", QUIZ_UNLOCK_MINUTES, "quiz")
+            Diag.info("Auth", "家长在锁定页临时解锁 $QUIZ_UNLOCK_MINUTES 分钟")
+            JSONObject().put("ok", true).put("status", status).toString()
+        } catch (e: Exception) {
+            Diag.warn("Auth", "quiz unlock failed: ${e.message}")
+            JSONObject().put("ok", false).put("error", "failed").toString()
+        }
+    }
+
+    private fun quizUnlockAllowed(): Boolean = try {
+        DeviceRuntime.store.config().optBoolean("allowQuizUnlock", false)
+    } catch (_: Throwable) { false }
+
+    @JavascriptInterface
+    fun navigationBlocked(): Boolean {
+        LearningNavigation.notifyBlocked(activity)
+        return true
+    }
+
     @JavascriptInterface
     fun exitToLauncher() {
         val status = DeviceRuntime.learning.status()
-        if (status.getString("reason").isNotEmpty() || (status.optLong("remainingSeconds") <= 0 && !status.optBoolean("free"))) return
+        if (!status.optBoolean("canExit")) return
         activity.runOnUiThread {
             GateService.hideGates()
             // 答题结束回到「上一个任务」，绝不能主动跳桌面，否则正在播放的视频会被顶掉（#54 / #63）。
@@ -163,6 +201,9 @@ open class DeviceBridge(protected val activity: Activity, private val connection
     }
 
     companion object {
+        /** 锁定页家长验证后临时解锁的分钟数 */
+        const val QUIZ_UNLOCK_MINUTES = 30
+
         /**
          * 打开系统设置（#130）。很多电视 / 投影 / 平板把原生设置菜单精简掉了，
          * 家长找不到「应用管理 → 权限」这类入口，应用里需要一个能把完整设置调起来的按钮。

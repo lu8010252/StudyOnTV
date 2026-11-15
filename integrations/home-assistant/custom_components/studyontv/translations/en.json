@@ -1,0 +1,81 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to StudyOnTV",
+        "description": "Enter the TV's LAN address and an integration token created on the device under Settings > Home automation.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "token": "Integration token"
+        },
+        "data_description": {
+          "host": "IP address or hostname of the TV. Do not include http://, a path or a port.",
+          "port": "HTTP port of the device panel (default 8099).",
+          "token": "Token starting with sotv_. The read permission is required."
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "The token was rejected (401/403). Check that the integration is enabled and that the token has read permission.",
+      "cannot_connect": "Could not connect to the device. Check the IP address, the port and that the StudyOnTV app is running.",
+      "rate_limited": "The device is rate limiting requests (429). Wait a minute and try again.",
+      "unknown": "Unexpected error."
+    },
+    "abort": {
+      "already_configured": "This device (host:port) is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "StudyOnTV options",
+        "description": "How often to poll the device. Each poll makes two requests, to /api/state and /api/device.",
+        "data": {
+          "scan_interval": "Scan interval (seconds)"
+        },
+        "data_description": {
+          "scan_interval": "Between 10 and 600 seconds. Default is 30."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "remaining_minutes": {
+        "name": "Remaining minutes"
+      },
+      "used_minutes_today": {
+        "name": "Used minutes today"
+      },
+      "learning_status": {
+        "name": "Learning status",
+        "state": {
+          "available": "Available",
+          "quota": "Daily quota used up",
+          "rounds": "Daily rounds used up",
+          "schedule": "Outside allowed schedule",
+          "timeup": "Watching time used up",
+          "locked": "Paused by parent",
+          "rest": "Mandatory break",
+          "feedback": "Waiting for answer feedback",
+          "unknown": "Unknown"
+        }
+      },
+      "rounds_today": {
+        "name": "Rounds completed today"
+      },
+      "question_count": {
+        "name": "Questions in bank"
+      },
+      "next_available": {
+        "name": "Next available time"
+      }
+    },
+    "binary_sensor": {
+      "device_online": {
+        "name": "Device online"
+      }
+    }
+  }
+}

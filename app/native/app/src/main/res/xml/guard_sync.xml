@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  挂在系统 settings provider 上的本地同步：设置每次被写动（包括固件强停时把自己从无障碍列表里摘掉）
+  都会触发一次 LOCAL 同步，SyncManager 随之显式 bind 拉起进程（stopped 状态也拦不住）。
+
+  supportsUploading 必须为 true：SettingsProvider 的写入带 SYNC_EXTRAS_UPLOAD，
+  SyncManager 会直接丢弃发给 supportsUploading="false" 适配器的 upload 同步。
+-->
+<sync-adapter xmlns:android="http://schemas.android.com/apk/res/android"
+    android:contentAuthority="settings"
+    android:accountType="com.studyontv.tv"
+    android:userVisible="false"
+    android:supportsUploading="true"
+    android:allowParallelSyncs="false"
+    android:isAlwaysSyncable="true" />

@@ -85,7 +85,7 @@ object BankAutomation {
                 }
                 report.put("sources", results)
                 if (config.optBoolean("autoAi")) {
-                    val all = store.questions(limit = 5000)
+                    val all = store.questions(limit = 50000)
                     val mastered = mutableListOf<String>()
                     for (i in 0 until all.length()) {
                         val q = all.getJSONObject(i); val stats = q.optJSONObject("stats") ?: continue
@@ -122,7 +122,7 @@ object BankAutomation {
             }
         } finally { connection.disconnect() }
         val items = if (text.startsWith("[")) JSONArray(text) else JSONObject(text).getJSONArray("items")
-        require(items.length() in 1..5000) { "远程题库需要 1–5000 题" }
+        require(items.length() in 1..50000) { "远程题库需要 1–50000 题" }
         val sourceId = hash(source.getString("url"))
         val db = store.writableDatabase
         db.beginTransaction()

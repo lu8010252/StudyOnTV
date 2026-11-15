@@ -1,0 +1,192 @@
+{
+  "name": "题了个题 - 连续 5 天达标奖励 30 分钟",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 21 * * *"
+            }
+          ]
+        }
+      },
+      "id": "3b8e3c2c-2030-4e03-9003-000000000301",
+      "name": "每天 21:30",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://192.168.1.20:8099/api/state",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "3b8e3c2c-2030-4e03-9003-000000000302",
+      "name": "读取学习状态",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [260, 0],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_STUDYONTV_CREDENTIAL_ID",
+          "name": "StudyOnTV 集成令牌"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const state = $input.first().json;\nconst store = $getWorkflowStaticData('global');\nconst tz = 'Asia/Shanghai';\nconst today = new Date().toLocaleDateString('en-CA', { timeZone: tz });\nconst yesterday = new Date(Date.now() - 86400000).toLocaleDateString('en-CA', { timeZone: tz });\n\nconst rounds = Number(state.roundsDoneToday || 0);\nconst target = Number((state.config && state.config.roundsPerDay) || 0);\nconst qualified = target > 0 && rounds >= target;\n\n// 同一天只累计一次，手动重跑不会把连续天数刷高\nif (store.lastDate !== today) {\n  if (qualified) {\n    store.streak = store.lastQualifiedDate === yesterday ? Number(store.streak || 0) + 1 : 1;\n    store.lastQualifiedDate = today;\n  } else {\n    store.streak = 0;\n    store.lastQualifiedDate = '';\n  }\n  store.lastDate = today;\n}\n\nconst streak = Number(store.streak || 0);\nconst reward = streak > 0 && streak % 5 === 0 && store.rewardedDate !== today ? 1 : 0;\nreturn [{ json: { streak, rounds, target, qualified, reward } }];"
+      },
+      "id": "3b8e3c2c-2030-4e03-9003-000000000303",
+      "name": "计算连续天数",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1a1a101-3001-4f01-9101-000000000311",
+              "leftValue": "={{ $json.reward }}",
+              "rightValue": 1,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3b8e3c2c-2030-4e03-9003-000000000304",
+      "name": "连续满 5 天？",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [780, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://192.168.1.20:8099/api/remote",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"action\": \"credit\",\n  \"minutes\": 30\n}",
+        "options": {}
+      },
+      "id": "3b8e3c2c-2030-4e03-9003-000000000305",
+      "name": "奖励 30 分钟",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1040, -80],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_STUDYONTV_CREDENTIAL_ID",
+          "name": "StudyOnTV 集成令牌"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const store = $getWorkflowStaticData('global');\nstore.rewardedDate = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });\nreturn $input.all();"
+      },
+      "id": "3b8e3c2c-2030-4e03-9003-000000000306",
+      "name": "记录今天已奖励",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, -80]
+    }
+  ],
+  "connections": {
+    "每天 21:30": {
+      "main": [
+        [
+          {
+            "node": "读取学习状态",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "读取学习状态": {
+      "main": [
+        [
+          {
+            "node": "计算连续天数",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "计算连续天数": {
+      "main": [
+        [
+          {
+            "node": "连续满 5 天？",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "连续满 5 天？": {
+      "main": [
+        [
+          {
+            "node": "奖励 30 分钟",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "奖励 30 分钟": {
+      "main": [
+        [
+          {
+            "node": "记录今天已奖励",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Shanghai"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

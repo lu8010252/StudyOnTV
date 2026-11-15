@@ -19,4 +19,9 @@ object InputSupport {
             // 题目没标语言时跟随设备系统语言（#126），进输入页前统一换成白名单内的标签
             putExtra("language", SpeechReader.recognitionLanguage(AnswerInput.language()))
         }
+    /** 锁定页的家长密码：掩码输入，不走语音，结果仍经 SOTV_INPUT 回传（#201） */
+    fun openPassword(context: Context, web: WebView, prompt: String) =
+        AnswerInput.open(context, web, TvTextInputActivity::class.java) {
+            putExtra("passwordMode", true); putExtra("prompt", prompt)
+        }
 }

@@ -99,6 +99,72 @@ object BugFixRegression {
         timeBudget(context)
         roundResume(context)
         reviewRecovery(context)
+        watchAndWhitelist(context)
+        questionOrder(context)
+    }
+
+    // ------------------------------------------- #230 出题顺序：没做过的题先出
+    private fun questionOrder(context: Context) {
+        val name = "bugfix-order.db"
+        context.deleteDatabase(name)
+        val store = LocalStore(context, name)
+        try {
+            check(!store.config().optBoolean("newFirst", true)) { "「没做过的题先出」默认应关闭" }
+            seed(store, "o1"); seed(store, "o2"); seed(store, "o3")
+            store.presented("o1"); store.presented("o2")
+            // 排序里有 RANDOM()，多取几次确认没出过的题每次都排第一
+            repeat(5) {
+                val first = store.questions(limit = 10, newFirst = true).getJSONObject(0).getString("id")
+                check(first == "o3") { "新题优先应先出没做过的题，实际先出 $first" }
+            }
+            // 关掉时不做保证，但必须能正常出题
+            check(store.questions(limit = 10).length() == 3)
+        } finally {
+            store.close()
+            context.deleteDatabase(name)
+        }
+    }
+
+    // ------------------------------------------- #148 计时补算 / 不计时白名单
+    private fun watchAndWhitelist(context: Context) {
+        // 进程被杀期间：只补「设备醒着」的空档，重启、太短、太长都不补
+        check(WatchGap.recoverMs(100_000, 100_000, 130_000, 130_000) == 30_000L)
+        check(WatchGap.recoverMs(100_000, 100_000, 130_000, 200_000) == 30_000L) { "深睡时间不能算作观看" }
+        check(WatchGap.recoverMs(100_000, 100_000, 30_000, 100_000) == 0L) { "设备重启后不能补算" }
+        check(WatchGap.recoverMs(100_000, 100_000, 103_000, 103_000) == 0L) { "空档太小不补" }
+        check(WatchGap.recoverMs(100_000, 100_000, 100_000 + 11 * 60_000, 100_000 + 11 * 60_000) == 0L) { "空档太大不补" }
+        check(WatchGap.recoverMs(0, 0, 100_000, 100_000) == 0L)
+
+        check(WatchWhitelist.normalize(listOf(" com.example.app ", "com.example.app", "")) == listOf("com.example.app"))
+        try { WatchWhitelist.normalize(listOf("not a package")); error("非法包名应被拒绝") } catch (_: IllegalArgumentException) { }
+        try { WatchWhitelist.normalize((0..100).map { "com.example.app$it" }); error("超过 100 个应被拒绝") } catch (_: IllegalArgumentException) { }
+
+        val name = "bugfix-watch.db"
+        context.deleteDatabase(name)
+        val store = LocalStore(context, name)
+        try {
+            val engine = LearningEngine(store)
+            base(engine)
+            store.saveConfig(JSONObject().put("watchWhitelist", JSONArray(listOf("com.example.app", "com.example.app"))))
+            check(store.config().getJSONArray("watchWhitelist").length() == 1) { "白名单应去重" }
+            check(WatchWhitelist.of(store.config()).contains("com.example.app"))
+            try {
+                store.saveConfig(JSONObject().put("watchWhitelist", JSONArray(listOf("bad"))))
+                error("非法包名应被拒绝")
+            } catch (_: IllegalArgumentException) { }
+            check(store.config().optBoolean("allowQuizUnlock") == false) { "答题页密码解锁默认关闭" }
+            store.saveConfig(JSONObject().put("allowQuizUnlock", true))
+            check(store.config().getBoolean("allowQuizUnlock")) { "答题页密码解锁开关应能保存" }
+
+            // 补算必须和正常 tick 一样真的扣掉时长（consume 单次上限 5 秒，分块后应扣满 30 秒）
+            val before = engine.status().getLong("remainingSeconds")
+            engine.consumeRecovered(30_000)
+            val after = engine.status().getLong("remainingSeconds")
+            check(before - after in 25..30) { "补算 30 秒应扣 25–30 秒，实际 ${before - after}" }
+        } finally {
+            store.close()
+            context.deleteDatabase(name)
+        }
     }
 
     // ---------------------------------------------------------------- Bug 1
@@ -242,7 +308,7 @@ object BugFixRegression {
             // 反复启动（服务被杀 / 开机自启）都不能把旧数据冲掉
             repeat(3) { attempt ->
                 LocalStore(context, name).use { migrated ->
-                    check(migrated.readableDatabase.version == 8) { "第${attempt + 1}次打开应当升级到 v8" }
+                    check(migrated.readableDatabase.version == 9) { "第${attempt + 1}次打开应当升级到 v9" }
                     check(migrated.get("active_round") == activeRound.toString()) { "升级后必须保留进行中的一轮" }
                     check(migrated.get("credit_ms") == "900000") { "升级后必须保留剩余时间" }
                     check(migrated.get("used_ms") == "600000") { "升级后必须保留已用时长" }

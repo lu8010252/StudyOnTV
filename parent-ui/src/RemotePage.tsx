@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowUpRight,
   BookOpen,
+  ChevronDown,
   ChevronRight,
   ClipboardCheck,
   Clock3,
@@ -35,6 +36,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -140,6 +142,8 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
               : '管控中 · 可以使用';
 
   const [adjustSign, setAdjustSign] = useState(1);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [showChart, setShowChart] = useState(false);
   const [custom, setCustom] = useState<{
     mode: 'unlock' | 'lock' | 'indefinite' | 'credit';
     minutes: string;
@@ -196,8 +200,8 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
         className="items-center justify-between gap-3 px-0 py-1"
       >
         <div className="min-w-0">
-          <p className="text-[11px] font-medium tracking-wide text-muted-foreground">设备管理</p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">今日概览</h1>
+          <p className="text-xs font-medium tracking-wide text-muted-foreground">设备管理</p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight">今日概览</h1>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <Button
@@ -213,19 +217,37 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
             调整剩余时间
           </Button>
           {!mode && (
-            <Button
-              variant="destructive"
-              size="sm"
-              disabled={run.isPending}
-              onClick={() => {
-                if (window.confirm('关闭管控后孩子可无限使用，直到您手动恢复，确定吗？')) {
-                  go('indefinite', 0, '管控已关闭');
-                }
-              }}
-            >
-              <LockKeyholeOpen />
-              关闭管控
-            </Button>
+            <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+              <DialogTrigger asChild>
+                <Button variant="destructive" size="sm" disabled={run.isPending}>
+                  <LockKeyholeOpen />
+                  关闭管控
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-md">
+                <DialogHeader>
+                  <DialogTitle>确认关闭管控？</DialogTitle>
+                  <DialogDescription>
+                    关闭后孩子可以无限使用，直到您手动恢复学习规则。
+                  </DialogDescription>
+                </DialogHeader>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setConfirmOpen(false)}>
+                    取消
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    disabled={run.isPending}
+                    onClick={() => {
+                      go('indefinite', 0, '管控已关闭');
+                      setConfirmOpen(false);
+                    }}
+                  >
+                    确认关闭
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           )}
           {mode === 'indefinite' && (
             <Button
@@ -240,10 +262,10 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
         </div>
       </Toolbar>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-12">
-        <Card className="h-full gap-5 border-sky-200/70 bg-sky-50/55 shadow-sm md:col-span-2 xl:col-span-6 dark:border-sky-400/15 dark:bg-sky-400/[0.055]">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <Card className="h-full gap-4 rounded-md border-sky-200/70 bg-sky-50/55 shadow-sm sm:col-span-2 xl:col-span-1 dark:border-sky-400/15 dark:bg-sky-400/[0.055]">
           <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
+            <CardTitle className="flex items-center gap-2 text-sm">
               <Clock3 className="size-4 text-sky-600 dark:text-sky-400" />
               设备使用状态
             </CardTitle>
@@ -268,7 +290,7 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
                     : '剩余可用时间'}
             </p>
             <div className="mt-2 flex items-end gap-2">
-              <strong className="text-4xl font-semibold tracking-[-1.5px] tabular-nums sm:text-5xl">
+              <strong className="text-3xl font-semibold tracking-tight tabular-nums">
                 {unlimited
                   ? '不限时'
                   : learning.free && !mode
@@ -296,17 +318,17 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
           </CardFooter>
         </Card>
 
-        <Card className="h-full gap-4 shadow-sm xl:col-span-3">
+        <Card className="h-full gap-4 rounded-md shadow-sm">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-sm">
-              <span className="grid size-7 place-items-center rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300">
+              <span className="flex size-5 items-center justify-center text-muted-foreground">
                 <Clock3 className="size-4" />
               </span>
               今日已用
             </CardTitle>
           </CardHeader>
           <CardContent className="flex flex-1 flex-col">
-            <p className="text-3xl font-semibold tracking-tight tabular-nums">
+            <p className="text-2xl font-semibold tracking-tight tabular-nums">
               {Number(used.toFixed(1))}
               <span className="ms-1 text-sm font-normal text-muted-foreground">分钟</span>
             </p>
@@ -325,17 +347,17 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
           </CardContent>
         </Card>
 
-        <Card className="h-full gap-4 shadow-sm xl:col-span-3">
+        <Card className="h-full gap-4 rounded-md shadow-sm">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-sm">
-              <span className="grid size-7 place-items-center rounded-lg bg-emerald-100 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300">
+              <span className="flex size-5 items-center justify-center text-muted-foreground">
                 <ClipboardCheck className="size-4" />
               </span>
               今日学习任务
             </CardTitle>
           </CardHeader>
           <CardContent className="flex flex-1 flex-col items-center justify-between gap-3">
-            <p className="self-start text-3xl font-semibold tracking-tight tabular-nums">
+            <p className="self-start text-2xl font-semibold tracking-tight tabular-nums">
               {learning.roundsDoneToday || 0}
               <span className="ms-1 text-sm font-normal text-muted-foreground">
                 / {state.config?.roundsPerDay || 0} 组
@@ -370,8 +392,7 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
 
       <Card className="gap-0 shadow-sm">
         <CardHeader>
-          <CardTitle className="text-base">今日计划</CardTitle>
-          <CardDescription>按当前学习规则汇总</CardDescription>
+          <CardTitle className="text-sm">今日计划</CardTitle>
           <CardAction>
             <Button variant="ghost" size="sm" onClick={() => (location.hash = '/rules')}>
               调整
@@ -444,12 +465,22 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
       <div className="grid gap-4 lg:grid-cols-3">
         <Card className="shadow-sm lg:col-span-2">
           <CardHeader>
-            <CardTitle className="text-base">使用时间</CardTitle>
-            <CardDescription>最近 7 天实际使用时长</CardDescription>
-            <CardAction className="text-xs text-muted-foreground">最近 7 天</CardAction>
+            <CardTitle className="text-sm">使用时间</CardTitle>
+            <CardAction>
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-expanded={showChart}
+                onClick={() => setShowChart(v => !v)}
+              >
+                <ChevronDown className={`transition-transform ${showChart ? 'rotate-180' : ''}`} />
+                {showChart ? '收起' : '查看 7 天记录'}
+              </Button>
+            </CardAction>
           </CardHeader>
-          <CardContent>
-            <div className="h-64 min-w-0">
+          {showChart && (
+            <CardContent>
+              <div className="h-64 min-w-0">
               {days.length ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={days.slice().reverse()} margin={{ top: 12, right: 8, bottom: 0, left: -15 }}>
@@ -458,18 +489,18 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
                       dataKey="label"
                       axisLine={false}
                       tickLine={false}
-                      tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
+                      tick={{ fontSize: 12, fill: 'var(--muted-foreground)' }}
                     />
                     <YAxis
                       axisLine={false}
                       tickLine={false}
-                      tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
+                      tick={{ fontSize: 12, fill: 'var(--muted-foreground)' }}
                     />
                     <Tooltip
                       formatter={(value: any) => [`${Number(value).toFixed(1)} 分钟`, '使用时间']}
                       contentStyle={{
                         border: '1px solid var(--border)',
-                        borderRadius: 10,
+                        borderRadius: 8,
                         background: 'var(--popover)',
                         fontSize: 12,
                       }}
@@ -481,14 +512,15 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
               ) : (
                 <FieldDescription className="py-16 text-center">暂无使用记录</FieldDescription>
               )}
-            </div>
-          </CardContent>
+              </div>
+            </CardContent>
+          )}
         </Card>
 
         <Card className="shadow-sm">
           <CardHeader>
-            <CardTitle className="text-base">设备控制</CardTitle>
-            <CardDescription>临时调整后会自动恢复学习规则</CardDescription>
+            <CardTitle className="text-sm">设备控制</CardTitle>
+            <CardDescription>临时调整会自动恢复</CardDescription>
           </CardHeader>
           <CardContent className="space-y-1 px-3">
             <Button
@@ -497,7 +529,7 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
               disabled={run.isPending}
               onClick={() => open('unlock')}
             >
-              <span className="grid size-9 place-items-center rounded-xl bg-sky-100 text-sky-700 dark:bg-sky-400/10 dark:text-sky-300">
+              <span className="flex size-5 items-center justify-center text-muted-foreground">
                 <Play className="size-4" />
               </span>
               <span className="text-start">
@@ -512,7 +544,7 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
               disabled={run.isPending}
               onClick={() => open('lock')}
             >
-              <span className="grid size-9 place-items-center rounded-xl bg-muted text-muted-foreground">
+              <span className="flex size-5 items-center justify-center text-muted-foreground">
                 <Pause className="size-4" />
               </span>
               <span className="text-start">
@@ -548,7 +580,7 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
 
       <Card className="gap-0 overflow-hidden shadow-sm">
         <CardHeader>
-          <CardTitle className="text-base">学习记录</CardTitle>
+          <CardTitle className="text-sm">学习记录</CardTitle>
           <CardAction>
             <Button variant="ghost" size="sm" onClick={() => (location.hash = '/records')}>
               查看全部
@@ -575,7 +607,7 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
                     <TableCell className="text-muted-foreground">{day.answered} 题</TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
-                        <Badge variant="secondary">{day.accuracy}%</Badge>
+                        <span className="text-xs tabular-nums text-muted-foreground"><b className="font-medium">{day.accuracy}</b>%</span>
                         <div className="h-1.5 w-14 overflow-hidden rounded-full bg-muted">
                           <div
                             className="h-full rounded-full bg-emerald-500"
@@ -615,7 +647,7 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
             </DialogTitle>
             <DialogDescription>
               {custom?.mode === 'credit'
-                ? `当前余额 ${Math.ceil(((learning.remainingSeconds || 0) + (learning.freeQuotaSeconds || 0)) / 60)} 分钟。只调整今天的余额和总额度，不修改每日规则。`
+                ? `当前余额 ${Math.ceil(((learning.remainingSeconds || 0) + (learning.freeQuotaSeconds || 0)) / 60)} 分钟；只调整今天，不改每日规则。`
                 : custom?.mode === 'lock'
                   ? '锁定期间孩子不能答题，到时间自动恢复；家长可随时解除。'
                   : '期间不需要答题，也不计入使用时间；到时间自动恢复规则。'}

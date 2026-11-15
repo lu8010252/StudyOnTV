@@ -13,6 +13,8 @@ class RegressionInstrumentation : Instrumentation() {
     private var children = false
     private var levels = false
     private var launcher = false
+    private var home = false
+    private var homeUi = false
     private var videoUrl = ""
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
@@ -21,12 +23,28 @@ class RegressionInstrumentation : Instrumentation() {
         children = arguments?.getString("children") == "1"
         levels = arguments?.getString("levels") == "1"
         launcher = arguments?.getString("launcher") == "1"
+        home = arguments?.getString("home") == "1"
+        homeUi = arguments?.getString("homeUi") == "1"
         videoUrl = arguments?.getString("url") ?: ""
         start()
     }
 
     override fun onStart() {
         val results = Bundle()
+        if (home || homeUi) {
+            try {
+                val output = if (homeUi) HomeNavigationUiRegression.run(this) else {
+                    HomeNavigationRegression.run(targetContext)
+                    "PASS: Home/App Switch sequences, changed-downTime chords with Back/DPAD/volume and recovery, navigation snapshots, config/credit/child/answer publication and expiry\n"
+                }
+                results.putString("stream", output)
+                finish(Activity.RESULT_OK, results)
+            } catch (e: Throwable) {
+                results.putString("stream", android.util.Log.getStackTraceString(e))
+                finish(Activity.RESULT_CANCELED, results)
+            }
+            return
+        }
         if (levels) {
             FeatureRegression.levelSelection(targetContext)
             results.putString("stream", "PASS: 年级选择（唯一年级自动开始、多年级选择、范围筛选、暂停题目、空题库、进行中任务保持年级）\n")
@@ -137,7 +155,7 @@ class RegressionInstrumentation : Instrumentation() {
             GatePresentationRegression.run(targetContext)
             VendorFixRegression.run(targetContext)
             TimePointsRegression.run(targetContext)
-            results.putString("stream", "PASS: 新需求回归（加减时、开机额度、持久休息、年级、简单模式、解析停留、统计、多题库、密钥设置）及既有回归；免费额度即时调整、重复保存、上下限、时段、跨天；100 次单选/多选答案映射、判断题；清空含暂停题及复习进度；前台包名/Activity 配对与清理；#110 静音与弹窗同源；#17 休息死区与面板扣时同口径；#93 前台不返回自身包名与陈旧缓存；#92 悬浮窗真实 addView 探针；#106/#87/#81 AI 密钥不回显、朗读语言回落与失败回报；#112 网课时段分钟边界/跨午夜/多天、free 不扣时、counted 换上限、豁免优先、旧配置不回归与保存校验；#136 错题记录、错题优先排序与加练从错题库出、答对后出库；隐藏桌面图标（alias 开关、主界面不受影响）\n")
+            results.putString("stream", "PASS: 新需求回归（加减时、开机额度、持久休息、年级、简单模式、解析停留、统计、多题库、密钥设置）及既有回归；免费额度即时调整、重复保存、上下限、时段、跨天；100 次单选/多选答案映射、判断题；清空含暂停题及复习进度；前台包名/Activity 配对与清理；#110 静音与弹窗同源；#17 休息死区与面板扣时同口径；#93 前台不返回自身包名与陈旧缓存；#92 悬浮窗真实 addView 探针；#106/#87/#81 AI 密钥不回显、朗读语言回落与失败回报；#112 网课时段分钟边界/跨午夜/多天、free 不扣时、counted 换上限、豁免优先、旧配置不回归与保存校验；#136 错题记录、错题优先排序与加练从错题库出、答对后出库；覆盖优先（排序、覆盖率统计、错题优先压过覆盖优先）；题库页服务端分页与筛选（题库/题型列、搜索通配符转义、题库页计数、bank/type 升级回填）；系统设置识别与临时放行、静音计时随服务重建清零；隐藏桌面图标（alias 开关、主界面不受影响）；时区（可用时段与「今天」按配置时区、未知时区拒绝、下次可用文案）与官方题库 Gitee 镜像回退\n")
             finish(Activity.RESULT_OK, results)
         } catch (e: Throwable) {
             results.putString("stream", android.util.Log.getStackTraceString(e))

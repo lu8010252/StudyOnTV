@@ -14,8 +14,12 @@ import java.util.UUID
 object AnswerInput {
     private var target = WeakReference<WebView>(null)
     private var requestId = ""
+    private var screen: Class<out Activity>? = null
     var active = false
         private set
+
+    fun owns(activity: Activity): Boolean = active && activity.javaClass == screen &&
+        activity.intent?.getStringExtra("requestId") == requestId
 
     /** 当前题的朗读 / 识别语言；空串表示题目没标注，由系统语言决定（#126 粤语系统） */
     fun language(): String = try {
@@ -27,6 +31,7 @@ object AnswerInput {
         if (active) return
         active = true
         requestId = UUID.randomUUID().toString()
+        this.screen = screen
         target = WeakReference(web)
         if (context !is Activity) web.visibility = View.GONE
         try {
@@ -40,6 +45,7 @@ object AnswerInput {
         } catch (_: RuntimeException) {
             active = false
             requestId = ""
+            this.screen = null
             target.clear()
             web.visibility = View.VISIBLE
             android.widget.Toast.makeText(context, "暂时无法打开输入页面，请稍后重试", android.widget.Toast.LENGTH_SHORT).show()
@@ -60,6 +66,7 @@ object AnswerInput {
             view?.visibility = View.VISIBLE
             active = false
             requestId = ""
+            screen = null
             target.clear()
             if (result == null || view == null) return@post
             val token = UUID.randomUUID().toString()

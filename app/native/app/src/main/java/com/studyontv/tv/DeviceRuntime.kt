@@ -18,7 +18,12 @@ object DeviceRuntime {
         appContext = app
         Diag.installCrashHandler()
         CrashDetector.install(app)   // 在 Diag handler 之后安装，确保我们的 handler 在最外层
-        BuglyInit.init(app)          // 用户已同意过则立即初始化，否则 no-op
+        // 若用户已同意 & 配置了 endpoint，则上传上次崩溃日志到自建 Worker
+        Diag.uploadPendingCrash(
+            context = app,
+            endpoint = Prefs.crashEndpoint(app),
+            token = Prefs.crashToken(app)
+        )
         Diag.info("App", "start version=${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) sdk=${android.os.Build.VERSION.SDK_INT} model=${android.os.Build.MODEL}")
         // 要在 GateService.onCreate 之前读：用未清除的「服务在跑」标记判断上一个进程是不是被系统清理（#120）
         ProcessHealth.noteProcessStart(app)
@@ -36,7 +41,11 @@ object DeviceRuntime {
         })
         store = LocalStore(app)
         SeedAssets.ensureQuestions(app, store)
+        // 同步框架自愈：注册复活账户（幂等），持有 WRITE_SECURE_SETTINGS 时顺带修复无障碍
+        GuardSync.ensure(app)
+        GuardSync.heal(app)
         learning = LearningEngine(store)
+        LearningNavigation.start(learning)
         server = LanServer(app, store, app.assets).also {
             it.start()
             Prefs.setLocalPort(app, it.boundPort)

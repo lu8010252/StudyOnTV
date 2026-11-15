@@ -859,3 +859,50 @@ html.tv-device .quiz-wrap.scroll { height: auto; min-height: 100%; padding-top: 
   -webkit-justify-content: flex-start; justify-content: flex-start; }
 html.tv-device .quiz-wrap.scroll .quiz-head { position: static; margin-bottom: 2.4rem; }
 html.tv-device .quiz-wrap.scroll .quiz-foot { position: static; margin-top: 2rem; }
+
+/* =====================================================================
+ * 电视端学习页交互补充
+ * ===================================================================== */
+
+/* 选项卡片：Grid 两列，彻底解决 5 个以上选项换行后右边距错位。
+   极老 WebView 不支持 Grid 时 JS 会给 .options 加 .no-grid，退回原来的两列 flex */
+html.tv-device .options:not(.no-grid) {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2rem;
+}
+html.tv-device .options:not(.no-grid) .option { width: 100%; margin: 0; }
+/* 只有 1 个选项时铺满一行 */
+html.tv-device .options.solo:not(.no-grid) { grid-template-columns: 1fr; }
+/* 输入框 / 工具条 / 操作提示 / 配图 / 按钮永远占满整行 */
+html.tv-device .options:not(.no-grid) > .written-answer,
+html.tv-device .options:not(.no-grid) > .input-tools,
+html.tv-device .options:not(.no-grid) > .tv-input-hint,
+html.tv-device .options:not(.no-grid) > .drawing-preview,
+html.tv-device .options:not(.no-grid) > .btn { grid-column: 1 / -1; margin-left: 0; margin-right: 0; }
+
+/* Grid 降级：保留原来的两列 flex 与右边距 */
+html.tv-device .options.no-grid { display: -webkit-flex; display: flex; -webkit-flex-wrap: wrap; flex-wrap: wrap; }
+html.tv-device .options.no-grid .option { width: 47.5%; margin: 0 5% 2.2rem 0; }
+html.tv-device .options.no-grid .option:nth-child(2n) { margin-right: 0; }
+
+/* 电视端语音按钮加麦克风提示；极老 WebView 不显示 emoji 时只剩文字，不影响使用 */
+html.tv-device .input-tools .btn[data-action="voice"]::before { content: "🎤 "; }
+
+/* 填空题输入框下方的常驻操作提示（有草稿时 placeholder 不显示，所以需要这条） */
+.tv-input-hint { display: none; }
+html.tv-device .tv-input-hint {
+  display: block;
+  font-size: 1.8rem; color: #6E6E6E;
+  margin-top: 1.4rem; padding: .8rem 1.6rem;
+  border-radius: 1rem; background: rgba(255,255,255,.04);
+}
+html.tv-device .written-answer.focused + .tv-input-hint { color: #A3A3A3; }
+html.tv-device[data-mode="light"] .tv-input-hint { color: #8A8A8A; background: rgba(0,0,0,.04); }
+
+/* 「朗读」按钮固定在页脚，不占用选项区，避免遥控器在选项之间误选 */
+.quiz-foot-right { display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center; }
+html.tv-device .read-aloud-btn { font-size: 1.8rem; padding: 1rem 2rem; margin-right: 2.4rem; opacity: .6; }
+html.tv-device .read-aloud-btn.focused { opacity: 1; }
+html:not(.tv-device) .quiz-foot-right,
+html:not(.tv-device) .read-aloud-btn { display: none !important; }

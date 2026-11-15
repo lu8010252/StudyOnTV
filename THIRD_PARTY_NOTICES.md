@@ -8,5 +8,6 @@ The project's personal-use license applies to the project's original code. Bundl
 - Mammoth (DOCX text extraction): BSD-2-Clause, retain upstream notice in `admin/assets/notices/mammoth.txt`.
 - PDF.js / pdfjs-dist (PDF text extraction): Apache-2.0, retain upstream license in `admin/assets/notices/pdfjs-dist.txt`. The worker is bundled locally and loaded only when importing PDF files.
 - The existing bundled QR-code generator retains the copyright and license notice in its distribution.
+- Aerial TV (aerial-tv, https://github.com/pengchujin/aerial-tv): MIT, Copyright (c) 2026 pengchujin. The sync-framework revival adapter structure in `app/native/app/src/main/java/com/studyontv/tv/GuardSync.kt` is adapted from its `RevivalSync.kt` / `GuardSetup.kt`. The full MIT text is kept in that file's header.
 
 The reference APK inspected during interface design is not bundled with this project. No code, images or fonts from it are distributed here.

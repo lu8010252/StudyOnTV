@@ -36,9 +36,6 @@ class GateService : Service() {
     private var gateFailures = 0
     private var lastGateError = ""
     private var lastGateErrorAt = -1L
-    private var muteMismatchSince = -1L
-    private var lastMuteMismatchAt = -1L
-    private var lastMuteMismatchLogAt = 0L
     /** 上一轮 tick 的状态：mediaTick / diagnostics 用它做「静音是否同源」的纯函数判定 */
     @Volatile private var freeNow = false
     @Volatile private var gateExpectedNow = false
@@ -53,7 +50,11 @@ class GateService : Service() {
     @Volatile private var foregroundPackage: String? = null
     @Volatile private var ownActivityForeground = false
     @Volatile private var monitoringNow = false
-    @Volatile private var settingsUntil = 0L
+    /** 本轮 tick 读到的「不计时应用」白名单（屏保 / 网课 App） */
+    private var whitelistNow: Set<String> = emptySet()
+    /** 观看计时心跳：上次写盘的开机时刻，以及上次写的是不是「正在计时」（#148） */
+    private var lastBeatAt = 0L
+    private var beatCounting = false
     /**
      * 屏幕是否亮着。TCL 电视「关机」（未断电）后 PowerManager 仍报 interactive，
      * 计时会照走；系统广播和显示状态任一说熄灭就按熄灭处理。
@@ -105,7 +106,7 @@ class GateService : Service() {
             countdown.hide()
             return
         }
-        if (now < settingsUntil) { wasUsing = false; hideAll(); countdown.hide(); if (MediaPause.active) releaseMuteWithoutGate("settings"); return }
+        if (SystemSettingsGuard.active(now)) { wasUsing = false; hideAll(); countdown.hide(); if (MediaPause.active) releaseMuteWithoutGate("settings"); return }
         val power = getSystemService(POWER_SERVICE) as PowerManager
         val locked = (getSystemService(KEYGUARD_SERVICE) as KeyguardManager).isKeyguardLocked
         val awake = power.isInteractive && !locked && screenOn && displayOn()
@@ -126,6 +127,9 @@ class GateService : Service() {
         foregroundPackage = pkg
         ownActivityForeground = ownForeground
         monitoringNow = monitoring
+        // 不计时白名单：系统屏保、网课 App 在前台时既不扣时长，也不弹题 / 静音。
+        whitelistNow = WatchWhitelist.of(DeviceRuntime.store.config())
+        val whitelistedNow = pkg != null && whitelistNow.contains(pkg)
         // 记住孩子正在用的应用，解锁后用它「回到原画面」（issue #68 / #74）
         if (pkg != null && pkg != packageName && !exempt(pkg, false)) rememberActive(pkg)
         // With only overlay permission, use awake time outside our own activities.
@@ -134,25 +138,23 @@ class GateService : Service() {
         // #93 / #17：识别不到前台应用（pkg == null）时一律按亮屏时间计时。以前只有
         // 「仅有悬浮窗权限」才这样兜底，有使用情况 / 无障碍权限却拿到 null 时会静默停止计时，
         // 表现就是「显示还有 10 分钟却永远不减少、到点也不弹」。孩子在学习页时走 ownForeground。
-        val active = awake && monitoring && !ownForeground && when {
+        val active = awake && monitoring && !ownForeground && !whitelistedNow && when {
             pkg == null -> true
             !exempt(pkg) -> true
             else -> launcherPlaying(pkg) || (pkg != packageName && (pkg == launcherPackage() || Foreground.isTransient(pkg)) &&
                 DeviceRuntime.store.config().optBoolean("trafficAssistEnabled") && PlaybackTraffic.playing(this))
         }
-        val protecting = awake && monitoring && !ownForeground && (pkg == null || !exempt(pkg, false))
+        val protecting = awake && monitoring && !ownForeground && !whitelistedNow && (pkg == null || !exempt(pkg, false))
         val reason = status.getString("reason")
-        val settingsBlocked = awake && monitoring && !free && pkg != null && isSettings(pkg) &&
-            DeviceRuntime.store.config().optBoolean("blockSettingsDuringControl", true) && !AdminAuth.recentlyVerified()
+        val settingsBlocked = SystemSettingsGuard.blocked(this, awake, monitoring, free, pkg,
+            DeviceRuntime.store.config().optBoolean("blockSettingsDuringControl", true), AdminAuth.recentlyVerified())
         val gateReason = if (settingsBlocked) "settings" else reason
         val pendingFeedback = DeviceRuntime.store.get("review_feedback").isNotEmpty()
         val practice = DeviceRuntime.store.config().optString("playMode") == "practice"
         // 一次 tick 内统一口径：什么情况下应该有 Gate（静音与弹窗共用这个判断）
-        gateExpectedNow = !free && (gateReason.isNotEmpty() || pendingFeedback || practice)
+        gateExpectedNow = !free && !whitelistedNow && (gateReason.isNotEmpty() || pendingFeedback || practice)
         val feedbackVisible = !free && hasGate() && pendingFeedback
-        if (!free) Foreground.learningActivity()?.let {
-            if (gateExpectedNow) MediaPause.pause(it) else MediaPause.release(it)
-        }
+        AudioController.syncLearningActivity(free, gateExpectedNow)
         wasUsing = active && !free && reason.isEmpty() && !feedbackVisible
         // (二改) 状态诊断:显示在电视页右上角,并记进家长后台“计时诊断”
         val why = when {
@@ -172,11 +174,43 @@ class GateService : Service() {
         if (!awake || !monitoring || (!settingsBlocked && (ownForeground || (reason.isEmpty() && !feedbackVisible) || (pkg != null && exempt(pkg, false))))) hideAll()
         val snapshot = "reason=$gateReason free=$free awake=$awake screen=$screenOn monitoring=$monitoring own=$ownForeground pkg=$pkg cls=${pkg?.let { Foreground.currentClass(it) }} active=$active gate=${hasGate()} overlay=$canOverlay mute=${MediaPause.active} failures=$gateFailures"
         if (snapshot != lastDiag) { lastDiag = snapshot; Diag.info("Gate", snapshot) }
-        ensureGateVisible(now, gateReason, canOverlay, protecting, settingsBlocked)
+        val state = GateTickState(now, free, awake, screenOn, monitoring, canOverlay, ownForeground, pkg,
+            gateExpectedNow, gateReason, settingsBlocked, active, protecting)
+        ensureGateVisible(state)
         // #110：静音必须由「真的弹出来了」背书——弹窗失败或被收起后立刻解除静音，
         // 否则出现「视频被静音了，却没人来答题」。
         if (MediaPause.active && !muteBackedByVisibleGate()) releaseMuteWithoutGate("foreground")
-        updateCountdown(status, active, free, canOverlay, awake, monitoring, ownForeground, settingsBlocked, pkg)
+        updateCountdown(status, state)
+    }
+
+    /**
+     * 观看计时心跳（#148）。进程被固件强杀时 onDestroy 不会执行，只能靠最后一次心跳估算漏掉的时长，
+     * 所以计时中每 5 秒同步落盘一次；停止计时时立刻写一次 inactive，避免关机待机被补扣。
+     */
+    private fun beatWatch(counting: Boolean) {
+        val now = SystemClock.elapsedRealtime()
+        if (!WatchGap.beatDue(lastBeatAt, now, counting, alreadyInactive = !beatCounting && lastBeatAt > 0)) return
+        lastBeatAt = now
+        beatCounting = counting
+        Prefs.setWatchBeat(this, Prefs.WatchBeat(counting, System.currentTimeMillis(), now, SystemClock.uptimeMillis()))
+    }
+
+    /**
+     * 上次进程没走正常退出时，把被杀期间醒着的时间补扣回来（#148）。
+     * 只在屏幕亮着、且空档在 [WatchGap] 的保守范围内才补；补完立即清掉心跳，防止重复补算。
+     */
+    private fun recoverWatchGap() {
+        val beat = Prefs.watchBeat(this) ?: return
+        Prefs.clearWatchBeat(this)
+        lastBeatAt = 0L
+        beatCounting = false
+        if (!beat.active) return
+        val power = getSystemService(POWER_SERVICE) as PowerManager
+        if (!power.isInteractive) return
+        val gap = WatchGap.recoverMs(beat.elapsed, beat.uptime, SystemClock.elapsedRealtime(), SystemClock.uptimeMillis())
+        if (gap <= 0L) return
+        DeviceRuntime.learning.consumeRecovered(gap)
+        Diag.warn("Gate", "进程被杀期间补算观看时长 ${gap / 1000} 秒（上次心跳 ${(System.currentTimeMillis() - beat.at) / 1000} 秒前）")
     }
 
     /**
@@ -188,7 +222,12 @@ class GateService : Service() {
      *    或 10s 兜底通知节流把重试吞掉；
      * 3. 失败时全屏 Activity 每次都试一把（SINGLE_TOP 去重），通知单独节流 10s。
      */
-    private fun ensureGateVisible(now: Long, gateReason: String, canOverlay: Boolean, protecting: Boolean, settingsBlocked: Boolean) {
+    private fun ensureGateVisible(state: GateTickState) {
+        val now = state.at
+        val gateReason = state.gateReason
+        val canOverlay = state.canOverlay
+        val protecting = state.protecting
+        val settingsBlocked = state.settingsBlocked
         // attach 了却一直不可见：不能算「已弹出」，当作失败并重试（hide 会解除静音）
         if (overlay.isShowing && !overlay.presenting(now)) {
             lastGateError = overlay.lastError.ifEmpty { "overlay attached but not visible kind=${overlay.lastErrorKind}" }
@@ -370,27 +409,23 @@ class GateService : Service() {
         fallbackPending = lastFallbackActivityAt > 0 && SystemClock.elapsedRealtime() - lastFallbackActivityAt < GatePresentation.FALLBACK_GRACE_MS)
 
     /** 静音是否允许：只有 Gate 真的可见（或答题输入页在前台）才允许持续静音/暂停 */
-    private fun muteBackedByVisibleGate(): Boolean = GatePresentation.muteAllowed(
-        gateVisible = gateShown(), inputActive = InputSupport.active, free = freeNow)
+    private fun muteBackedByVisibleGate(): Boolean = AudioController.allowed(gateShown(), freeNow)
 
     /** 静音与弹窗不同源：立即解除静音，并在诊断里留下可读的一笔（issue #110） */
-    private fun releaseMuteWithoutGate(source: String) {
-        val now = SystemClock.elapsedRealtime()
-        if (muteMismatchSince < 0) muteMismatchSince = now
-        lastMuteMismatchAt = now
-        if (now - lastMuteMismatchLogAt > 5000) {
-            lastMuteMismatchLogAt = now
-            val age = if (MediaPause.lastPauseAt > 0) (now - MediaPause.lastPauseAt) / 1000 else 0
-            Diag.warn("Audio", "mute-without-gate($source): 已静音${age}s owners=${MediaPause.ownerCount} gate=${hasGate()} " +
-                "visible=${overlay.verifiedVisible} failures=$gateFailures reason=$lastGateError → release")
-        }
-        MediaPause.releaseAll(this)
-        muteMismatchSince = -1L
-    }
+    private fun releaseMuteWithoutGate(source: String) =
+        AudioController.releaseWithoutGate(this, source, gate = hasGate(), visible = overlay.verifiedVisible,
+            gateFailures = gateFailures, lastGateError = lastGateError)
 
     /** 看电视期间在画面右上角显示剩余分钟数；不在看电视 / 拦截中 / 自由时段 / 家长解锁时隐藏 */
-    private fun updateCountdown(status: org.json.JSONObject, active: Boolean, free: Boolean, canOverlay: Boolean,
-                                awake: Boolean, monitoring: Boolean, ownForeground: Boolean, settingsBlocked: Boolean, pkg: String?) {
+    private fun updateCountdown(status: org.json.JSONObject, state: GateTickState) {
+        val active = state.active
+        val free = state.free
+        val canOverlay = state.canOverlay
+        val awake = state.awake
+        val monitoring = state.monitoring
+        val ownForeground = state.ownForeground
+        val settingsBlocked = state.settingsBlocked
+        val pkg = state.foregroundPackage
         val now = SystemClock.elapsedRealtime()
         if (active) { countdownActiveAt = now; countdownPackage = pkg }
         // 同一播放器短暂缓冲时保留角标，切换应用、关屏或进入管控页仍立即隐藏。
@@ -553,16 +588,15 @@ class GateService : Service() {
         state == null || state != android.view.Display.STATE_OFF
     } catch (_: Exception) { true }
 
-    private fun isSettings(pkg: String): Boolean = pkg == systemSettingsPackage ||
-        pkg in setOf("com.android.settings", "com.android.tv.settings", "com.google.android.tv.settings")
-
     private fun exempt(pkg: String, includeLauncher: Boolean = true): Boolean {
         if (pkg == packageName || pkg == "com.android.systemui" || pkg == "android" || pkg.contains("packageinstaller")) return true
         if (pkg.contains("permissioncontroller") || pkg.contains("inputmethod") || pkg.contains("keyboard")) return true
         if (pkg in setOf("com.google.android.dialer", "com.android.dialer", "com.android.phone", "com.android.server.telecom", "com.android.emergency")) return true
         // 系统设置：计时时不算使用（includeLauncher=true）；但锁屏判断时（includeLauncher=false）不能当作安全区，
         // 否则孩子按遥控器“设置”键进系统设置，就能关掉无障碍或强行停止本应用。家长要进设置，走家长设置页里的入口（会放行 2 分钟）。
-        if (includeLauncher && (pkg == systemSettingsPackage || pkg in setOf("com.android.settings", "com.android.tv.settings", "com.google.android.tv.settings"))) return true
+        if (includeLauncher && (pkg == systemSettingsPackage || SystemSettingsGuard.isSettings(this, pkg) || pkg in setOf("com.android.settings", "com.android.tv.settings", "com.google.android.tv.settings"))) return true
+        // 家长指定不计时的应用（屏保 / 网课）：不扣时长、不弹题，也不静音（上游）
+        if (pkg in whitelistNow) return true
         if (!includeLauncher) return false
         val launcher = packageManager.resolveActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), 0)?.activityInfo?.packageName
         return pkg == launcher || Foreground.isLauncher(pkg)
@@ -581,6 +615,8 @@ class GateService : Service() {
         } catch (_: Exception) { }
         overlay = GateOverlay(this, GateOverlay.applicationWindowType())
         instance = this
+        // 服务重建 = 新的一轮，静音/弹窗不同源的计时从零开始
+        AudioController.reset()
         Prefs.setServiceRunning(this, true)
         val channelId = "sotv_gate"
         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
@@ -614,6 +650,7 @@ class GateService : Service() {
         Watchdog.serviceStarted(this, startVia)
         Watchdog.schedule(this)
         Watchdog.scheduleAlarm(this)
+        // 被杀期间漏掉的时长由上面的 UsageBackfill（自有心跳补记）负责；上游的 WatchGap 补算不再调用，免得重复扣时长
         handler.post(tick)
         handler.postDelayed(mediaTick, 1000)
     }
@@ -699,6 +736,8 @@ class GateService : Service() {
             } catch (e: Exception) { android.util.Log.w("StudyOnTV", "Cannot schedule restart", e) }
         }
         fun hasGate(): Boolean = WatchAccessibilityService.hasGate() || instance?.overlay?.isShowing == true
+        fun presentedOverlay(): Boolean = instance?.overlay?.presenting() == true
+        fun showNavigationBlocked(): Boolean = instance?.overlay?.showNavigationBlocked() == true
         /** 家长面板里的能力自检；不依赖服务是否在运行 */
         fun diagnostics(context: Context): org.json.JSONObject {
             val service = instance
@@ -712,11 +751,17 @@ class GateService : Service() {
             val mute = MediaPause.active
             val gateVisible = GatePresentation.gateVisible(accessibilityGate, overlayPresenting, learningActivity, gateExpected)
             val mismatch = GatePresentation.inconsistentMute(mute, gateVisible, InputSupport.active, free)
-            val mismatchSince = service?.muteMismatchSince ?: -1L
-            val lastMismatchAt = service?.lastMuteMismatchAt ?: -1L
+            val mismatchSince = AudioController.mismatchSince
+            val lastMismatchAt = AudioController.lastMismatchAt
             val lastErrorAt = service?.lastGateErrorAt ?: -1L
             return org.json.JSONObject()
                 .put("service", running)
+                .put("homeBlockedPresses", WatchAccessibilityService.blockedHomePresses)
+                .put("appSwitchBlockedPresses", WatchAccessibilityService.blockedAppSwitchPresses)
+                .put("homePolicyExitAllowed", LearningNavigation.snapshot?.canExit ?: false)
+                .put("homePolicyFresh", LearningNavigation.snapshot?.let { now - it.publishedAt <= 2000 } ?: false)
+                .put("homeBlocking", LearningNavigation.shouldBlockHome())
+                .put("homeFilterRequested", WatchAccessibilityService.keyFilterRequested())
                 .put("overlay", OverlayAccess.canDraw(context))
                 .put("usage", Foreground.hasUsageAccess(context))
                 .put("accessibility", WatchAccessibilityService.connected)
@@ -771,11 +816,25 @@ class GateService : Service() {
             Handler(Looper.getMainLooper()).post { instance?.overlay?.hide(); WatchAccessibilityService.hideGate() }
         }
         fun onOwnActivityResumed() {
-            instance?.settingsUntil = 0L
+            SystemSettingsGuard.revoke()
             Handler(Looper.getMainLooper()).post {
                 if (InputSupport.active) { instance?.overlay?.suspend(); WatchAccessibilityService.suspendGate() }
                 else { instance?.overlay?.hide(); WatchAccessibilityService.hideGate() }
             }
+        }
+        /**
+         * 安装更新时用：不管当前是不是「已用完时间」，都要把闸门藏起来 2 分钟。
+         *
+         * 之前走 openingSystemPage()，时间用完且家长没刚输过密码时它会直接 return，
+         * 闸门于是盖在系统安装确认页上面 —— 家长点「立即更新」只看到转圈或者什么都看不到，
+         * 只能拿电脑用 adb 装。安装确认页要家长在电视上亲手点，本身就不构成「孩子进设置」的风险。
+         */
+        fun allowInstallPage() {
+            instance?.let { service ->
+                SystemSettingsGuard.grant()
+                service.wasUsing = false
+            }
+            hideGates()
         }
         fun openingSystemPage(parentAuthorized: Boolean = false) {
             if (parentAuthorized) AdminAuth.markVerified()
@@ -785,7 +844,7 @@ class GateService : Service() {
                     DeviceRuntime.store.config().optBoolean("blockSettingsDuringControl", true)
                 // Installation is allowed; it must not grant a child access to every Settings page.
                 if (!parentAuthorized && !AdminAuth.recentlyVerified() && canIdentify && settingsLocked) return
-                service.settingsUntil = SystemClock.elapsedRealtime() + 120000
+                SystemSettingsGuard.grant()
                 service.wasUsing = false
             }
             hideGates()

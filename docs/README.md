@@ -25,7 +25,12 @@ node scripts/gen-how-it-works.mjs
 ## 其它文档
 
 - [安装指南](./install.md)
+- [远程管理电视（Tailscale / Lucky / frp）](./remote-access.md)
+- [设备兼容性汇总](./device-compat.md)
 - [让 AI 加题（局域网接口）](./ai-api.md)
+- [局域网 API（OpenAPI / Swagger）](./api.html)
 - [与 Home Assistant 联动](./home-assistant.md)
+- [集成模板（快捷指令 / Telegram / n8n）](../integrations/README.md)
 - [埋点说明](./analytics.md)
 - [版本更新机制](./update.md)
+- [贡献指南](../CONTRIBUTING.md)

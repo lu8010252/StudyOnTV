@@ -17,6 +17,9 @@ class BootReceiver : BroadcastReceiver() {
             UninstallGuard.restoreOwnerPolicy(context)
             Prefs.setUpdateInProgress(context, false)
             if (action != Intent.ACTION_MY_PACKAGE_REPLACED) Watchdog.bootBroadcast(context)
+            // 同步框架自愈：注册复活账户；持有 WRITE_SECURE_SETTINGS 时补回无障碍并拉起服务
+            GuardSync.ensure(context)
+            GuardSync.heal(context)
             GateService.ensureRunning(context, if (action == Intent.ACTION_MY_PACKAGE_REPLACED) "update" else "boot")
             return
         }
@@ -26,6 +29,7 @@ class BootReceiver : BroadcastReceiver() {
                 "android.net.conn.CONNECTIVITY_CHANGE", Watchdog.REVIVE_ACTION)) {
             if (GateService.running) return          // 已在运行，无需操作
             if (!Prefs.onboarded(context)) return      // 未完成引导，不拉起
+            GuardSync.heal(context)
             GateService.ensureRunning(context, "revive")
         }
         // 开机后（无论是否已初始化）都排一次自唤醒闹钟，之后由服务自己滚续
