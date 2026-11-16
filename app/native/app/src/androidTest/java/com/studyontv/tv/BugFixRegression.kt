@@ -157,6 +157,8 @@ object BugFixRegression {
             check(store.config().getBoolean("allowQuizUnlock")) { "答题页密码解锁开关应能保存" }
 
             // 补算必须和正常 tick 一样真的扣掉时长（consume 单次上限 5 秒，分块后应扣满 30 秒）
+            // 先用家长加时发一点余额：余额为 0 时 consume 本来就没有可扣的
+            engine.remote("credit", 10, "test")
             val before = engine.status().getLong("remainingSeconds")
             engine.consumeRecovered(30_000)
             val after = engine.status().getLong("remainingSeconds")

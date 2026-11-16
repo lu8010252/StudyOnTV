@@ -28,6 +28,9 @@ const recognizeModes:[string,string][]=[['system','设备系统识别'],['auto',
 /** #126：设备级朗读语言。空 = 跟随每道题的标注，"system" = 跟随系统语言 */
 const readLanguages:[string,string][]=[['auto','跟随每道题的标注'],['system','跟随设备系统语言'],['zh-CN','普通话'],['zh-HK','粤语'],['zh-TW','台湾国语'],['en-US','英语（美式）'],['en-GB','英语（英式）']];
 const readLanguageValue=(value:any)=>(readLanguages.some(([v])=>v===value)?value:'auto');
+/** 朗读内容：只读题干、题干加选项、再加正确答案（答案在作答之后再读，作答前不剧透） */
+const readScopes:[string,string][]=[['question','只读题目'],['questionOptions','题目和选项'],['questionOptionsAnswer','题目、选项和答案']];
+const readScopeValue=(value:any)=>(readScopes.some(([v])=>v===value)?value:'question');
 const labels:Record<string,string>={azureRegion:'Azure 区域',azureVoice:'Azure 音色',azureKey:'Azure Key',aliyunAppKey:'阿里云 AppKey',aliyunAccessKeyId:'阿里云 AccessKey ID',aliyunSecret:'阿里云 AccessKey Secret',aliyunVoice:'阿里云音色',deepseekKey:'DeepSeek API Key',deepseekVoice:'DeepSeek 音色',recognizeMode:'语音识别通路'};
 const azureFields=['azureRegion','azureVoice','azureKey'],aliyunFields=['aliyunAppKey','aliyunAccessKeyId','aliyunSecret','aliyunVoice'],deepseekFields=['deepseekKey','deepseekVoice'];
 
@@ -37,6 +40,7 @@ function validate(form:any){
  if(String(form.readLanguage??'')!=='' && readLanguageValue(form.readLanguage)==='auto')errors.readLanguage='请选择有效的朗读语言';
  if(form.recognizeMode&&!recognizeModes.some(([value])=>value===form.recognizeMode))errors.recognizeMode='请选择有效的语音识别通路';
  if(form.deepseekVoice&&!deepseekVoices.some(([value])=>value===form.deepseekVoice))errors.deepseekVoice='请选择有效的 DeepSeek 音色';
+ if(form.readScope&&!readScopes.some(([value])=>value===form.readScope))errors.readScope='请选择有效的朗读内容';
  for(const key of [...azureFields,...aliyunFields,...deepseekFields]){
   const limit=key==='azureKey'||key==='aliyunSecret'?500:200;
   if(String(form[key]??'').length>limit)errors[key]=`${labels[key]}不能超过 ${limit} 个字符`;
@@ -115,9 +119,18 @@ export default function SpeechSettings({sessionId}:{sessionId:number}){
   <Card className="gap-0 overflow-hidden py-0 shadow-xs">
   <CardContent className="px-4 sm:px-5">
    <ItemGroup className="divide-y divide-border/60">
-    <Item size="sm" className="rounded-none px-0 py-4">
+    <Item size="sm" className="rounded-none px-0 py-4" id="setting-auto-read">
      <ItemContent><ItemTitle>自动朗读题目</ItemTitle></ItemContent>
      <ItemActions><Switch aria-label="自动朗读题目" checked={!!form.autoRead} onCheckedChange={value=>change('autoRead',value)}/></ItemActions>
+    </Item>
+    <Item size="sm" className="rounded-none px-0 py-4" id="setting-read-scope" data-invalid={!!errors.readScope}>
+     <ItemContent><ItemTitle>朗读内容</ItemTitle><ItemDescription className="text-xs">选「和答案」时，答案在作答之后再读，作答前不会剧透。</ItemDescription><FieldError>{errors.readScope}</FieldError></ItemContent>
+     <ItemActions>
+      <Select value={readScopeValue(form.readScope)} onValueChange={value=>change('readScope',value)}>
+       <SelectTrigger aria-label="朗读内容" aria-invalid={!!errors.readScope} className="w-full sm:w-44"><SelectValue>{readScopes.find(([value])=>value===readScopeValue(form.readScope))?.[1]}</SelectValue></SelectTrigger>
+       <SelectContent>{readScopes.map(([value,label])=><SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent>
+      </Select>
+     </ItemActions>
     </Item>
     <Item size="sm" className="rounded-none px-0 py-4" data-invalid={!!errors.readLanguage}>
      <ItemContent><ItemTitle>朗读语言</ItemTitle><ItemDescription className="text-xs">粤语 / 繁体系统选「跟随设备系统语言」。</ItemDescription><FieldError>{errors.readLanguage}</FieldError></ItemContent>

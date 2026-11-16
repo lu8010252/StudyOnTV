@@ -235,6 +235,48 @@ class LearningEngine(private val store: LocalStore) {
 
     private fun inWindow(config: JSONObject): Boolean = allowedAt(config, now())
 
+    /**
+     * 把一周的可用时段压成一句话给学习页显示，例如「周一至周五 18:30–20:30，周六周日 09:00–20:00」。
+     * 家长实际设置的是 weekSlots（周计划），windowStart/windowEnd 只是旧版单时段的遗留字段，
+     * 不能再拿来当提示文案，否则家长改了周计划、学习页还显示 18:30–20:00。
+     */
+    private fun scheduleText(config: JSONObject): String {
+        if (config.optBoolean("allDay")) return "全天可用"
+        val slots = weekSlots(config) ?: return ""
+        val labels = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+        val parts = mutableListOf<String>()
+        var start = 0
+        while (start < 7) {
+            var end = start
+            while (end + 1 < 7 && slots[end + 1] == slots[start]) end++
+            val label = when (end - start) {
+                0 -> labels[start]
+                1 -> labels[start] + "、" + labels[end]
+                else -> labels[start] + "至" + labels[end]
+            }
+            val ranges = slotRanges(slots[start])
+            parts += if (ranges.isEmpty()) "$label 不可用" else label + " " + ranges.joinToString("、")
+            start = end + 1
+        }
+        val text = parts.joinToString("，")
+        return if (text.length <= 80) text else text.take(78) + "…"
+    }
+
+    /** 把一天的 48 个半小时格子合并成「18:30–20:30」这样的区间 */
+    private fun slotRanges(day: String): List<String> {
+        fun clock(slot: Int) = "%02d:%02d".format(slot / 2, (slot % 2) * 30)
+        val out = mutableListOf<String>()
+        var i = 0
+        while (i < 48) {
+            if (day[i] != '1') { i++; continue }
+            var j = i
+            while (j + 1 < 48 && day[j + 1] == '1') j++
+            out += clock(i) + "–" + clock(j + 1)
+            i = j + 1
+        }
+        return out
+    }
+
     private fun nextAvailable(config: JSONObject, tomorrow: Boolean): Long {
         val base = now()
         if (tomorrow) {
@@ -380,6 +422,8 @@ class LearningEngine(private val store: LocalStore) {
             // 学生端用 activePoint 显示「网课时间 · 数学」/「大人豁免 · 看电影」
             .put("activePoint", point?.let { JSONObject().put("name", it.name).put("mode", it.mode).put("until", it.until) } ?: JSONObject.NULL)
             .put("canExit", canExit)
+            // 学习页的「可用时段」提示用周计划生成，别再读旧版 windowStart/windowEnd
+            .put("scheduleText", scheduleText(c))
         // A result computed inside a transaction must not expose an uncommitted reward/unlock.
         if (!store.writableDatabase.inTransaction())
             exitSnapshot = LearningExitSnapshot(canExit, android.os.SystemClock.elapsedRealtime())

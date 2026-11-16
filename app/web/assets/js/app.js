@@ -4,6 +4,15 @@
   var all = function (selector) { return Array.prototype.slice.call(document.querySelectorAll(selector)); };
   var state = { screen: '', round: null, config: {}, learning: {}, busy: false, selected: [], version: 0, awaiting: false, reviewed: false, review: null, draft: null, unlockPending: false };
   var toastTimer, nextTimer, taps = 0, lastTap = 0, upTaps = 0, lastUpTap = 0;
+  var QUESTION_INPUT_GUARD_MS = 300;
+  var renderedQuestionNonce = null, questionInputAllowedAt = 0;
+  function questionInputTime() {
+    return window.performance && typeof window.performance.now === 'function' ? window.performance.now() : Date.now();
+  }
+  function questionInputBlocked() {
+    return state.screen === 'quiz' && state.round && state.round.nonce === renderedQuestionNonce &&
+      questionInputTime() < questionInputAllowedAt;
+  }
   // 断电 / 被系统清后台后恢复当前这组题。用 localStorage 而不是 sessionStorage：
   // 进程被杀后 WebView 是新的会话，sessionStorage 活不下来。
   var ROUND_KEY = 'sotv_round';
@@ -31,6 +40,20 @@
   }
   function canVoice() { return !!(window.SOTVNative && typeof window.SOTVNative.answerVoice === 'function'); }
   function canRead() { return !!(window.SOTVNative && typeof window.SOTVNative.readInLanguage === 'function'); }
+  // 可用时段文案由设备按周计划算好（state.learning.scheduleText），页面不再自己拼旧版的 windowStart/windowEnd
+  function scheduleText() { return (state.learning && state.learning.scheduleText) || ''; }
+  // 朗读内容由家长在「设置 → 朗读」里定：只读题干、题干加选项、再加答案（答案在作答后才读）
+  function readScope() { return (state.speech && state.speech.readScope) || 'question'; }
+  // 公式里的 $ 符号 TTS 会念出来，朗读前去掉
+  function speakable(text) { return String(text == null ? '' : text).replace(/\$\$?/g, '').trim(); }
+  function readText(item) {
+    if (!item) return '';
+    var parts = [speakable(item.q)];
+    if (readScope() !== 'question') {
+      (item.a || []).forEach(function (value, index) { parts.push(String.fromCharCode(65 + index) + '、' + speakable(value)); });
+    }
+    return parts.join('。');
+  }
   // 答题 / 锁定页的家长解锁入口（默认关闭，家长在「时间计划」里打开）
   function canUnlock() { return !!(window.SOTVNative && typeof window.SOTVNative.askParentPassword === 'function' && typeof window.SOTVNative.quizUnlock === 'function'); }
   function nativeCall(name, args) {
@@ -163,7 +186,8 @@
         var ov = state.learning.override;
         show('lock'); icon($('lockIcon'), 'check');
         $('lockTitle').textContent = ov && ov.mode === 'unlock' ? '家长已临时解锁' : '现在是自由时段';
-        $('lockDesc').textContent = ov && ov.mode === 'unlock' ? left2(ov.remainingSeconds) + '，到时自动恢复学习规则' : '每天 ' + state.config.windowStart + ' — ' + state.config.windowEnd + ' 需要先完成学习任务，其余时间可以直接使用';
+        $('lockDesc').textContent = ov && ov.mode === 'unlock' ? left2(ov.remainingSeconds) + '，到时自动恢复学习规则'
+          : (scheduleText() ? scheduleText() + ' 需要先完成学习任务，其余时间可以直接使用' : '其余时间可以直接使用');
         $('lockNote').textContent = '';
         $('lockActions').innerHTML = '<button class="btn btn-primary focusable" data-action="home">返回桌面</button>';
         focusDefault(); return;
@@ -204,7 +228,7 @@
     var qLength = (item.q || '').length;
     $('qText').className = 'question' + (qLength > 120 ? ' longer' : qLength > 56 ? ' long' : '');
     nativeCall('stopReading');
-    if (state.speech && state.speech.autoRead) nativeCall('readInLanguage', [item.q, item.language || '']);
+    if (state.speech && state.speech.autoRead) nativeCall('readInLanguage', [readText(item), item.language || '']);
     renderMedia(item);
     var options = $('qOptions'); options.innerHTML = '';
     var longest = 0, optionCount = (item.a || []).length;
@@ -268,6 +292,11 @@
     focusDefault();
     // #141：排版要等公式 / 图片渲染完再量；这一步不会改变正常字号下的显示
     window.setTimeout(fitQuiz, 0);
+    // 新题刚显示时丢弃残留连点；同一题的输入回填 / 重绘不重新计时。
+    if (renderedQuestionNonce !== round.nonce) {
+      renderedQuestionNonce = round.nonce;
+      questionInputAllowedAt = questionInputTime() + QUESTION_INPUT_GUARD_MS;
+    }
   }
   // #141：电视上系统字体被调大、或家长把「学习页字号」调大后，题干会被顶到页头后面、选项超出屏幕。
   // 先按原样量一次；放不下就换两档更紧凑的排版；还放不下就改成整页可滚动（舞台会跟着滚动）。
@@ -300,24 +329,19 @@
     button.setAttribute('data-action', 'submit'); button.textContent = value; parent.appendChild(button);
   }
   function choose(index) {
-    if (state.busy || !state.round) return;
+    // 保护期只丢弃选项选择和提交，朗读、输入等其他操作仍可使用。
+    if (state.busy || !state.round || questionInputBlocked()) return;
     if (state.round.question.type === 'multiple') {
       var pos = state.selected.indexOf(index);
       if (pos < 0) state.selected.push(index); else state.selected.splice(pos, 1);
       all('#qOptions [data-opt]').forEach(function (el) {
         el.classList.toggle('selected', state.selected.indexOf(+el.getAttribute('data-opt')) >= 0);
       });
-      // 多选：选完一项把焦点移到「确认所选答案」，让遥控器用户知道下一步要按提交
-      if (isTv()) {
-        var list = focusables();
-        for (var i = 0; i < list.length; i++) {
-          if (list[i].getAttribute('data-action') === 'submit') { setFocus(i); break; }
-        }
-      }
+      // 多选只切换选中状态，保留当前焦点，选完后由用户移到提交按钮。
     } else { state.selected = [index]; submit(); }
   }
   function submit() {
-    if (state.busy || !state.round) return;
+    if (state.busy || !state.round || questionInputBlocked()) return;
     var round = state.round, item = round.question, written = $('writtenAnswer');
     if (written ? (!written.value.trim() && !state.draft.drawing) : !state.selected.length) { toast('请先填写或选择答案'); return; }
     state.busy = true;
@@ -367,6 +391,12 @@
     $('fbTitle').textContent = title;
     $('fbAnswer').textContent = answer ? '正确答案：' + answer : '';
     $('fbTip').textContent = result.tip ? '解析：' + result.tip : '';
+    // 「题目、选项和答案」：作答之后再读正确答案，作答前不剧透
+    if (state.speech && state.speech.autoRead && readScope() === 'questionOptionsAnswer') {
+      var spokenAnswer = written ? speakable(result.answerText || '')
+        : (result.correctIndices || []).map(function (i) { return String.fromCharCode(65 + i) + '、' + speakable((item.a || [])[i]); }).join('，');
+      if (spokenAnswer) nativeCall('readInLanguage', ['正确答案：' + spokenAnswer, item.language || '']);
+    }
     var go = $('fbNext');
     state.feedbackUntil = Date.now() + ((result.status && result.status.feedbackSeconds) || 0) * 1000;
     go.textContent = result.finished ? '查看结果' : '继续';
@@ -479,7 +509,7 @@
       }
     }
     $('lockDesc').textContent = when ? '下次可用：' + when : reason === 'timeup' ? '完成学习任务后才能使用设备' : '现在暂不可用';
-    $('lockNote').textContent = state.config.allDay ? '' : '可用时段 ' + state.config.windowStart + ' — ' + state.config.windowEnd;
+    $('lockNote').textContent = state.config.allDay ? '' : (scheduleText() ? '可用时段 ' + scheduleText() : '');
     if (reason === 'timeup' && (state.children || []).length > 1) {
       // 多个孩子时用「开始学习 · 名字」代替「开始答题」：谁开始就记在谁头上
       $('lockActions').innerHTML = '';
@@ -590,16 +620,31 @@
   function focusDefault() { if (isTv()) setFocus(0); }
   // 返回 true 表示焦点移动了；false 表示已到边缘（原生层据此判断“在最上方连按 ↑”打开家长入口）
   function move(dir) {
-    var list = focusables(), index = -1, best = -1, score = 1e12;
+    var list = focusables(), index = -1, best = -1, score = 1e12, bestAligned = false;
     list.forEach(function (el, i) { if (el.classList.contains('focused')) index = i; });
     if (index < 0) { if (!list.length) return false; setFocus(0); return true; }
-    var rect = list[index].getBoundingClientRect();
+    var current = list[index];
+    // 多选最后一行按下固定到提交；offsetTop 不受焦点放大和页面滚动影响。
+    if (dir === 'down' && state.screen === 'quiz' && state.round && state.round.question.type === 'multiple' && current.hasAttribute('data-opt')) {
+      var lastRow = true, submitIndex = -1;
+      list.forEach(function (el, i) {
+        if (el.hasAttribute('data-opt') && el.offsetTop > current.offsetTop) lastRow = false;
+        if (el.getAttribute('data-action') === 'submit') submitIndex = i;
+      });
+      if (lastRow && submitIndex >= 0) { setFocus(submitIndex); return true; }
+    }
+    var rect = current.getBoundingClientRect();
     list.forEach(function (el, i) {
       if (i === index) return;
       var r = el.getBoundingClientRect(), dx = r.left + r.width / 2 - rect.left - rect.width / 2, dy = r.top + r.height / 2 - rect.top - rect.height / 2;
       var primary = dir === 'left' ? -dx : dir === 'right' ? dx : dir === 'up' ? -dy : dy;
       var secondary = dir === 'left' || dir === 'right' ? Math.abs(dy) : Math.abs(dx);
-      if (primary > 8 && primary + secondary * 1.8 < score) { score = primary + secondary * 1.8; best = i; }
+      // 优先同一行 / 列的控件，避免下方横跨两列的提交按钮抢走左右导航。
+      var aligned = dir === 'left' || dir === 'right' ? r.top < rect.bottom && r.bottom > rect.top : r.left < rect.right && r.right > rect.left;
+      var distance = primary + secondary * 1.8;
+      if (primary > 8 && ((aligned && !bestAligned) || (aligned === bestAligned && distance < score))) {
+        score = distance; best = i; bestAligned = aligned;
+      }
     });
     if (best >= 0) { setFocus(best); return true; }
     return false;
@@ -639,7 +684,7 @@
     if (action === 'clear-drawing') { state.draft.drawing = ''; renderQuestion(); }
     if (action === 'watch-lesson') nativeCall('watchLesson');
     if (action === 'play-audio' && state.round) nativeCall('playAudio', [state.round.question.audio || '']);
-    if (action === 'read-aloud') nativeCall('readInLanguage', [state.round ? state.round.question.q : '', state.round ? state.round.question.language || '' : '']);
+    if (action === 'read-aloud') nativeCall('readInLanguage', [state.round ? readText(state.round.question) : '', state.round ? state.round.question.language || '' : '']);
     // retry 用于错误 / 空题库的重试，start-quiz 用于「时间到了」页的「开始答题」；两者都重新取题
     if (action === 'retry' || action === 'start-quiz') start();
     if (action === 'start-as-child' && !state.busy) {

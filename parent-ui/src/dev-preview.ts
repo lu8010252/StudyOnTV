@@ -16,7 +16,7 @@ let device:any={name:'客厅电视 · 开发预览',flavor:'tv',version:'0.3.10'
   brandTip:'小米电视：设置 → 应用 → 应用管理 → 题了个题 → 自启动，开启；省电策略设为「无限制」'}};
 let grading:any={mode:'parent',passScore:60,provider:'deepseek',endpoint:'https://api.deepseek.com/v1',model:'deepseek-flash',hasKey:false,providers:builtinProviders};
 let integration:any={enabled:false,read:true,control:false,hasToken:false};
-let speech:any={mode:'system',autoRead:false,readLanguage:'',azureKeySet:false,aliyunSecretSet:false};
+let speech:any={mode:'system',autoRead:false,readLanguage:'',readScope:'question',azureKeySet:false,aliyunSecretSet:false};
 let children:any[]=[{id:'',name:'孩子1',createdAt:Date.now()-86400000,active:true},{id:'c2',name:'小红',createdAt:Date.now(),active:false}];
 let automation:any={sources:[],autoAi:false,minimum:30,batch:10,masteryAttempts:5,masteryAccuracy:90,topic:'',types:['single','text'],running:false,status:{}};
 let bankSources:any[]=[{name:'官方题库',url:'https://cdn.jsdelivr.net/gh/chadyi/StudyOnTV-banks@main/index.json',official:true}];

@@ -599,6 +599,12 @@ object FeatureRegression {
             fun at(zone: String) = Calendar.getInstance(TimeZone.getTimeZone(zone)).apply { timeInMillis = instant }
             engine.now = { at("Asia/Shanghai") }
             check(engine.status().getString("reason").isEmpty()) { "上海时间在时段内应可用: ${engine.status()}" }
+            // 学习页的「可用时段」提示要跟着周计划走，不能停在旧版 windowStart/windowEnd（默认 18:30–20:00）
+            check(engine.status().getString("scheduleText") == "周一至周日 09:00–10:00") { "可用时段文案应按周计划生成: ${engine.status()}" }
+            store.saveConfig(JSONObject().put("allDay", true))
+            check(engine.status().getString("scheduleText") == "全天可用") { "全天模式下应显示全天可用" }
+            store.saveConfig(JSONObject().put("allDay", false))
+            check(engine.status().getString("scheduleText") == "周一至周日 09:00–10:00") { "关掉全天模式后文案要跟着回来" }
             engine.now = { at("America/New_York") }
             check(engine.status().getString("reason") == "schedule") { "纽约时间在时段外应锁定: ${engine.status()}" }
             engine.now = { at("UTC") }

@@ -27,7 +27,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent } from '@/components/ui/card';
 import { api } from './api';
 import { defaults, ruleSchema, zoneOptions, type Rules } from './schema';
-import SpeechSettings from './SpeechSettings';
 import TimePoints from './TimePoints';
 import WatchWhitelistField from './WatchWhitelistField';
 import WeekSchedule from './WeekSchedule';
@@ -989,7 +988,11 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
               </FieldGroup>
             </FieldSet>
           </Panel>
-          <SpeechSettings sessionId={sessionId} />
+          <p className="text-xs leading-5 text-muted-foreground">
+            朗读怎么读、读题目还是连同选项和答案一起读，已经移到
+            <a className="mx-1 underline underline-offset-4" href="#/settings/speech">设置 → 朗读</a>
+            ，那里还顺着其它设备设置，找起来更顺手。
+          </p>
         </TabsContent>
       </Tabs>
       {errorMessages.length > 0 && <div className="space-y-2">{errorMessages}</div>}

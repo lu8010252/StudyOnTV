@@ -85,7 +85,7 @@ Body: {"passphrase":"<管理密码>"}
 | DELETE | `/api/questions/bank` | 删除命名题库，正文 `{"bank":"数学","confirm":true}` |
 | GET / PUT | `/api/bank-automation` | 读取/保存远程题库与自动 AI 补题设置 |
 | POST | `/api/bank-automation/sync` | 启动后台同步/补题；轮询 GET 查看状态 |
-| GET / PUT | `/api/speech` | 朗读通路设置；密钥不回显，空白保留已保存值 |
+| GET / PUT | `/api/speech` | 朗读通路与朗读内容设置（`readScope`：`question` / `questionOptions` / `questionOptionsAnswer`）；密钥不回显，空白保留已保存值 |
 | GET | `/api/history?days=7` | 实际使用时长与答题统计 |
 | GET | `/api/events?limit=50` | 近期记录 |
 

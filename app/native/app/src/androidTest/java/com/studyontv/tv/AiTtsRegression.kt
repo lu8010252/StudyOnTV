@@ -103,6 +103,12 @@ object AiTtsRegression {
         check(JSONObject(store.get("speech_settings", "{}")).getString("azureKey") == "azure-secret")
         check(SpeechReader.recognitionLanguage("zh-HK") == "zh-HK") { "粤语题目按粤语识别（#126）" }
         check(SpeechReader.recognitionLanguage("ja-JP") in SpeechReader.whitelist) { "白名单外语言必须降级到白名单内的语言" }
+        // 朗读内容：老设置没有这个字段时按「只读题目」，写入的非法值不能存进去
+        check(SpeechReader.settings(store).getString("readScope") == "question") { "没设置过朗读内容时默认只读题目" }
+        SpeechReader.save(store, JSONObject().put("mode", "system").put("readScope", "questionOptionsAnswer"))
+        check(SpeechReader.settings(store).getString("readScope") == "questionOptionsAnswer") { "朗读内容要能保存" }
+        check(runCatching { SpeechReader.save(store, JSONObject().put("mode", "system").put("readScope", "all")) }.isFailure) { "未知朗读内容要拒绝" }
+        check(SpeechReader.settings(store).getString("readScope") == "questionOptionsAnswer") { "拒绝后不能改动已保存的值" }
     }
 
     /** 语言回落：缺失 / 不支持时回落默认语言并标记降级，两种情况都失败时不抛异常 */

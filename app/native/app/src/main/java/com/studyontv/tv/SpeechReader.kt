@@ -67,12 +67,16 @@ object SpeechReader {
     /** 语音转写通路：system 用系统识别器、deepseek 上传给 DeepSeek、auto 填了 Key 就走 DeepSeek */
     val RECOGNIZE_MODES = listOf("system", "deepseek", "auto")
 
+    /** 自动朗读的内容范围：只读题干、题干和选项、题干选项再加答案（答案在作答后读，作答前不剧透） */
+    val READ_SCOPES = listOf("question", "questionOptions", "questionOptionsAnswer")
+
     fun settings(store: LocalStore): JSONObject = JSONObject(store.get("speech_settings", "{}"))
         .apply {
             if (!has("mode")) put("mode", "system")
             if (!has("readLanguage")) put("readLanguage", "")
             if (!has("deepseekVoice")) put("deepseekVoice", "stella")
             if (!has("recognizeMode")) put("recognizeMode", "system")
+            if (optString("readScope") !in READ_SCOPES) put("readScope", "question")
             for (key in listOf("azureKey", "aliyunSecret", "deepseekKey")) { put(key + "Set", optString(key).isNotEmpty()); remove(key) }
         }
     fun save(store: LocalStore, input: JSONObject): JSONObject {
@@ -80,6 +84,11 @@ object SpeechReader {
         val mode = input.optString("mode", "system")
         require(mode in listOf("auto", "system", "deepseek", "azure", "aliyun")) { "未知朗读通路" }
         next.put("mode", mode).put("autoRead", input.optBoolean("autoRead"))
+        if (input.has("readScope")) {
+            val scope = input.optString("readScope", "question")
+            require(scope in READ_SCOPES) { "未知朗读内容" }
+            next.put("readScope", scope)
+        }
         if (input.has("recognizeMode")) {
             val recognize = input.optString("recognizeMode", "system")
             require(recognize in RECOGNIZE_MODES) { "未知语音识别通路" }

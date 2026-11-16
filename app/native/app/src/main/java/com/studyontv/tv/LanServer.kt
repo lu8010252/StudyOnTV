@@ -246,7 +246,9 @@ class LanServer(
                 .put("learning", DeviceRuntime.learning.status())
                 // 多孩子（#132）：设备端要知道「现在是谁在学」和有哪些可选档案
                 .put("children", store.children()).put("activeChild", store.activeChild())
-                .put("speech", JSONObject().put("autoRead", SpeechReader.settings(store).optBoolean("autoRead"))))
+                .put("speech", JSONObject()
+                    .put("autoRead", SpeechReader.settings(store).optBoolean("autoRead"))
+                    .put("readScope", SpeechReader.settings(store).optString("readScope", "question"))))
         }
         router.get("/api/children") { ctx ->
             json(ctx.out, 200, JSONObject().put("items", store.children()).put("active", store.activeChild()))

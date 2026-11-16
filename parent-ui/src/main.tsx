@@ -1,7 +1,7 @@
 import {useEffect,useState,lazy,Suspense,type ReactNode} from 'react';
 import {root} from './react-root';
 import {QueryClient,QueryClientProvider,useQuery} from '@tanstack/react-query';
-import {AlertCircle,LoaderCircle,BookOpen,ClipboardCheck,SlidersHorizontal,ChartColumn,Leaf,LogOut,ArrowRight,LockKeyhole,Monitor,Wifi,Settings,Sun,Moon,Laptop,ChevronsUpDown,Tv,Palette,KeyRound,CloudDownload,RadioTower,FileText,Bot,Eye,EyeOff,House,ShieldCheck,Users} from 'lucide-react';
+import {AlertCircle,LoaderCircle,BookOpen,ClipboardCheck,SlidersHorizontal,ChartColumn,Leaf,LogOut,ArrowRight,LockKeyhole,Monitor,Wifi,Settings,Sun,Moon,Laptop,ChevronsUpDown,Tv,Palette,KeyRound,CloudDownload,RadioTower,FileText,Bot,Eye,EyeOff,House,ShieldCheck,Users,Search,Volume2,X} from 'lucide-react';
 import {Toaster,toast} from 'sonner';
 import {Button} from '@/components/ui/button';
 import {Input} from '@/components/ui/input';
@@ -22,6 +22,7 @@ import RemotePage from './RemotePage';
 import QuestionBank from './QuestionBank';
 import GradingPage from './GradingPage';
 import DevicePanel from './DevicePanel';
+import SpeechSettings from './SpeechSettings';
 import KeepAlivePanel from './KeepAlivePanel';
 import LogsPage from './LogsPage';
 import AiSettings from './AiSettings';
@@ -41,8 +42,56 @@ const pages:{id:PageId,title:string,short:string,icon:any,description:string}[]=
  {id:'rules',title:'学习计划',short:'计划',icon:SlidersHorizontal,description:'任务、时段、范围与奖励'},
  {id:'records',title:'成长记录',short:'记录',icon:ChartColumn,description:'使用时间与学习进度'},
  {id:'settings',title:'设置',short:'设置',icon:Settings,description:'设备、外观、更新与安全'}];
-type SectionId='device'|'children'|'keepalive'|'display'|'update'|'security'|'integration'|'logs'|'ai';
-const sections:{id:SectionId,title:string,icon:any}[]=[{id:'device',title:'设备',icon:Tv},{id:'children',title:'孩子',icon:Users},{id:'keepalive',title:'后台保活',icon:ShieldCheck},{id:'display',title:'界面与反馈',icon:Palette},{id:'update',title:'版本更新',icon:CloudDownload},{id:'security',title:'管理密码',icon:KeyRound},{id:'integration',title:'家庭自动化',icon:RadioTower},{id:'logs',title:'诊断日志',icon:FileText},{id:'ai',title:'模型 API（高级）',icon:Bot}];
+type SectionId='device'|'children'|'keepalive'|'display'|'update'|'security'|'integration'|'logs'|'ai'|'speech';
+const sections:{id:SectionId,title:string,icon:any}[]=[{id:'device',title:'设备',icon:Tv},{id:'children',title:'孩子',icon:Users},{id:'speech',title:'朗读',icon:Volume2},{id:'keepalive',title:'后台保活',icon:ShieldCheck},{id:'display',title:'界面与反馈',icon:Palette},{id:'update',title:'版本更新',icon:CloudDownload},{id:'security',title:'管理密码',icon:KeyRound},{id:'integration',title:'家庭自动化',icon:RadioTower},{id:'logs',title:'诊断日志',icon:FileText},{id:'ai',title:'模型 API（高级）',icon:Bot}];
+// 全局面板搜索：一个输入框查设置分区、其它页面和常用功能，选中后直接跳过去
+type SearchEntry={id:string,page:PageId,section?:SectionId,where:string,title:string,keywords:string,anchor?:string};
+const searchEntries:SearchEntry[]=[
+ // 设置各分区
+ {id:'set-device',page:'settings',section:'device',where:'设置 · 设备',title:'设备名称与连接',keywords:'设备 名称 重命名 连接 ip 端口 信息'},
+ {id:'set-children',page:'settings',section:'children',where:'设置 · 孩子',title:'孩子档案',keywords:'孩子 档案 姓名 多孩子 切换 新建'},
+ {id:'set-speech',page:'settings',section:'speech',where:'设置 · 朗读',title:'朗读设置',keywords:'朗读 语音 发音 声音 题目 选项 答案 音色 语速 tts'},
+ {id:'set-speech-auto',page:'settings',section:'speech',where:'设置 · 朗读',title:'自动朗读题目',keywords:'朗读 自动 开关 题目',anchor:'setting-auto-read'},
+ {id:'set-speech-scope',page:'settings',section:'speech',where:'设置 · 朗读',title:'朗读内容（题目 / 选项 / 答案）',keywords:'朗读 内容 范围 选项 答案 题目 读什么',anchor:'setting-read-scope'},
+ {id:'set-speech-language',page:'settings',section:'speech',where:'设置 · 朗读',title:'朗读语言',keywords:'朗读 语言 粤语 普通话 英语 系统语言'},
+ {id:'set-speech-mode',page:'settings',section:'speech',where:'设置 · 朗读',title:'朗读通路与语音识别',keywords:'朗读 通路 引擎 音色 deepseek azure 阿里云 语音识别 转写 密钥'},
+ {id:'set-keepalive',page:'settings',section:'keepalive',where:'设置 · 后台保活',title:'开机自启与后台保活',keywords:'开机 自启 后台 保活 电池 优化 权限 悬浮窗 无障碍 小米 tcl 华为'},
+ {id:'set-display',page:'settings',section:'display',where:'设置 · 界面与反馈',title:'界面、学习页字号与反馈',keywords:'界面 主题 深色 字号 字体 反馈 学习页 显示'},
+ {id:'set-update',page:'settings',section:'update',where:'设置 · 版本更新',title:'检查更新',keywords:'更新 升级 版本 检查 下载 apk 蒲公英'},
+ {id:'set-security',page:'settings',section:'security',where:'设置 · 管理密码',title:'管理密码',keywords:'密码 管理 口令 修改 安全 解锁'},
+ {id:'set-integration',page:'settings',section:'integration',where:'设置 · 家庭自动化',title:'家庭自动化',keywords:'家庭 自动化 集成 令牌 token 接口 局域网'},
+ {id:'set-logs',page:'settings',section:'logs',where:'设置 · 诊断日志',title:'诊断日志',keywords:'日志 诊断 排错 错误 记录 反馈'},
+ {id:'set-ai',page:'settings',section:'ai',where:'设置 · 模型 API',title:'模型 API（AI 批改与出题）',keywords:'ai 模型 api 密钥 key deepseek 批改 出题'},
+ // 其它页面
+ {id:'home',page:'remote',where:'首页 · 设备管理',title:'今日概览与设备控制',keywords:'首页 概览 剩余时间 使用状态 今天 控制'},
+ {id:'home-unlock',page:'remote',where:'首页 · 设备控制',title:'临时解锁 / 暂停使用 / 关闭管控',keywords:'解锁 临时 加时 暂停 关闭管控 恢复 锁屏'},
+ {id:'home-history',page:'remote',where:'首页 · 学习记录',title:'近期学习记录',keywords:'学习记录 使用时间 每天 记录 近期'},
+ {id:'rules',page:'rules',where:'学习计划',title:'学习计划（任务、时段、范围、奖励）',keywords:'计划 规则 学习 任务'},
+ {id:'rules-task',page:'rules',where:'学习计划 · 任务',title:'每组题量、答题奖励、通过条件',keywords:'题量 每题 奖励 分钟 通过 一组 正确率 组数'},
+ {id:'rules-time',page:'rules',where:'学习计划 · 时段',title:'可用时段、网课时段、休息',keywords:'时段 时间 网课 休息 睡眠 晚上 可用 周一 周二 节假日'},
+ {id:'rules-scope',page:'rules',where:'学习计划 · 范围',title:'年级、科目与题库范围',keywords:'年级 科目 范围 题库 难度 出题 顺序'},
+ {id:'rules-more',page:'rules',where:'学习计划 · 更多',title:'加练与复习、答题页密码解锁',keywords:'加练 错题 复习 记忆曲线 密码 解锁'},
+ {id:'bank',page:'bank',where:'题库',title:'题目列表与筛选',keywords:'题库 题目 搜索 筛选 暂停 难度 科目'},
+ {id:'bank-import',page:'bank',where:'题库 · 导入导出',title:'导入 / 导出题目',keywords:'导入 json 文档 导出 备份 添加题目'},
+ {id:'bank-ai',page:'bank',where:'题库 · AI 出题',title:'AI 批量出题与在线题库',keywords:'ai 出题 生成 在线题库 市场 共享题库'},
+ {id:'bank-auto',page:'bank',where:'题库 · 自动补题',title:'远程题库与自动补题',keywords:'远程 题库 同步 自动补题 来源'},
+ {id:'grading',page:'grading',where:'作答批改',title:'待批改与 AI 批改',keywords:'批改 作业 待批 评分 ai 主观题 手写'},
+ {id:'records',page:'records',where:'成长记录',title:'使用时间与学习进度',keywords:'记录 成长 统计 进度 正确率 时长 趋势'},
+];
+const searchHits=(query:string)=>{
+ const q=query.trim().toLowerCase();
+ if(!q)return [];
+ const words=q.split(/\s+/).filter(Boolean);
+ return searchEntries
+  .map(entry=>{
+   const text=(entry.title+' '+entry.keywords+' '+entry.where).toLowerCase();
+   return {entry,score:words.every(w=>text.includes(w))?words.filter(w=>entry.title.toLowerCase().includes(w)).length:0,ok:text.includes(q)||words.every(w=>text.includes(w))};
+  })
+  .filter(hit=>hit.ok)
+  .sort((a,b)=>b.score-a.score)
+  .slice(0,8)
+  .map(hit=>hit.entry);
+};
 
 /* ---------- 记住登录：保存在本机浏览器，30 天有效；修改管理密码或断开连接后失效 ---------- */
 const SESSION_KEY='sotv-panel-session';
@@ -146,8 +195,38 @@ function SettingsPage({section,go,sessionId,state,logout}:{section:SectionId,go:
   <TabsList aria-label="设置分区" className="no-scrollbar sticky top-14 z-20 -mx-4 flex h-12 w-[calc(100%+2rem)] justify-start gap-1 overflow-x-auto rounded-none border-b bg-background/92 px-3 backdrop-blur md:top-16 lg:static lg:mx-0 lg:block lg:h-auto lg:w-full lg:space-y-1 lg:rounded-2xl lg:border lg:bg-card/55 lg:p-2">
    {sections.map(s=><TabsTrigger key={s.id} value={s.id} className="h-9 shrink-0 justify-start gap-2 rounded-lg px-3 text-muted-foreground data-[state=active]:text-foreground lg:flex lg:h-10 lg:w-full lg:justify-start lg:data-[state=active]:bg-background lg:data-[state=active]:shadow-xs"><s.icon/>{s.title}</TabsTrigger>)}
   </TabsList>
-  <TabsContent value={section} className="m-0 w-full min-w-0">{section==='children'?<ChildrenPanel sessionId={sessionId}/>:section==='keepalive'?<KeepAlivePanel sessionId={sessionId}/>:section==='display'?<FeedbackPanel state={state} sessionId={sessionId}/>:section==='logs'?<LogsPage sessionId={sessionId}/>:section==='ai'?<AiSettings sessionId={sessionId}/>:<DevicePanel sessionId={sessionId} only={section} onPasswordChanged={logout} onOpenKeepAlive={()=>go('settings','keepalive')}/>}</TabsContent>
+  <TabsContent value={section} className="m-0 w-full min-w-0">{section==='children'?<ChildrenPanel sessionId={sessionId}/>:section==='speech'?<SpeechSettings sessionId={sessionId}/>:section==='keepalive'?<KeepAlivePanel sessionId={sessionId}/>:section==='display'?<FeedbackPanel state={state} sessionId={sessionId}/>:section==='logs'?<LogsPage sessionId={sessionId}/>:section==='ai'?<AiSettings sessionId={sessionId}/>:<DevicePanel sessionId={sessionId} only={section} onPasswordChanged={logout} onOpenKeepAlive={()=>go('settings','keepalive')}/>}</TabsContent>
  </Tabs>}
+
+/** 面板全局搜索：设置分区、其它页面和常用功能都在里面，选中后跳过去并按需滚动到具体设置项 */
+function GlobalSearch({go}:{go:(p:PageId,s?:SectionId)=>void}){
+ const[open,setOpen]=useState(false),[query,setQuery]=useState('');
+ const hits=searchHits(query);
+ const jump=(entry:SearchEntry)=>{
+  setOpen(false);setQuery('');
+  go(entry.page,entry.section);
+  if(entry.anchor)window.setTimeout(()=>document.getElementById(entry.anchor!)?.scrollIntoView({block:'center'}),150);
+ };
+ return <>
+  <Button variant="ghost" size="icon" aria-label="搜索设置" onClick={()=>setOpen(true)}><Search className="size-[18px]"/></Button>
+  <Dialog open={open} onOpenChange={setOpen}>
+   <DialogContent className="top-20 max-h-[70vh] translate-y-0 gap-3 sm:max-w-lg">
+    <DialogHeader><DialogTitle>搜索</DialogTitle><DialogDescription>设置、页面和常用功能都能搜，输入关键词直接跳过去。</DialogDescription></DialogHeader>
+    <InputGroup className="h-9">
+     <InputGroupAddon><Search/></InputGroupAddon>
+     <InputGroupInput aria-label="搜索设置与页面" placeholder="例如 朗读、密码、加时、导入题目" value={query} autoFocus onChange={e=>setQuery(e.target.value)}
+      onKeyDown={e=>{if(e.key==='Enter'&&hits[0]){e.preventDefault();jump(hits[0]);}else if(e.key==='Escape')setOpen(false);}}/>
+     {query&&<InputGroupAddon align="inline-end"><InputGroupButton size="icon-xs" aria-label="清空搜索" onClick={()=>setQuery('')}><X/></InputGroupButton></InputGroupAddon>}
+    </InputGroup>
+    <div role="listbox" aria-label="搜索结果" className="max-h-72 overflow-y-auto rounded-md border">
+     {hits.length?hits.map(entry=><button key={entry.id} type="button" role="option" aria-selected={false} className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm hover:bg-accent" onClick={()=>jump(entry)}>
+      <span className="min-w-0 truncate">{entry.title}</span><span className="ms-auto shrink-0 text-xs text-muted-foreground">{entry.where}</span>
+     </button>):<p className="px-3 py-6 text-center text-xs text-muted-foreground">{query.trim()?'没有匹配的设置，换个说法试试。':'输入关键词开始搜索'}</p>}
+    </div>
+   </DialogContent>
+  </Dialog>
+ </>;
+}
 
 function Dashboard({sessionId,logout,theme}:{sessionId:number,logout:()=>void,theme:ReturnType<typeof useTheme>}){
  const{page,section,go}=useRoute();
@@ -161,7 +240,7 @@ function Dashboard({sessionId,logout,theme}:{sessionId:number,logout:()=>void,th
  return <SidebarProvider>
   <AppSidebar page={page} go={go} pending={pending} device={device.data} logout={logout}/>
   <SidebarInset className="min-w-0">
-   <Header title={page==='remote'?(device.data?.name||'我的设备'):current.title}><Badge variant="outline" className="me-1 hidden sm:flex"><span className="me-1.5 size-1.5 rounded-full bg-emerald-500"/>已连接</Badge><ThemeSwitch {...theme}/><div className="md:hidden"><DeviceMenu device={device.data} logout={logout}><Button variant="ghost" size="icon" className="rounded-full" aria-label="设备与连接"><Tv/></Button></DeviceMenu></div></Header>
+   <Header title={page==='remote'?(device.data?.name||'我的设备'):current.title}><Badge variant="outline" className="me-1 hidden sm:flex"><span className="me-1.5 size-1.5 rounded-full bg-emerald-500"/>已连接</Badge><GlobalSearch go={go}/><ThemeSwitch {...theme}/><div className="md:hidden"><DeviceMenu device={device.data} logout={logout}><Button variant="ghost" size="icon" className="rounded-full" aria-label="设备与连接"><Tv/></Button></DeviceMenu></div></Header>
    <main className="page-content px-4 pt-2 md:px-6 md:pt-4 w-full max-w-6xl mx-auto">
     <div className={page==='remote'?'hidden':'mb-5 hidden items-end justify-between gap-4 border-b pb-4 md:flex'}><h1 className="text-2xl font-semibold tracking-tight">{current.title}</h1><p className="shrink-0 text-xs text-muted-foreground">{current.description}</p></div>
     {state.error&&<Alert variant="destructive" className="mb-4"><AlertCircle/><AlertDescription>暂未能刷新数据，请确认设备仍在同一局域网。</AlertDescription></Alert>}
