@@ -100,8 +100,14 @@ object SelfGrant {
             }
             sh("开启无障碍服务", "settings put secure enabled_accessibility_services '" + (others + service).joinToString(":") + "'")
             sh("无障碍总开关", "settings put secure accessibility_enabled 1")
-            // 通知使用权（RevivalListener）：被系统强停后由它把服务拉回来，等于替你敲 adb shell cmd notification allow_listener
-            sh("通知使用权（被杀后自动拉起）", "cmd notification allow_listener " + RevivalListener.component(ctx), optional = true)
+            // 通知使用权（RevivalListener）：被系统强停后由它把服务拉回来。
+            // 安卓 8.0（极米）没有 cmd notification allow_listener，所以直接把组件写进 enabled_notification_listeners
+            val listener = RevivalListener.component(ctx)
+            val curL = sh("读取已有通知使用权", "settings get secure enabled_notification_listeners", optional = true)
+            val ls = if (curL.isEmpty() || curL == "null") emptyList() else curL.split(':')
+            if (!ls.contains(listener)) {
+                sh("通知使用权（被杀后自动拉起）", "settings put secure enabled_notification_listeners '" + (ls + listener).joinToString(":") + "'", optional = true)
+            }
             sh("后台运行（省电白名单）", "dumpsys deviceidle whitelist +$pkg")
         }
         // 等服务真正连上（最多 8 秒），连不上就如实告诉家长
