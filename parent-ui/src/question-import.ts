@@ -22,6 +22,8 @@ const SUBJECT_KEYS=['subject','学科','科目'];
 const LEVEL_KEYS=['level','grade','年级','学段'];
 const BANK_KEYS=['bank','bankName','题库','题库名称','题库名'];
 const IMAGE_KEYS=['image','imageUrl','img','图片','图片地址'];
+const IMAGES_KEYS=['images','imageUrls','imgs','配图','图片列表'];
+const OPTION_IMAGES_KEYS=['optionImages','option_images','选项配图','选项图片'];
 const AUDIO_KEYS=['audio','audioUrl','音频','音频地址'];
 const LANGUAGE_KEYS=['language','lang','语言'];
 
@@ -29,6 +31,7 @@ const LANGUAGE_KEYS=['language','lang','语言'];
 const OWN_ANSWER_KEYS=['correctIndices','correctIndex','correct_index','k'];
 const ANSWER_KEYS=['answers','answer','correct','correctAnswer','correctAnswers','key','solution','正确答案','答案','正确选项','参考答案'];
 
+const BLOCK_BREAK=/<br\b[^>]*>|<\/(?:p|div|li|tr|h[1-6])\b[^>]*>/gi;
 const TAG=/<\/?(?:p|br|div|span|b|i|u|s|strong|em|sub|sup|li|ul|ol|table|tbody|tr|td|th|h[1-6])\b[^>]*>/gi;
 const OPTION_LABEL=/^\s*(?:[（(]\s*[A-Za-zＡ-Ｚ]\s*[)）]|[A-Za-zＡ-Ｚ]\s*[.、．:：)）])\s*/;
 
@@ -47,6 +50,23 @@ function clean(value:any):string{
  return String(value??'').replace(TAG,' ').replace(/&nbsp;/gi,' ').replace(/&lt;/gi,'<').replace(/&gt;/gi,'>').replace(/&amp;/gi,'&').replace(/\s+/g,' ').trim();
 }
 
+/** 保留题干、解析、参考答案与评分标准中的 \n 换行（兼容富文本列表与分步解答） */
+function cleanMultiline(value:any):string{
+ return String(value??'')
+  .replace(/\r\n?/g,'\n')
+  .replace(BLOCK_BREAK,'\n')
+  .replace(TAG,' ')
+  .replace(/&nbsp;/gi,' ')
+  .replace(/&lt;/gi,'<')
+  .replace(/&gt;/gi,'>')
+  .replace(/&amp;/gi,'&')
+  .split('\n')
+  .map(line=>line.replace(/[^\S\n]+/g,' ').trim())
+  .join('\n')
+  .replace(/\n{3,}/g,'\n\n')
+  .trim();
+}
+
 function textOf(value:any):string{
  if(value&&typeof value==='object')return clean(value.text??value.content??value.label??value.value??value.option??value.title??value.name??'');
  return clean(value);
@@ -54,24 +74,34 @@ function textOf(value:any):string{
 
 function stemOf(item:any):string{
  // 按 STEM_KEYS 的顺序取第一个非空字段：q / stem / question 比 title 更可能是题干
- return clean(lookup(item,STEM_KEYS));
+ return cleanMultiline(lookup(item,STEM_KEYS));
 }
 
-function finishOptions(list:any[]):string[]{
+function optionImagesRawOf(item:any,rawList?:any[]):string[]{
+ const explicit=lookup(item,OPTION_IMAGES_KEYS);
+ if(Array.isArray(explicit))return explicit.map(clean);
+ if(Array.isArray(rawList)&&rawList.some(o=>o&&typeof o==='object'&&(o.image||o.img||o.imageUrl))){
+  return rawList.map(o=>o&&typeof o==='object'?clean(o.image??o.img??o.imageUrl??''):'');
+ }
+ return [];
+}
+
+function finishOptions(list:any[],rawOptImgs:string[]=[]):{options:string[];optionImages:string[]}{
  const options=list.map(textOf).map(option=>option.replace(OPTION_LABEL,''));
- // 首尾的空选项直接丢掉；中间的空选项保留，让服务端报「选项不能为空」，能定位到是哪道题
- while(options.length&&!options[0])options.shift();
- while(options.length&&!options[options.length-1])options.pop();
- return options;
+ const optImgs=options.map((_,i)=>clean(rawOptImgs[i]??''));
+ // 首尾「既无文字也无配图」的空选项丢掉；有对应配图的纯图片选项必须保留！
+ while(options.length&&!options[0]&&!optImgs[0]){options.shift();optImgs.shift();}
+ while(options.length&&!options[options.length-1]&&!optImgs[options.length-1]){options.pop();optImgs.pop();}
+ return {options,optionImages:optImgs.some(Boolean)?optImgs:[]};
 }
 
-function optionsOf(item:any):string[]{
+function optionsAndImagesOf(item:any):{options:string[];optionImages:string[]}{
  let raw=lookup(item,OPTION_KEYS);
  if(raw&&typeof raw==='object'&&!Array.isArray(raw)){
   // {"A":"北京","B":"上海"} 这种按字母顺序还原
   raw=Object.keys(raw).sort().map(key=>raw[key]);
  }
- if(Array.isArray(raw))return finishOptions(raw);
+ if(Array.isArray(raw))return finishOptions(raw,optionImagesRawOf(item,raw));
  // 有些题库把选项拆成 optionA / optionB / 选项A 几个字段
  const lettered:string[]=[];
  for(const letter of 'ABCDEFGH'){
@@ -79,7 +109,11 @@ function optionsOf(item:any):string[]{
   if(value===undefined||typeof value==='object')break;
   lettered.push(value);
  }
- return lettered.length>=2?finishOptions(lettered):[];
+ return lettered.length>=2?finishOptions(lettered,optionImagesRawOf(item)):{options:[],optionImages:[]};
+}
+
+function optionsOf(item:any):string[]{
+ return optionsAndImagesOf(item).options;
 }
 
 function letterIndex(token:string):number{
@@ -151,8 +185,8 @@ function parseSelection(raw:any,options:string[],numbering:'zero'|'one'):number[
   const letter=letterIndex(s)>=0?letterIndex(s):letterIndex(bare);
   if(letter>=0){indices.push(letter);continue;}
   if(/^\d+$/.test(s)){const n=Number(s);indices.push(numbering==='one'?n-1:n);continue;}
-  // 有些题库直接把选项原文写进 answer
-  const byText=options.findIndex(option=>option===s||option===bare);
+  // 有些题库直接把选项原文写进 answer（排除空字符串的纯图片选项）
+  const byText=options.findIndex(option=>!!option&&(option===s||option===bare));
   if(byText>=0)indices.push(byText);
  }
  return [...new Set(indices.filter(index=>index>=0&&index<options.length))];
@@ -203,7 +237,7 @@ function normalizeItem(item:any,numbering:'zero'|'one'):any{
  const stem=stemOf(item);
  if(!stem)throw new Error('缺少题干（可用字段：q / question / 题目 / 题干）');
  if(stem.length>5000)throw new Error('题干超过 5000 字');
- const options=optionsOf(item);
+ const {options,optionImages}=optionsAndImagesOf(item);
  const ownAnswer=lookup(item,OWN_ANSWER_KEYS);
  const answer=ownAnswer!==undefined?ownAnswer:lookup(item,ANSWER_KEYS);
  const answerNumbering=ownAnswer!==undefined?'zero':numbering;
@@ -223,21 +257,23 @@ function normalizeItem(item:any,numbering:'zero'|'one'):any{
   if(!answers.length)throw new Error('填空题缺少答案');
   out.answers=answers;
  }else if(type==='subjective'){
-  const model=clean(lookup(item,['modelAnswer','referenceAnswer','参考答案','标准答案','答案'])??answer);
+  const model=cleanMultiline(lookup(item,['modelAnswer','referenceAnswer','参考答案','标准答案','答案'])??answer);
   out.modelAnswer=model;
-  const rubric=clean(lookup(item,['rubric','评分标准','评分规则']));
+  const rubric=cleanMultiline(lookup(item,['rubric','评分标准','评分规则']));
   if(rubric)out.rubric=rubric;
  }else{
   if(options.length<2)throw new Error('选择题至少需要 2 个选项');
   if(options.length>8)throw new Error(`选项有 ${options.length} 个，最多支持 8 个`);
+  if(options.some((o,i)=>!o&&!optionImages[i]))throw new Error('选项文字和配图不能同时为空');
   out.a=options;
+  if(optionImages.length)out.optionImages=optionImages;
   const indices=parseSelection(answer,options,answerNumbering);
   if(!indices.length)throw new Error('缺少正确答案，或答案与选项对不上（可用字段：k / correctIndices / answer / 答案）');
   if(type==='multiple')out.correctIndices=indices.sort((a,b)=>a-b);
   else out.k=indices[0];
  }
 
- const tip=clean(lookup(item,TIP_KEYS));
+ const tip=cleanMultiline(lookup(item,TIP_KEYS));
  if(tip)out.tip=tip;
  const subject=clean(lookup(item,SUBJECT_KEYS));
  if(subject)out.subject=subject;
@@ -245,12 +281,17 @@ function normalizeItem(item:any,numbering:'zero'|'one'):any{
  if(level)out.level=level;
  const bank=clean(lookup(item,BANK_KEYS));
  if(bank)out.bank=bank.slice(0,64);
- const image=clean(lookup(item,IMAGE_KEYS));
+ const rawImages=lookup(item,IMAGES_KEYS);
+ const images=Array.isArray(rawImages)?rawImages.map(clean).filter(Boolean).slice(0,4):[];
+ const image=clean(lookup(item,IMAGE_KEYS))||images[0]||'';
  if(image)out.image=image;
+ if(images.length)out.images=images;
  const audio=clean(lookup(item,AUDIO_KEYS));
  if(audio)out.audio=audio;
  const language=lookup(item,LANGUAGE_KEYS);
  if(language!==undefined)out.language=languageOf(language);
+ const rawEnabled=lookup(item,['enabled','启用']);
+ if(rawEnabled===false)out.enabled=false;
  return out;
 }
 
@@ -280,7 +321,7 @@ function unwrap(input:any):any[]{
 }
 
 export function parseBankJson(raw:string):any{
- const text=raw.replace(/^﻿/,'').trim();
+ const text=raw.replace(/^\uFEFF/,'').trim();
  try{return JSON.parse(text);}
  catch(error){
   // 有些题库导出成一行一题的 JSONL

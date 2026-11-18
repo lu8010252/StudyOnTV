@@ -8,28 +8,16 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
-import aiohttp
-
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT, CONF_TOKEN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import (
-    API_DEVICE,
-    API_STATE,
-    CONF_SCAN_INTERVAL,
-    DEFAULT_SCAN_INTERVAL,
-    DOMAIN,
-    REQUEST_TIMEOUT,
-)
+from .client import StudyOnTVClient, StudyOnTVClientError
+from .const import CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
-
-_AUTH_FAILED = "StudyOnTV rejected the integration token (401/403); check that the token is enabled and has read permission"
-_RATE_LIMITED = "StudyOnTV is rate limiting requests (429); increase the scan interval"
-_CANNOT_CONNECT = "Could not reach StudyOnTV at %s"
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,13 +29,19 @@ class StudyOnTVData:
 
 
 class StudyOnTVCoordinator(DataUpdateCoordinator[StudyOnTVData]):
-    """Poll /api/state and /api/device on the TV."""
+    """Poll /api/state and /api/device on the TV and dispatch remote actions."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         """Initialise the coordinator."""
         self.host: str = entry.data[CONF_HOST]
         self.port: int = entry.data[CONF_PORT]
         self.token: str = entry.data[CONF_TOKEN]
+        self.client = StudyOnTVClient(
+            async_get_clientsession(hass),
+            self.host,
+            self.port,
+            self.token,
+        )
 
         super().__init__(
             hass,
@@ -62,46 +56,28 @@ class StudyOnTVCoordinator(DataUpdateCoordinator[StudyOnTVData]):
     @property
     def base_url(self) -> str:
         """Return the base URL of the device API."""
-        return f"http://{self.host}:{self.port}"
+        return self.client.base_url
 
     async def _async_update_data(self) -> StudyOnTVData:
         """Fetch state and device information."""
-        headers = {"Authorization": f"Bearer {self.token}"}
-        session = async_get_clientsession(self.hass)
+        try:
+            state, device = await asyncio.gather(
+                self.client.async_get_state(),
+                self.client.async_get_device(),
+            )
+        except StudyOnTVClientError as err:
+            raise UpdateFailed(str(err)) from err
 
-        state, device = await asyncio.gather(
-            self._async_get_json(session, API_STATE, headers),
-            self._async_get_json(session, API_DEVICE, headers),
-        )
         return StudyOnTVData(state=state, device=device)
 
-    async def _async_get_json(
-        self, session: aiohttp.ClientSession, path: str, headers: dict[str, str]
-    ) -> dict[str, Any]:
-        """GET a JSON object from one device API path."""
-        url = f"{self.base_url}{path}"
-        try:
-            async with session.get(
-                url,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
-            ) as response:
-                if response.status in (401, 403):
-                    raise UpdateFailed(_AUTH_FAILED)
-                if response.status == 429:
-                    raise UpdateFailed(_RATE_LIMITED)
-                if response.status != 200:
-                    raise UpdateFailed(
-                        f"StudyOnTV returned HTTP {response.status} for {path}"
-                    )
-                payload = await response.json(content_type=None)
-        except UpdateFailed:
-            raise
-        except (aiohttp.ClientError, TimeoutError) as err:
-            raise UpdateFailed(_CANNOT_CONNECT % self.base_url) from err
-        except ValueError as err:
-            raise UpdateFailed(f"StudyOnTV returned invalid JSON for {path}") from err
-
-        if not isinstance(payload, dict):
-            raise UpdateFailed(f"StudyOnTV returned unexpected data for {path}")
-        return payload
+    async def async_remote(self, action: str, minutes: int = 0) -> dict[str, Any]:
+        """Execute a remote control command and update coordinator state."""
+        result = await self.client.async_remote(action, minutes)
+        learning = result.get("learning")
+        if self.data is not None and isinstance(learning, dict):
+            updated_state = {**self.data.state, "learning": learning}
+            self.async_set_updated_data(
+                StudyOnTVData(state=updated_state, device=self.data.device)
+            )
+        await self.async_request_refresh()
+        return result

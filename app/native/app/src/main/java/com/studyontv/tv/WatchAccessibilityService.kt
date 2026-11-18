@@ -9,6 +9,31 @@ import android.view.accessibility.AccessibilityEvent
 class WatchAccessibilityService : AccessibilityService() {
     private var gate: GateOverlay? = null
     private val navigationKeys = NavigationKeyFilter { LearningNavigation.shouldBlockHome() }
+    /** 当前的按键过滤状态；只在需要拦 Home / 任务键时打开（#162） */
+    private var keyFilterOn = false
+    private var keyFilterApplied = false
+
+    /**
+     * 打开 / 关闭系统级按键过滤。
+     *
+     * 常驻 `FLAG_REQUEST_FILTER_KEY_EVENTS` 会让所有按键（包括音量键）改走无障碍通路：
+     * 海信 VIDAA 上厂商音量面板因此失效，SystemUI 退回 AOSP 白卡片（#162）。
+     * 这里仅在「学习页正在拦 Home」时申请，其它时候保持关闭。
+     */
+    fun setKeyFilter(enabled: Boolean) {
+        if (keyFilterApplied && enabled == keyFilterOn) return
+        val info = try { serviceInfo } catch (_: Exception) { null } ?: return
+        val flag = android.accessibilityservice.AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
+        info.flags = if (enabled) info.flags or flag else info.flags and flag.inv()
+        try {
+            setServiceInfo(info)
+            keyFilterOn = enabled
+            keyFilterApplied = true
+            Diag.info("A11y", if (enabled) "按键过滤已打开（学习页需要拦 Home / 任务键）" else "按键过滤已关闭")
+        } catch (e: Exception) {
+            Diag.warn("A11y", "切换按键过滤失败 ${e.javaClass.simpleName}: ${e.message.orEmpty().take(80)}")
+        }
+    }
 
     public override fun onKeyEvent(event: KeyEvent): Boolean {
         val consumed = navigationKeys.handle(event)
@@ -55,10 +80,16 @@ class WatchAccessibilityService : AccessibilityService() {
         connected = true
         GateService.note("无障碍服务已连接")
         Diag.info("A11y", "service connected")
-        gate = GateOverlay(this, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY) {
+        val overlayType = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP_MR1)
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+        else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
+        gate = GateOverlay(this, overlayType) {
             performGlobalAction(GLOBAL_ACTION_HOME)
         }
         GateService.ensureRunning(this, "accessibility")
+        // 连接时按当前状态定一次：升级前 XML 里写死的按键过滤要在这里清掉（#162）
+        keyFilterApplied = false
+        setKeyFilter(LearningNavigation.shouldBlockHome())
     }
     override fun onDestroy() {
         navigationKeys.reset()
@@ -76,8 +107,8 @@ class WatchAccessibilityService : AccessibilityService() {
             private set
         @Volatile var blockedAppSwitchPresses = 0L
             private set
-        private var instance: WatchAccessibilityService? = null
-        var connected = false
+        @Volatile private var instance: WatchAccessibilityService? = null
+        @Volatile var connected = false
             private set
         fun enabled(context: Context): Boolean = try {
             val manager = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as android.view.accessibility.AccessibilityManager
@@ -85,8 +116,13 @@ class WatchAccessibilityService : AccessibilityService() {
                 .any { it.resolveInfo.serviceInfo.packageName == context.packageName }
         } catch (_: Exception) { false }
         fun hasGate(): Boolean = instance?.gate?.isShowing == true
-        fun presentedGate(): Boolean = instance?.gate?.presenting() == true
+        fun presentedGate(now: Long = android.os.SystemClock.elapsedRealtime()): Boolean = instance?.gate?.presenting(now) == true
+        fun lastGateError(): String = instance?.gate?.let { g ->
+            g.lastError.ifEmpty { "accessibility gate attached but not visible kind=${g.lastErrorKind}" }
+        } ?: ""
         fun showNavigationBlocked(): Boolean = instance?.gate?.showNavigationBlocked() == true
+        /** 只在需要拦 Home / 任务键时申请按键过滤（#162），由 GateService 每个 tick 同步 */
+        fun setHomeFilter(enabled: Boolean) { instance?.setKeyFilter(enabled) }
         fun keyFilterRequested(): Boolean = connected && ((instance?.serviceInfo?.flags ?: 0) and
             android.accessibilityservice.AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS) != 0
         fun showGate(reason: String): Boolean = instance?.gate?.show(reason) == true

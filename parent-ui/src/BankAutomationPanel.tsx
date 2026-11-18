@@ -26,7 +26,16 @@ export default function BankAutomationPanel({sessionId}:{sessionId:number}){
  const types:string[]=form.types||[];
  const valid=form.sources.every((source:any)=>(!source.name.trim()&&!source.url.trim())||(!!source.name.trim()&&/^https?:\/\//.test(source.url.trim())))&&Number(form.minimum)>=1&&Number(form.batch)>=1&&Number(form.masteryAttempts)>=1&&Number(form.masteryAccuracy)>=50&&(!form.autoAi||types.length>0);
  useEffect(()=>{if(!dirty||!valid)return;const timer=window.setTimeout(()=>save.mutate(),800);return()=>window.clearTimeout(timer);},[form,dirty,valid]);
- const sync=useMutation({mutationFn:()=>api('/api/bank-automation/sync','POST',{}),onSuccess:()=>{client.invalidateQueries({queryKey:['bankAutomation',sessionId]});toast.message('已开始同步，完成后可刷新题库');},onError:(e:any)=>toast.error(e.message)});
+ const sync=useMutation({
+  mutationFn:()=>api('/api/bank-automation/sync','POST',{}),
+  onSuccess:()=>{
+   client.invalidateQueries({queryKey:['bankAutomation',sessionId]});
+   client.invalidateQueries({queryKey:['bank']});
+   client.invalidateQueries({queryKey:['bank-meta']});
+   toast.message('已开始同步，完成后可刷新题库');
+  },
+  onError:(e:any)=>toast.error(e.message),
+ });
  const status=query.data?.status;
  return <Card className="mt-5 gap-0 overflow-hidden py-0 shadow-xs">
   <Accordion type="single" collapsible>
@@ -72,7 +81,7 @@ export default function BankAutomationPanel({sessionId}:{sessionId:number}){
       <Field orientation="responsive" className="border-b border-border/60 py-4"><FieldContent><FieldTitle>至少作答次数</FieldTitle></FieldContent><Input aria-label="至少作答次数" type="number" min={1} max={100} className="w-24" value={form.masteryAttempts} onChange={e=>field('masteryAttempts',Number(e.target.value))}/></Field>
       <Field orientation="responsive" className="border-b border-border/60 py-4"><FieldContent><FieldTitle>掌握正确率 · %</FieldTitle></FieldContent><Input aria-label="掌握正确率" type="number" min={50} max={100} className="w-24" value={form.masteryAccuracy} onChange={e=>field('masteryAccuracy',Number(e.target.value))}/></Field>
       <Field orientation="responsive" className="border-b border-border/60 py-4">
-       <FieldContent><FieldTitle>补题题型</FieldTitle><FieldDescription className="text-xs">电视上用遥控器填字麻烦，可以只补选择题；至少选一种。</FieldDescription>{form.autoAi&&types.length===0&&<FieldError>请至少选择一种题型</FieldError>}</FieldContent>
+       <FieldContent><FieldTitle>补题题型</FieldTitle><FieldDescription className="text-xs">至少选一种题型。</FieldDescription>{form.autoAi&&types.length===0&&<FieldError>请至少选择一种题型</FieldError>}</FieldContent>
        <div className="flex flex-wrap gap-x-4 gap-y-2">
         {typeOptions.map(([value,label])=><Field key={value} orientation="horizontal" className="w-auto gap-2">
          <Checkbox id={`auto-type-${value}`} checked={types.includes(value)} onCheckedChange={checked=>field('types',checked?[...types,value]:types.filter((t:string)=>t!==value))}/>
@@ -85,7 +94,7 @@ export default function BankAutomationPanel({sessionId}:{sessionId:number}){
     </FieldSet>
 
     {status?.at&&<FieldDescription className="space-y-1 rounded-xl bg-muted/40 p-3 text-xs"><p>上次执行：{new Date(status.at).toLocaleString()} {status.message||''}</p>{(status.sources||[]).map((s:any)=><p key={s.name}>{s.name}：{s.ok?`同步 ${s.imported} 题`:s.message}</p>)}{status.generated!==undefined&&<p>自动补题 {status.generated} 题；暂停已掌握 {status.pausedMastered||0} 题</p>}</FieldDescription>}
-    <div className="flex flex-wrap items-center justify-end gap-2"><Badge variant={save.isPending?'secondary':valid?'outline':'destructive'}>{save.isPending?<><LoaderCircle className="animate-spin"/>保存中</>:valid?<><Check/>修改后自动保存</>:'请检查来源地址'}</Badge><Button type="button" variant="outline" onClick={()=>client.invalidateQueries({queryKey:['bank',sessionId]})}>刷新题库</Button><Button type="button" variant="outline" disabled={dirty||sync.isPending||query.data?.running} onClick={()=>sync.mutate()}>{query.data?.running?'同步中…':'立即同步 / 补题'}</Button></div>
+    <div className="flex flex-wrap items-center justify-end gap-2"><Button type="button" variant="outline" onClick={()=>{client.invalidateQueries({queryKey:['bank']});client.invalidateQueries({queryKey:['bank-meta']});}}>刷新题库</Button><Button type="button" variant="outline" disabled={dirty||sync.isPending||query.data?.running} onClick={()=>sync.mutate()}>{query.data?.running?'同步中…':'立即同步 / 补题'}</Button></div>
     </FieldGroup>
    </CardContent>
    </AccordionContent>

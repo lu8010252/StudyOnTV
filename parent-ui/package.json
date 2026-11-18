@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "node prepare-assets.mjs && tsc --noEmit && vite build",
-    "dev": "vite --host 127.0.0.1",
-    "test": "node --experimental-strip-types src/schema.test.ts && node --experimental-strip-types src/document-import.test.ts && node --experimental-strip-types src/question-import.test.ts && node --experimental-strip-types src/keepalive.test.ts && node --experimental-strip-types src/open-play.test.ts"
+    "dev": "node prepare-assets.mjs && vite --host 127.0.0.1",
+    "test": "tsc --noEmit && node --experimental-strip-types src/schema.test.ts && node --experimental-strip-types src/document-import.test.ts && node --experimental-strip-types src/question-import.test.ts && node --experimental-strip-types src/keepalive.test.ts && node --experimental-strip-types src/open-play.test.ts && node --experimental-strip-types src/rich-text.test.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "3.10.0",
@@ -24,7 +24,6 @@
     "@tanstack/react-query": "5.83.0",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
-    "cn": "^0.5.2",
     "lucide-react": "0.468.0",
     "mammoth": "^1.13.0",
     "pdfjs-dist": "^4.10.38",
@@ -32,7 +31,6 @@
     "react": "19.1.1",
     "react-dom": "19.1.1",
     "react-hook-form": "7.62.0",
-    "recharts": "3.1.2",
     "sonner": "2.0.7",
     "tailwind-merge": "3.3.1",
     "zod": "3.25.76"

@@ -2,6 +2,9 @@ package com.studyontv.tv
 
 import android.content.Context
 import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioManager
+import android.media.AudioTrack
 import android.media.MediaPlayer
 import android.os.Handler
 import android.os.Looper
@@ -38,15 +41,27 @@ object SpeechReader {
 
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
+    /** 下一分段的预合成放到独立线程，绝不堵塞当前分段在 worker 上的 PCM 播放。 */
+    private val prefetchWorker = Executors.newSingleThreadExecutor()
     @Volatile private var generation = 0
     private var player: MediaPlayer? = null
+    /**
+     * 云端合成结果缓存：题目重绘、回填草稿都会再次触发自动朗读，同一段文字没必要再合成一次
+     * （DeepSeek 按字符计费，用户反馈「读不出来还在扣钱」）。只留最近几段。
+     */
+    private val synthCache = object : LinkedHashMap<String, ByteArray>(4, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ByteArray>?): Boolean = size > 6
+    }
+    /** 云端 WAV 走 AudioTrack 播放（华为等设备的 MediaPlayer 播不了，用户反馈），stopNow 时释放 */
+    @Volatile private var track: AudioTrack? = null
     private var audioFile: File? = null
     private var system: TextToSpeech? = null
     private var ready = false
     private var pending: (() -> Unit)? = null
-    private var token = ""
-    private var tokenExpires = 0L
-    private var tokenKey = ""
+    private val tokenLock = Any()
+    @Volatile private var token = ""
+    @Volatile private var tokenExpires = 0L
+    @Volatile private var tokenKey = ""
     /** 最近一次朗读 / 播放的结果，供 speechStatus 桥与回归测试断言 */
     @Volatile private var last: JSONObject? = null
     @Volatile private var speaking = false
@@ -74,6 +89,8 @@ object SpeechReader {
         .apply {
             if (!has("mode")) put("mode", "system")
             if (!has("readLanguage")) put("readLanguage", "")
+            if (!has("edgeVoice")) put("edgeVoice", "")
+            if (!has("speechRate")) put("speechRate", 1.0)
             if (!has("deepseekVoice")) put("deepseekVoice", "stella")
             if (!has("recognizeMode")) put("recognizeMode", "system")
             if (optString("readScope") !in READ_SCOPES) put("readScope", "question")
@@ -82,7 +99,7 @@ object SpeechReader {
     fun save(store: LocalStore, input: JSONObject): JSONObject {
         val next = JSONObject(store.get("speech_settings", "{}"))
         val mode = input.optString("mode", "system")
-        require(mode in listOf("auto", "system", "deepseek", "azure", "aliyun")) { "未知朗读通路" }
+        require(mode in listOf("auto", "system", "edge", "deepseek", "azure", "aliyun")) { "未知朗读通路" }
         next.put("mode", mode).put("autoRead", input.optBoolean("autoRead"))
         if (input.has("readScope")) {
             val scope = input.optString("readScope", "question")
@@ -105,6 +122,16 @@ object SpeechReader {
             require(readLanguage in OVERRIDES) { "不支持的朗读语言" }
             next.put("readLanguage", readLanguage)
         }
+        if (input.has("edgeVoice")) {
+            val edgeVoice = input.optString("edgeVoice").trim()
+            require(edgeVoice.isEmpty() || edgeVoice in EdgeTts.VOICES) { "不支持的 Edge 音色" }
+            next.put("edgeVoice", edgeVoice)
+        }
+        if (input.has("speechRate")) {
+            val rate = input.optDouble("speechRate", 1.0)
+            require(rate.isFinite() && rate in 0.7..1.5) { "朗读语速需在 0.7 到 1.5 之间" }
+            next.put("speechRate", rate)
+        }
         for (key in listOf("azureRegion", "azureVoice", "aliyunAppKey", "aliyunAccessKeyId", "aliyunVoice")) if (input.has(key)) {
             require(input.getString(key).length <= 200); next.put(key, input.getString(key).trim())
         }
@@ -114,7 +141,8 @@ object SpeechReader {
         }
         if (input.optBoolean("clearKeys")) { next.remove("azureKey"); next.remove("aliyunSecret"); next.remove("deepseekKey") }
         store.set("speech_settings", next.toString())
-        token = ""; tokenExpires = 0
+        synchronized(tokenLock) { token = ""; tokenExpires = 0L; tokenKey = "" }
+        synchronized(synthCache) { synthCache.clear() }
         return settings(store)
     }
 
@@ -126,19 +154,21 @@ object SpeechReader {
         if (text.isBlank()) return
         val app = context.applicationContext
         main.post {
-            stopNow(); val request = generation
-            this.notice = notice
-            cachedContext = app
-            val clean = text.take(10000)
-            // DeviceRuntime 未就绪（早期初始化 / instrumentation）时按 system 通路，不能因此崩掉进程
             val config = try { JSONObject(DeviceRuntime.store.get("speech_settings", "{}")) } catch (_: Throwable) { JSONObject() }
             val mode = config.optString("mode", "system")
             val chosen = if (mode == "auto") when {
                 deepseekKey(config).isNotEmpty() -> "deepseek"
                 config.optString("azureKey").isNotEmpty() -> "azure"
                 config.optString("aliyunSecret").isNotEmpty() -> "aliyun"
-                else -> "system"
+                TtsProbe.defaultEngine(app).isNotEmpty() -> "system"
+                else -> "edge"
             } else mode
+            // 系统 TTS 使用 QUEUE_FLUSH 覆盖旧播报，避免在部分固件（如 OPPO）上连续调用 system.stop() + speak() 导致后续题目静默丢弃
+            stopNow(stopSystem = chosen != "system")
+            val request = generation
+            this.notice = notice
+            cachedContext = app
+            val clean = text.take(10000)
             // #126：家长可以在朗读设置里指定设备朗读语言；留空就跟随每道题的语言标注
             val spoken = when (val override = config.optString("readLanguage").trim()) {
                 "system" -> ""          // 跟随设备系统语言
@@ -284,8 +314,14 @@ object SpeechReader {
         try { Toast.makeText(context, "音频无法播放，请检查网络或改用朗读", Toast.LENGTH_SHORT).show() } catch (_: Exception) { }
     }
 
-    private fun stopNow() {
-        generation++; pending = null; system?.stop()
+    private fun stopNow(stopSystem: Boolean = true) {
+        generation++; pending = null
+        if (stopSystem) system?.stop()
+        track?.let {
+            try { it.pause(); it.flush() } catch (_: Exception) { }
+            try { it.release() } catch (_: Exception) { }
+        }
+        track = null
         player?.release(); player = null; audioFile?.delete(); audioFile = null
         speaking = false; currentText = ""; currentLanguage = ""; lastUtteranceId = ""; retriedDefault = false
         notice = null
@@ -358,11 +394,31 @@ object SpeechReader {
             return
         }
         try { engine.setAudioAttributes(attributes) } catch (_: Exception) { }
+        try {
+            val rate = currentSettings().optDouble("speechRate", 1.0).takeIf { it.isFinite() }?.coerceIn(0.7, 1.5) ?: 1.0
+            engine.setSpeechRate(rate.toFloat())
+        } catch (_: Exception) { }
         currentText = text; currentLanguage = plan.language; retriedDefault = plan.degraded
-        val parts = text.chunked(minOf(3000, TextToSpeech.getMaxSpeechInputLength()))
+        // 按句子攒到 180 字再排队朗读：电视内置 TTS 引擎读几千字的长句常常中途断掉（用户反馈「朗读不完整」），
+        // 拆成短句用 QUEUE_ADD 串起来更稳，句间停顿也更自然。
+        val max = minOf(180, TextToSpeech.getMaxSpeechInputLength())
+        val parts = packedSentences(text, max).ifEmpty { listOf(text) }
         lastUtteranceId = "sotv-$request-${parts.size - 1}"
         parts.forEachIndexed { index, part ->
-            engine.speak(part, if (index == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, "sotv-$request-$index")
+            val rc = engine.speak(part, if (index == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, "sotv-$request-$index")
+            if (rc == TextToSpeech.ERROR) {
+                Diag.warn("Speech", "engine.speak returned ERROR on part $index, reinitializing TTS")
+                try { engine.shutdown() } catch (_: Exception) { }
+                system = null; ready = false
+                if (!retriedDefault) {
+                    retriedDefault = true
+                    systemRead(context, text, language, request, mode)
+                } else {
+                    notify(false, mode, "speak-error", plan.requested, plan.language, plan.degraded,
+                        "系统语音引擎无响应，请重试或改用云端语音")
+                }
+                return
+            }
         }
         speaking = true
         notify(true, mode, if (plan.degraded) "language-fallback" else "ok", plan.requested.ifEmpty { plan.language }, plan.language, plan.degraded, "")
@@ -495,15 +551,96 @@ object SpeechReader {
         } finally { connection.disconnect() }
     }
 
+    private val diskLock = Any()
+    private fun diskFile(context: Context, cacheKey: String): File? {
+        if (cacheKey.isEmpty()) return null
+        val dir = File(context.cacheDir, "tts_cache").apply { if (!exists()) mkdirs() }
+        val hash = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(cacheKey.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        return File(dir, "$hash.bin")
+    }
+    private fun readDiskCache(context: Context, cacheKey: String): ByteArray? = synchronized(diskLock) {
+        val f = diskFile(context, cacheKey) ?: return null
+        if (!f.exists()) return null
+        f.setLastModified(System.currentTimeMillis())
+        return try { f.readBytes() } catch (_: Exception) { null }
+    }
+    private fun writeDiskCache(context: Context, cacheKey: String, bytes: ByteArray) = synchronized(diskLock) {
+        if (cacheKey.isEmpty() || bytes.size > 512 * 1024) return
+        val f = diskFile(context, cacheKey) ?: return
+        try {
+            f.writeBytes(bytes)
+            val dir = f.parentFile ?: return
+            val files = dir.listFiles() ?: return
+            var total = files.sumOf { it.length() }
+            if (total > 20L * 1024 * 1024) {
+                for (old in files.sortedBy { it.lastModified() }) {
+                    if (total <= 16L * 1024 * 1024) break
+                    val len = old.length()
+                    if (old.delete()) total -= len
+                }
+            }
+        } catch (_: Exception) { }
+    }
+    private fun cacheKeyFor(mode: String, config: JSONObject, language: String, part: String): String {
+        val rate = config.optDouble("speechRate", 1.0).takeIf { it.isFinite() }?.coerceIn(0.7, 1.5) ?: 1.0
+        return when (mode) {
+            "deepseek" -> "${deepseekKey(config).hashCode()}|" + config.optString("deepseekVoice") + "|" + part
+            "edge" -> "edge|${config.optString("edgeVoice")}|$language|$rate|$part"
+            else -> ""
+        }
+    }
+    private fun synthWithCache(context: Context, mode: String, config: JSONObject, language: String, part: String): ByteArray {
+        val cacheKey = cacheKeyFor(mode, config, language, part)
+        if (cacheKey.isNotEmpty()) {
+            synchronized(synthCache) { synthCache[cacheKey] }?.let { return it }
+            readDiskCache(context, cacheKey)?.let {
+                synchronized(synthCache) { synthCache[cacheKey] = it }
+                return it
+            }
+        }
+        val rate = config.optDouble("speechRate", 1.0).takeIf { it.isFinite() }?.coerceIn(0.7, 1.5) ?: 1.0
+        val bytes = when (mode) {
+            "deepseek" -> deepseekBytes(config, part, language)
+            "edge" -> EdgeTts.synthesize(part, config.optString("edgeVoice"), language, rate)
+            "azure" -> azure(config, part, language)
+            else -> aliyun(config, part)
+        }
+        if (cacheKey.isNotEmpty() && bytes.size <= 512 * 1024) {
+            synchronized(synthCache) { synthCache[cacheKey] = bytes }
+            writeDiskCache(context, cacheKey, bytes)
+        }
+        return bytes
+    }
+
     private fun cloudPart(context: Context, parts: List<String>, index: Int, language: String, config: JSONObject, mode: String, request: Int) {
         if (index >= parts.size || generation != request) return
         worker.execute {
             if (generation != request) return@execute
             try {
-                val bytes = when (mode) {
-                    "deepseek" -> deepseekBytes(config, parts[index], language)
-                    "azure" -> azure(config, parts[index], language)
-                    else -> aliyun(config, parts[index])
+                val bytes = synthWithCache(context, mode, config, language, parts[index])
+                if (index + 1 < parts.size && mode in listOf("edge", "deepseek")) {
+                    prefetchWorker.execute {
+                        if (generation == request) try { synthWithCache(context, mode, config, language, parts[index + 1]) } catch (_: Exception) { }
+                    }
+                }
+                // DeepSeek 返回 WAV：自己解析 PCM 用 AudioTrack 直接在内存播放，不落临时文件，
+                // 绕开华为等设备上 MediaPlayer 的 "Prepare failed.: status=0x1"
+                val pcm = if (mode == "deepseek") WavAudio.parse(bytes) else null
+                if (mode == "deepseek" && pcm == null && !WavAudio.isWave(bytes)) {
+                    throw IllegalStateException("云端朗读返回的不是音频：${bodySnippet(bytes)}")
+                }
+                if (pcm != null) {
+                    main.post {
+                        if (generation != request) return@post
+                        playPcm(pcm, request,
+                            onDone = { cloudPart(context, parts, index + 1, language, config, mode, request) },
+                            onError = {
+                                systemRead(context, parts.drop(index).joinToString(""), language, request, mode)
+                            })
+                    }
+                    return@execute
                 }
                 val file = File.createTempFile("reading-", if (mode == "deepseek") ".wav" else ".mp3", context.cacheDir)
                 file.writeBytes(bytes)
@@ -537,6 +674,58 @@ object SpeechReader {
                 notify(false, mode, "cloud-unavailable", language, "", true,
                     "云端朗读失败：${(e.message ?: e.javaClass.simpleName).take(80)}")
                 main.post { systemRead(context, parts.drop(index).joinToString(""), language, request, mode) }
+            }
+        }
+    }
+
+    /** 云端返回体不是音频时，把开头一小段带进错误消息，家长至少能看到接口说了什么 */
+    private fun bodySnippet(bytes: ByteArray): String =
+        try {
+            String(bytes, 0, minOf(bytes.size, 200), Charsets.UTF_8).replace(Regex("\\s+"), " ").trim().take(160)
+        } catch (_: Exception) { "" }
+
+    /**
+     * 直接播放 16 位 PCM WAV（DeepSeek 朗读）。
+     *
+     * 不经过 MediaPlayer / 系统解码器：华为、EMUI 平板上 MediaPlayer 对这类 WAV 会直接
+     * `Prepare failed.: status=0x1`。播放仍在 [worker] 里顺序进行，上一段播完再合成下一段。
+     */
+    private fun playPcm(pcm: WavAudio.Pcm, request: Int, onDone: () -> Unit, onError: (String) -> Unit) {
+        worker.execute {
+            var audioTrack: AudioTrack? = null
+            try {
+                if (request != generation) return@execute
+                val mask = if (pcm.channels >= 2) AudioFormat.CHANNEL_OUT_STEREO else AudioFormat.CHANNEL_OUT_MONO
+                val format = AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(pcm.sampleRate).setChannelMask(mask).build()
+                val minBytes = AudioTrack.getMinBufferSize(pcm.sampleRate, mask, AudioFormat.ENCODING_PCM_16BIT)
+                val created = AudioTrack(attributes, format, maxOf(minBytes, 16 * 1024), AudioTrack.MODE_STREAM,
+                    AudioManager.AUDIO_SESSION_ID_GENERATE)
+                audioTrack = created
+                track = created
+                created.play()
+                var offset = 0
+                while (offset < pcm.data.size && request == generation) {
+                    val written = created.write(pcm.data, offset, minOf(16 * 1024, pcm.data.size - offset))
+                    if (written <= 0) break
+                    offset += written
+                }
+                // 等缓冲区里的最后一段播完再进入下一句；playbackHeadPosition 是无符号 32 位帧计数
+                val durationMs = pcm.frames * 1000L / pcm.sampleRate.coerceAtLeast(1)
+                val deadline = System.currentTimeMillis() + durationMs + 3000L
+                while (request == generation && (created.playbackHeadPosition.toLong() and 0xFFFFFFFFL) < pcm.frames &&
+                    System.currentTimeMillis() < deadline) {
+                    Thread.sleep(20)
+                }
+                if (request == generation) main.post { if (request == generation) onDone() }
+            } catch (e: Exception) {
+                val message = "${e.javaClass.simpleName}: ${e.message.orEmpty().take(80)}"
+                Diag.warn("Speech", "pcm playback failed $message")
+                main.post { if (request == generation) onError(message) }
+            } finally {
+                if (track === audioTrack) track = null
+                try { audioTrack?.pause(); audioTrack?.flush() } catch (_: Exception) { }
+                try { audioTrack?.release() } catch (_: Exception) { }
             }
         }
     }
@@ -575,18 +764,21 @@ object SpeechReader {
     private fun encode(value: String) = URLEncoder.encode(value, "UTF-8").replace("+", "%20").replace("*", "%2A").replace("%7E", "~")
     private fun aliyun(config: JSONObject, text: String): ByteArray {
         val identity = config.getString("aliyunAccessKeyId") + config.getString("aliyunSecret")
-        if (token.isEmpty() || identity != tokenKey || System.currentTimeMillis() / 1000 >= tokenExpires - 120) {
-            val timestamp = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }.format(java.util.Date())
-            val parameters = sortedMapOf("AccessKeyId" to config.getString("aliyunAccessKeyId"), "Action" to "CreateToken", "Format" to "JSON",
-                "Version" to "2019-02-28", "SignatureMethod" to "HMAC-SHA1", "SignatureVersion" to "1.0", "SignatureNonce" to UUID.randomUUID().toString(), "Timestamp" to timestamp)
-            val query = parameters.entries.joinToString("&") { encode(it.key) + "=" + encode(it.value) }
-            val mac = javax.crypto.Mac.getInstance("HmacSHA1")
-            mac.init(javax.crypto.spec.SecretKeySpec((config.getString("aliyunSecret") + "&").toByteArray(), "HmacSHA1"))
-            val signature = android.util.Base64.encodeToString(mac.doFinal(("GET&%2F&" + encode(query)).toByteArray()), android.util.Base64.NO_WRAP)
-            val result = JSONObject(String(request("https://nls-meta.cn-shanghai.aliyuncs.com/?$query&Signature=${encode(signature)}"), Charsets.UTF_8)).getJSONObject("Token")
-            token = result.getString("Id"); tokenExpires = result.getLong("ExpireTime"); tokenKey = identity
+        val currentToken = synchronized(tokenLock) {
+            if (token.isEmpty() || identity != tokenKey || System.currentTimeMillis() / 1000 >= tokenExpires - 120) {
+                val timestamp = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }.format(java.util.Date())
+                val parameters = sortedMapOf("AccessKeyId" to config.getString("aliyunAccessKeyId"), "Action" to "CreateToken", "Format" to "JSON",
+                    "Version" to "2019-02-28", "SignatureMethod" to "HMAC-SHA1", "SignatureVersion" to "1.0", "SignatureNonce" to UUID.randomUUID().toString(), "Timestamp" to timestamp)
+                val query = parameters.entries.joinToString("&") { encode(it.key) + "=" + encode(it.value) }
+                val mac = javax.crypto.Mac.getInstance("HmacSHA1")
+                mac.init(javax.crypto.spec.SecretKeySpec((config.getString("aliyunSecret") + "&").toByteArray(), "HmacSHA1"))
+                val signature = MediaStore.encodeBase64(mac.doFinal(("GET&%2F&" + encode(query)).toByteArray()))
+                val result = JSONObject(String(request("https://nls-meta.cn-shanghai.aliyuncs.com/?$query&Signature=${encode(signature)}"), Charsets.UTF_8)).getJSONObject("Token")
+                token = result.getString("Id"); tokenExpires = result.getLong("ExpireTime"); tokenKey = identity
+            }
+            token
         }
         val voice = config.optString("aliyunVoice").ifBlank { "xiaoyun" }
-        return request("https://nls-gateway-cn-shanghai.aliyuncs.com/stream/v1/tts?appkey=${encode(config.getString("aliyunAppKey"))}&token=${encode(token)}&text=${encode(text)}&format=mp3&sample_rate=16000&voice=${encode(voice)}")
+        return request("https://nls-gateway-cn-shanghai.aliyuncs.com/stream/v1/tts?appkey=${encode(config.getString("aliyunAppKey"))}&token=${encode(currentToken)}&text=${encode(text)}&format=mp3&sample_rate=16000&voice=${encode(voice)}")
     }
 }

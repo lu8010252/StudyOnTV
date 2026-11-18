@@ -25,17 +25,17 @@ import android.view.WindowManager
 class GateService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var lastTick = SystemClock.elapsedRealtime()
-    private var wasUsing = false
+    @Volatile private var wasUsing = false
     private var lastStateText = ""
     private var lastGate = 0L
     private var lastLaunch = 0L
     private var lastFallbackNotify = 0L
     private var lastFallbackActivityAt = 0L
     /** 上一次主动改用全屏学习页的时间（#122），避免 1.8 秒防抖内重复 startActivity */
-    private var lastFullscreenAt = 0L
-    private var gateFailures = 0
-    private var lastGateError = ""
-    private var lastGateErrorAt = -1L
+    @Volatile private var lastFullscreenAt = 0L
+    @Volatile private var gateFailures = 0
+    @Volatile private var lastGateError = ""
+    @Volatile private var lastGateErrorAt = -1L
     /** 上一轮 tick 的状态：mediaTick / diagnostics 用它做「静音是否同源」的纯函数判定 */
     @Volatile private var freeNow = false
     @Volatile private var gateExpectedNow = false
@@ -93,6 +93,21 @@ class GateService : Service() {
         val now = SystemClock.elapsedRealtime()
         val elapsed = now - lastTick
         lastTick = now
+        val config = DeviceRuntime.store.config()
+        if (!config.optBoolean("supervisionEnabled", true)) {
+            // 纯刷题背诵模式下不拦截其他应用、不锁系统设置、不静音，也不提醒缺少悬浮窗权限
+            wasUsing = false
+            freeNow = true
+            gateExpectedNow = false
+            beatWatch(false)
+            hideAll()
+            countdown.hide()
+            if (MediaPause.active) MediaPause.releaseAll(this)
+            AudioController.syncLearningActivity(true, false)
+            try { WatchAccessibilityService.setHomeFilter(false) } catch (_: Exception) { }
+            trackCapability(true, now)
+            return
+        }
         if (wasUsing) DeviceRuntime.learning.consume(elapsed)
         val canOverlay = OverlayAccess.canDraw(this)
         if (!canOverlay) overlay.hide()
@@ -102,11 +117,12 @@ class GateService : Service() {
         if (free) MediaPause.releaseAll(this)
         if (InputSupport.active) {
             wasUsing = false
+            beatWatch(false)
             overlay.suspend(); WatchAccessibilityService.suspendGate()
             countdown.hide()
             return
         }
-        if (SystemSettingsGuard.active(now)) { wasUsing = false; hideAll(); countdown.hide(); if (MediaPause.active) releaseMuteWithoutGate("settings"); return }
+        if (SystemSettingsGuard.active(now)) { wasUsing = false; beatWatch(false); hideAll(); countdown.hide(); if (MediaPause.active) releaseMuteWithoutGate("settings"); return }
         val power = getSystemService(POWER_SERVICE) as PowerManager
         val locked = (getSystemService(KEYGUARD_SERVICE) as KeyguardManager).isKeyguardLocked
         val awake = power.isInteractive && !locked && screenOn && displayOn()
@@ -144,7 +160,12 @@ class GateService : Service() {
             else -> launcherPlaying(pkg) || (pkg != packageName && (pkg == launcherPackage() || Foreground.isTransient(pkg)) &&
                 DeviceRuntime.store.config().optBoolean("trafficAssistEnabled") && PlaybackTraffic.playing(this))
         }
-        val protecting = awake && monitoring && !ownForeground && !whitelistedNow && (pkg == null || !exempt(pkg, false))
+        // 手机 / 平板的桌面本身不是内容页：到点后仍然允许孩子回到桌面挑应用，
+        // 否则桌面先被拦住，「不计时白名单」里的应用根本点不进去（用户反馈）。
+        // 打开白名单以外的应用时照常拦截。电视的桌面包常常就是影视入口（聚好看 / JUUI），
+        // 那里继续沿用原来的口径：桌面在放视频时照样弹题。
+        val mobileHome = pkg != null && !DeviceBridge.isTv(this) && exempt(pkg) && !launcherPlaying(pkg)
+        val protecting = awake && monitoring && !ownForeground && !whitelistedNow && !mobileHome && (pkg == null || !exempt(pkg, false))
         val reason = status.getString("reason")
         val settingsBlocked = SystemSettingsGuard.blocked(this, awake, monitoring, free, pkg,
             DeviceRuntime.store.config().optBoolean("blockSettingsDuringControl", true), AdminAuth.recentlyVerified())
@@ -152,7 +173,7 @@ class GateService : Service() {
         val pendingFeedback = DeviceRuntime.store.get("review_feedback").isNotEmpty()
         val practice = DeviceRuntime.store.config().optString("playMode") == "practice"
         // 一次 tick 内统一口径：什么情况下应该有 Gate（静音与弹窗共用这个判断）
-        gateExpectedNow = !free && !whitelistedNow && (gateReason.isNotEmpty() || pendingFeedback || practice)
+        gateExpectedNow = !free && !whitelistedNow && !mobileHome && (gateReason.isNotEmpty() || pendingFeedback || practice)
         val feedbackVisible = !free && hasGate() && pendingFeedback
         AudioController.syncLearningActivity(free, gateExpectedNow)
         wasUsing = active && !free && reason.isEmpty() && !feedbackVisible
@@ -171,7 +192,11 @@ class GateService : Service() {
         diag = (pkg ?: "未知") + if (wasUsing) " · 计时中" else " · 暂停（" + why + "）"
         val stateText = monitorMode + " · " + diag
         if (stateText != lastStateText) { lastStateText = stateText; note(stateText) }
-        if (!awake || !monitoring || (!settingsBlocked && (ownForeground || (reason.isEmpty() && !feedbackVisible) || (pkg != null && exempt(pkg, false))))) hideAll()
+        beatWatch(wasUsing)
+        if (!awake || !monitoring || mobileHome || (!settingsBlocked && (ownForeground || (reason.isEmpty() && !feedbackVisible) || (pkg != null && exempt(pkg, false))))) hideAll()
+        // #162：无障碍按键过滤只在学习页真的要拦 Home / 任务键时打开，平时关掉，
+        // 否则海信 VIDAA 这类固件的系统音量条会从厂商面板退回 AOSP 白卡片。
+        try { WatchAccessibilityService.setHomeFilter(LearningNavigation.shouldBlockHome()) } catch (_: Exception) { }
         val snapshot = "reason=$gateReason free=$free awake=$awake screen=$screenOn monitoring=$monitoring own=$ownForeground pkg=$pkg cls=${pkg?.let { Foreground.currentClass(it) }} active=$active gate=${hasGate()} overlay=$canOverlay mute=${MediaPause.active} failures=$gateFailures"
         if (snapshot != lastDiag) { lastDiag = snapshot; Diag.info("Gate", snapshot) }
         val state = GateTickState(now, free, awake, screenOn, monitoring, canOverlay, ownForeground, pkg,
@@ -236,6 +261,13 @@ class GateService : Service() {
             Diag.warn("Gate", "overlay attached but never visible (attempt=$gateFailures) $lastGateError → hide and retry")
             // 用 hide 而不是 destroy：保留 WebView 供 60 秒内下次弹出复用，避免每几秒重建一次
             overlay.hide()
+        }
+        if (WatchAccessibilityService.hasGate() && !WatchAccessibilityService.presentedGate(now)) {
+            lastGateError = WatchAccessibilityService.lastGateError()
+            lastGateErrorAt = now
+            gateFailures++
+            Diag.warn("Gate", "accessibility gate attached but never visible (attempt=$gateFailures) $lastGateError → hide and retry")
+            WatchAccessibilityService.hideGate()
         }
         // 全屏学习页已经在前台 = 已经弹出来了（SDK<26 的老盒子走的就是这条路），
         // 不要再每 2 秒重复拉起 / 重复写日志。
@@ -400,9 +432,9 @@ class GateService : Service() {
         }
     }
 
-    /** Gate 是不是真的在屏幕上（悬浮层通过可见性校验 / 无障碍覆盖层 / 全屏学习页） */
+    /** Gate 是不是真的在屏幕上（悬浮层与无障碍覆盖层均须通过可见性校验，或全屏学习页在前台） */
     private fun gateShown(): Boolean = GatePresentation.gateVisible(
-        accessibilityGate = WatchAccessibilityService.hasGate(),
+        accessibilityGate = WatchAccessibilityService.presentedGate(),
         overlayPresenting = overlay.presenting(),
         learningActivity = Foreground.learningActivity() != null,
         gateExpected = gateExpectedNow,
@@ -550,10 +582,10 @@ class GateService : Service() {
      */
     private var launcherPkgCache: String? = null
     private var launcherClassCache: String? = null
-    private var launcherPkgAt = 0L
+    private var launcherPkgAt = -1L
     private fun launcherPackage(): String? {
         val now = SystemClock.elapsedRealtime()
-        if (now - launcherPkgAt < 10_000) return launcherPkgCache
+        if (launcherPkgAt >= 0 && now - launcherPkgAt < 10_000) return launcherPkgCache
         val home = try {
             packageManager.resolveActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), 0)?.activityInfo
         } catch (_: Exception) { null }
@@ -598,7 +630,7 @@ class GateService : Service() {
         // 家长指定不计时的应用（屏保 / 网课）：不扣时长、不弹题，也不静音（上游）
         if (pkg in whitelistNow) return true
         if (!includeLauncher) return false
-        val launcher = packageManager.resolveActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), 0)?.activityInfo?.packageName
+        val launcher = launcherPackage()
         return pkg == launcher || Foreground.isLauncher(pkg)
     }
 
@@ -685,7 +717,7 @@ class GateService : Service() {
     companion object {
         /** 一个监控能力都没有时，持续这么久才提示家长（避免刚开机 / 刚装完就弹） */
         private const val CAPABILITY_GRACE_MS = 300_000L
-        private var instance: GateService? = null
+        @Volatile private var instance: GateService? = null
         /** 当前识别前台应用的方式：无障碍 / 使用情况 / 仅悬浮窗（只能按亮屏时间粗略计时）/ 未监控 */
         @Volatile var monitorMode: String = ""
         /** 诊断：当前前台应用和是否在计时，显示在电视页右上角，方便排查计时不动的原因 */
@@ -701,7 +733,7 @@ class GateService : Service() {
             for ((t, x) in history) a.put(org.json.JSONObject().put("ts", t).put("text", x))
             return a
         }
-        private var startVia = "app"
+        @Volatile private var startVia = "app"
 
         /**
          * 孩子最近真正在用的受控应用。答题解锁后用它把画面还原，
@@ -743,7 +775,7 @@ class GateService : Service() {
             val service = instance
             val now = SystemClock.elapsedRealtime()
             val overlay = service?.overlay
-            val accessibilityGate = WatchAccessibilityService.hasGate()
+            val accessibilityGate = WatchAccessibilityService.presentedGate(now)
             val overlayPresenting = overlay?.presenting(now) == true
             val learningActivity = Foreground.learningActivity() != null
             val gateExpected = service?.gateExpectedNow == true
@@ -762,6 +794,7 @@ class GateService : Service() {
                 .put("homePolicyFresh", LearningNavigation.snapshot?.let { now - it.publishedAt <= 2000 } ?: false)
                 .put("homeBlocking", LearningNavigation.shouldBlockHome())
                 .put("homeFilterRequested", WatchAccessibilityService.keyFilterRequested())
+                .put("muteWrites", MediaPause.writeCount)
                 .put("overlay", OverlayAccess.canDraw(context))
                 .put("usage", Foreground.hasUsageAccess(context))
                 .put("accessibility", WatchAccessibilityService.connected)

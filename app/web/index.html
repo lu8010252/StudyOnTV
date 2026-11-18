@@ -27,6 +27,48 @@
       <div class="quiz-foot"><div class="dots-progress" id="qDots"></div><div class="quiz-foot-right"><button class="btn btn-ghost focusable read-aloud-btn" id="readAloudBtn" data-action="read-aloud" style="display:none">朗读</button><div class="hint"><span class="kbd">◀ ▶ ▲ ▼</span><span class="hint-text">选择</span><span class="kbd">OK</span><span class="hint-text">确认</span><span class="kbd">返回</span><span class="hint-text">回到桌面</span></div></div></div>
     </div>
   </section>
+  <section class="screen" id="screen-hub">
+    <div class="hub-wrap">
+      <div class="hub-top">
+        <div class="hub-stats" id="hubStats">
+          <span class="hub-stat hub-stat-streak" id="hubStreak">🔥 连续学习 0 天</span>
+          <span class="hub-stat" id="hubToday">今日已练 0 题</span>
+          <span class="hub-stat" id="hubMastered">已掌握 0 题</span>
+        </div>
+        <div class="hub-children" id="hubChildren"></div>
+      </div>
+      <div class="hub-heading">
+        <h1 class="hub-title" id="hubTitle">自主学习中心</h1>
+        <p class="hub-subtitle" id="hubSubtitle">挑一个喜欢的模式开始练习，错题清零、记忆更牢</p>
+      </div>
+      <div class="hub-grid" id="hubGrid">
+        <button class="hub-card focusable" data-action="start-study" data-focus="due">
+          <div class="hub-card-head"><span class="hub-card-emoji">⏰</span><span class="hub-card-badge" id="hubDueBadge">0 道到期</span></div>
+          <div class="hub-card-title">今日记忆复习</div>
+          <div class="hub-card-desc">艾宾浩斯间隔重复，在遗忘临界点及时巩固</div>
+        </button>
+        <button class="hub-card focusable" data-action="start-study" data-focus="wrong" data-memorize="1">
+          <div class="hub-card-head"><span class="hub-card-emoji">📕</span><span class="hub-card-badge hub-badge-warn" id="hubWrongBadge">0 道错题</span></div>
+          <div class="hub-card-title">错题先背再测</div>
+          <div class="hub-card-desc">先看答案与解析背诵一遍，再立即闯关清零</div>
+        </button>
+        <button class="hub-card focusable" data-action="start-study" data-focus="memorize">
+          <div class="hub-card-head"><span class="hub-card-emoji">🗂️</span><span class="hub-card-badge" id="hubCardBadge">闪卡速记</span></div>
+          <div class="hub-card-title">闪卡背诵模式</div>
+          <div class="hub-card-desc">先独立回想再翻面核对，四档记忆程度自评</div>
+        </button>
+        <button class="hub-card focusable" data-action="start-study" data-focus="quiz">
+          <div class="hub-card-head"><span class="hub-card-emoji">🎯</span><span class="hub-card-badge">随时挑战</span></div>
+          <div class="hub-card-title">闯关刷题练习</div>
+          <div class="hub-card-desc">自由刷题自测，挑战更高连续答对纪录</div>
+        </button>
+      </div>
+      <div class="hub-foot">
+        <div class="hub-actions" id="hubActions"></div>
+        <p class="hub-note" id="hubNote"></p>
+      </div>
+    </div>
+  </section>
   <section class="screen" id="screen-lock">
     <div class="lock-wrap"><div class="lock-badge" id="lockIcon"></div><h1 class="lock-title" id="lockTitle"></h1><p class="lock-desc" id="lockDesc"></p><div class="lock-actions" id="lockActions"></div><p class="lock-note" id="lockNote"></p></div>
   </section>

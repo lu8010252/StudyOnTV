@@ -17,7 +17,7 @@ object SystemSettingsGuard {
     private val KNOWN = setOf("com.android.settings", "com.android.tv.settings", "com.google.android.tv.settings")
     const val GRACE_MS = 120000L
 
-    private var resolved = false
+    @Volatile private var resolved = false
     private var resolvedPackage: String? = null
 
     /** 家长确认身份后的放行截止时间（elapsedRealtime） */

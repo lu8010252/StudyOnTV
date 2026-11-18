@@ -12,7 +12,7 @@
         "data_description": {
           "host": "IP address or hostname of the TV. Do not include http://, a path or a port.",
           "port": "HTTP port of the device panel (default 8099).",
-          "token": "Token starting with sotv_. The read permission is required."
+          "token": "Token starting with sotv_. Read permission is required; enable Control permission to use control buttons."
         }
       }
     },
@@ -75,6 +75,23 @@
     "binary_sensor": {
       "device_online": {
         "name": "Device online"
+      }
+    },
+    "button": {
+      "unlock_30m": {
+        "name": "Unlock for 30 minutes"
+      },
+      "lock_now": {
+        "name": "Lock now"
+      },
+      "cancel_override": {
+        "name": "Resume rule control"
+      },
+      "credit_add_10m": {
+        "name": "Reward 10 minutes"
+      },
+      "credit_sub_10m": {
+        "name": "Deduct 10 minutes"
       }
     }
   }

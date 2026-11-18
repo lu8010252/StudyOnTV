@@ -27,7 +27,11 @@ export default function AiSettings({ sessionId }: { sessionId: number }) {
   const [open, setOpen] = useState(false);
   const settings = useQuery({ queryKey: ['grading', sessionId], queryFn: () => api('/api/grading') });
   const data = settings.data;
-  const ready = !!(data?.endpoint && data?.model && (data?.hasKey || data?.provider === 'ollama' || data?.mode === 'ai'));
+  const ready = !!(
+    data?.endpoint &&
+    data?.model &&
+    (data?.hasKey || data?.provider === 'ollama' || data?.provider === 'custom')
+  );
 
   return (
     <>
@@ -50,7 +54,11 @@ export default function AiSettings({ sessionId }: { sessionId: number }) {
               <ItemContent>
                 <ItemTitle>当前状态</ItemTitle>
                 <ItemDescription className="text-xs">
-                  {data?.hasKey ? 'API Key 已保存在本机。' : '还没有保存 API Key。'}
+                  {data?.hasKey
+                    ? 'API Key 已保存在本机。'
+                    : data?.provider === 'ollama'
+                      ? '本地局域网模型（无需 API Key）。'
+                      : '还没有保存 API Key。'}
                 </ItemDescription>
               </ItemContent>
             </Item>
@@ -59,7 +67,7 @@ export default function AiSettings({ sessionId }: { sessionId: number }) {
                 <ItemTitle>服务商 / 模型</ItemTitle>
                 <ItemDescription className="line-clamp-none text-xs">
                   {data?.model
-                    ? `${builtinProviders.find(p => p.id === data.provider)?.name || data.provider || '自定义'} · ${data.model}`
+                    ? `${builtinProviders.find(p => p.id === data.provider)?.name || data.provider || '自定义'} · ${data.model}${data.vision ? ' · 支持手写图像' : ''}`
                     : 'DeepSeek、通义千问、智谱、Kimi、豆包或 Ollama'}
                 </ItemDescription>
               </ItemContent>

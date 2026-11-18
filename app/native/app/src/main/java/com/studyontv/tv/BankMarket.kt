@@ -142,14 +142,25 @@ object BankMarket {
     }
 
     private fun download(raw: String): String {
-        val url = validate(raw)
-        val connection = url.openConnection() as HttpURLConnection
+        var current = validate(raw)
+        var connection = current.openConnection() as HttpURLConnection
         return try {
-            connection.connectTimeout = 8_000
-            connection.readTimeout = 15_000
-            connection.instanceFollowRedirects = true
-            connection.setRequestProperty("User-Agent", "StudyOnTV/${BuildConfig.VERSION_NAME}")
-            val code = connection.responseCode
+            var code: Int
+            var redirects = 0
+            while (true) {
+                connection.connectTimeout = 8_000
+                connection.readTimeout = 15_000
+                connection.instanceFollowRedirects = false
+                connection.setRequestProperty("User-Agent", "StudyOnTV/${BuildConfig.VERSION_NAME}")
+                code = connection.responseCode
+                if (code !in listOf(301, 302, 303, 307, 308)) break
+                require(redirects++ < 5) { "重定向次数过多" }
+                val loc = connection.getHeaderField("Location") ?: break
+                val next = validate(URL(current, loc).toString())
+                connection.disconnect()
+                current = next
+                connection = current.openConnection() as HttpURLConnection
+            }
             require(code in 200..299) { "服务器返回 HTTP $code" }
             connection.inputStream.use { input ->
                 val buffer = ByteArrayOutputStream()

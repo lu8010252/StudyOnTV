@@ -44,10 +44,9 @@ check_once() {
     CURRENT=$(adb_run shell 'settings get secure enabled_accessibility_services') || { report false accessibility_unavailable none; return 2; }
     NORMALIZED=$(printf '%s' "$CURRENT" | tr -d '\r\n' | awk -F: '
         { for(i=1;i<=NF;i++) if($i!="" && $i!="null" && !seen[$i]++) { if(out!="") out=out ":"; out=out $i } } END { print out }')
-    case ":$NORMALIZED:" in *":$COMPONENT:"*) A11Y=true ;; esac
-    if [ "$PKG" = com.studyontv.tv ]; then
-        case ":$NORMALIZED:" in *":com.studyontv.tv/.WatchAccessibilityService:"*) A11Y=true ;; esac
-    fi
+    case ":$NORMALIZED:" in
+        *":$COMPONENT:"*|*":$PKG/.WatchAccessibilityService:"*|*":$PKG/$PKG.WatchAccessibilityService:"*) A11Y=true ;;
+    esac
     if [ "$MODE" = status ]; then report true diagnostic none; return 0; fi
     case "$AWAKE" in false) report true sleeping none; return 0 ;; true) ;; *) report true unknown_power none; return 0 ;; esac
     ACTION=none

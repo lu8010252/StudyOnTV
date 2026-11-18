@@ -49,8 +49,11 @@ def own_accessibility(component: str, package: str) -> bool:
     if "/" not in component:
         return False
     owner, cls = component.split("/", 1)
-    full = owner + cls if cls.startswith(".") else cls
-    return owner == package and full == SERVICE
+    if owner != package:
+        return False
+    if cls.startswith("."):
+        return cls == ".WatchAccessibilityService"
+    return cls in {SERVICE, f"{package}.WatchAccessibilityService"}
 
 
 def wakefulness(raw: str) -> bool | None:

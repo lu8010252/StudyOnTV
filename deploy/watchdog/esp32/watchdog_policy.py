@@ -60,9 +60,11 @@ def is_own_service(item, package):
     if "/" not in item:
         return False
     owner, cls = item.split("/", 1)
+    if owner != package:
+        return False
     if cls.startswith("."):
-        cls = owner + cls
-    return owner == package and cls == SERVICE
+        return cls == ".WatchAccessibilityService"
+    return cls in (SERVICE, package + ".WatchAccessibilityService")
 
 
 def foreground_service(text, package):

@@ -12,7 +12,8 @@ param(
     [switch]$RepairAccessibility
 )
 $ErrorActionPreference = 'Stop'
-$watchdogScript = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../../scripts/device-watchdog.py'))
+$repoRoot = Join-Path (Join-Path (Join-Path $PSScriptRoot '..') '..') '..'
+$watchdogScript = [IO.Path]::GetFullPath((Join-Path (Join-Path $repoRoot 'scripts') 'device-watchdog.py'))
 $watchdogArgs = @($watchdogScript, $Mode, '--serial', $Serial, '--package', $Package,
     '--interval', [string]$Interval, '--adb', $AdbPath)
 if ($LogFile) { $watchdogArgs += @('--log-file', $LogFile) }

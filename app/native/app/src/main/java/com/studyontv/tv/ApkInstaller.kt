@@ -75,20 +75,25 @@ object ApkInstaller {
                 setRequestProperty("User-Agent", Pgyer.USER_AGENT)
                 setRequestProperty("Accept", "*/*")
             }
-            // 手动跟随重定向（部分 HTTP→HTTPS 或 302 跳转 HttpURLConnection 不处理）
-            var finalConn: HttpURLConnection = conn!!
-            var redirectCode = finalConn.responseCode
+            // 手动跟随重定向（部分 HTTP→HTTPS 或 302/307/308 跳转 HttpURLConnection 不处理）
+            var redirectCode = conn!!.responseCode
             var redirectCount = 0
-            while (redirectCode in 301..303 && redirectCount++ < 5) {
-                val loc = finalConn.getHeaderField("Location") ?: break
-                finalConn.disconnect()
-                finalConn = URL(loc).openConnection() as HttpURLConnection
-                finalConn.connectTimeout = 12000; finalConn.readTimeout = 60000
-                finalConn.instanceFollowRedirects = true
-                finalConn.setRequestProperty("User-Agent", Pgyer.USER_AGENT)
-                redirectCode = finalConn.responseCode
+            while (redirectCode in listOf(301, 302, 303, 307, 308) && redirectCount++ < 5) {
+                val loc = conn!!.getHeaderField("Location") ?: break
+                val nextUrl = URL(conn!!.url, loc)
+                if (nextUrl.protocol !in listOf("http", "https")) {
+                    lastError = "不支持的重定向协议：${nextUrl.protocol}"
+                    return null
+                }
+                conn!!.disconnect()
+                conn = (nextUrl.openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 12000; readTimeout = 60000
+                    instanceFollowRedirects = false
+                    setRequestProperty("User-Agent", Pgyer.USER_AGENT)
+                    setRequestProperty("Accept", "*/*")
+                }
+                redirectCode = conn!!.responseCode
             }
-            conn = finalConn
             if (redirectCode !in 200..299) { lastError = "下载失败（HTTP $redirectCode）"; return null }
             val total = conn!!.getHeaderField("Content-Length")?.toLongOrNull() ?: -1L
             val digest = java.security.MessageDigest.getInstance("SHA-256")
@@ -157,12 +162,13 @@ object ApkInstaller {
      * 少数定制电视的 PackageInstaller 有问题（创建会话抛异常），这时退回 ACTION_VIEW 交给系统安装器。
      */
     private fun installSession(ctx: Context, file: File): Boolean {
+        var sessionId = -1
+        val installer = ctx.packageManager.packageInstaller
         try {
-            val installer = ctx.packageManager.packageInstaller
             val params = android.content.pm.PackageInstaller.SessionParams(
                 android.content.pm.PackageInstaller.SessionParams.MODE_FULL_INSTALL)
             params.setAppPackageName(ctx.packageName)
-            val sessionId = installer.createSession(params)
+            sessionId = installer.createSession(params)
             installer.openSession(sessionId).use { session ->
                 file.inputStream().use { input ->
                     session.openWrite("base.apk", 0, file.length()).use { output ->
@@ -181,6 +187,7 @@ object ApkInstaller {
             Diag.info("Install", "install session committed size=${file.length()} api=${Build.VERSION.SDK_INT}")
             return true
         } catch (e: Exception) {
+            if (sessionId >= 0) try { installer.abandonSession(sessionId) } catch (_: Exception) { }
             Diag.warn("Install", "session install failed, falling back to ACTION_VIEW: ${e.javaClass.simpleName} ${e.message}")
             lastError = "安装会话失败：" + (e.message ?: e.javaClass.simpleName).take(80)
             return false

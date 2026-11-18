@@ -506,7 +506,7 @@ object FeatureRegression {
                 old.writableDatabase.version = 7
             }
             LocalStore(context, v7).use { migrated ->
-                check(migrated.readableDatabase.version == 9)
+                check(migrated.readableDatabase.version == 10)
                 val stats = migrated.questions().getJSONObject(0).getJSONObject("stats")
                 check(stats.getInt("answered") == 1 && stats.getInt("correct") == 1) { "升级不能丢掉旧统计: $stats" }
                 check(stats.isNull("lastCorrect")) { "旧库没有最近一次对错，应当当作未作答: $stats" }
@@ -526,11 +526,36 @@ object FeatureRegression {
                 old.writableDatabase.version = 8
             }
             LocalStore(context, v8).use { migrated ->
-                check(migrated.readableDatabase.version == 9)
+                check(migrated.readableDatabase.version == 10)
                 check(migrated.idsInBank("老题库") == listOf("legacy")) { "升级时要按 details 回填题库列" }
                 check(migrated.questionPage(bank = "老题库", type = "multiple").getInt("total") == 1) { "升级后题库筛选要能用" }
             }
         } finally { context.deleteDatabase(v8) }
+        // 第 10 版：question_stats 改为按孩子复合主键，且内联 data:image 自动落盘为本地媒体文件
+        val v9 = "migration-v9-regression.db"
+        context.deleteDatabase(v9)
+        try {
+            val tinyPng = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            LocalStore(context, v9).use { old ->
+                old.writableDatabase.execSQL("DROP TABLE question_stats")
+                old.writableDatabase.execSQL("CREATE TABLE question_stats(qid TEXT PRIMARY KEY, presented INTEGER NOT NULL DEFAULT 0, answered INTEGER NOT NULL DEFAULT 0, correct INTEGER NOT NULL DEFAULT 0, last_at INTEGER NOT NULL DEFAULT 0, last_correct INTEGER NOT NULL DEFAULT -1)")
+                old.writableDatabase.execSQL(
+                    "INSERT INTO questions(id,subject,level,difficulty,stem,options,answer,tip,enabled,created_at,details,bank,type) VALUES('img-q','数学','一年级',2,'看图','[\"A\",\"B\"]',0,'',1,0,?,'默认题库','single')",
+                    arrayOf(JSONObject().put("type", "single").put("image", tinyPng).toString())
+                )
+                old.writableDatabase.execSQL("INSERT INTO question_stats(qid,presented,answered,correct,last_correct) VALUES('img-q',3,2,1,0)")
+                old.writableDatabase.version = 9
+            }
+            LocalStore(context, v9).use { migrated ->
+                check(migrated.readableDatabase.version == 10)
+                val q = migrated.questions().getJSONObject(0)
+                check(MediaStore.isMediaPath(q.optString("image"))) { "升级后内联配图应迁出到本地媒体目录: ${q.optString("image")}" }
+                check(q.getJSONObject("stats").getInt("answered") == 2) { "默认孩子的旧统计必须保留" }
+                val sibling = migrated.createChild("弟弟").getString("id")
+                migrated.switchChild(sibling)
+                check(migrated.questions().getJSONObject(0).getJSONObject("stats").getInt("answered") == 0) { "新孩子的统计应独立从零开始" }
+            }
+        } finally { context.deleteDatabase(v9) }
     }
     private fun remoteSync(store: LocalStore) {
         val server = java.net.ServerSocket(0, 4, java.net.InetAddress.getByName("127.0.0.1"))

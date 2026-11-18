@@ -98,8 +98,8 @@ export default function TimePoints({points,exempt,onPoints,onExempt}:{
        </Select>
       </div>
       {item.mode==='counted'&&<div className="space-y-1"><span className="text-xs text-muted-foreground">时段每日上限 · 分钟</span>
-       <Input className="h-8 w-24 text-center" type="number" min={1} max={480} aria-label={'网课时段 '+(index+1)+' 每日上限分钟'} value={item.dailyMinutes??60}
-        onChange={e=>update(index,{dailyMinutes:Number(e.target.value)})}
+       <Input className="h-8 w-24 text-center" type="number" min={1} max={480} aria-label={'网课时段 '+(index+1)+' 每日上限分钟'} value={item.dailyMinutes??''}
+        onChange={e=>{const raw=e.target.value;update(index,{dailyMinutes:raw===''?undefined:Number(raw)});}}
         onBlur={e=>update(index,{dailyMinutes:Math.min(480,Math.max(1,Number(e.target.value)||1))})}/>
       </div>}
      </div>

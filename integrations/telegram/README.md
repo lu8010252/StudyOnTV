@@ -6,7 +6,8 @@
 /unlock 30   临时解锁 30 分钟
 /lock        立即锁定
 /cancel      取消临时解锁或暂停
-/status      查看剩余时间和今日统计
+/credit 10   奖励或扣减今日时长（如 10 或 -10）
+/status      查看当前孩子、剩余时间和今日统计
 ```
 
 实现是一个零依赖的 Cloudflare Worker（`worker.js`），只做四件事：校验 Telegram 的 webhook 密钥、检查 chat 白名单、调用家里的设备接口、把结果发回 Telegram。
@@ -120,7 +121,8 @@ curl "https://api.telegram.org/bot<BOT_TOKEN>/getWebhookInfo"
 | `/unlock 60` | 解锁 60 分钟，范围 1–1440 | 同上 |
 | `/lock` | 立即锁定，直到 `/cancel` | `POST /api/remote`，`{"action":"lock","minutes":0}` |
 | `/cancel` | 取消临时解锁或暂停 | `POST /api/remote`，`{"action":"cancel"}` |
-| `/status` | 查看剩余时间、今日观看和答题统计 | `GET /api/state` |
+| `/credit 10` | 奖励或扣减今日余额（范围 -480 到 480 的非零整数） | `POST /api/remote`，`{"action":"credit","minutes":10}` |
+| `/status` | 查看当前孩子、剩余时间、今日观看和答题统计 | `GET /api/state` |
 | `/start`、`/help` | 显示帮助 | 不访问设备 |
 
 常见错误提示：

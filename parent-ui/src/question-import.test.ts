@@ -95,4 +95,50 @@ assert.equal(lettered.k,0);
 assert.equal(normalizeBank([{question:'a',options:['x','y'],answer:'A',language:'zh_TW'}]).items[0].language,'zh-TW');
 assert.equal(normalizeBank([{question:'a',options:['x','y'],answer:'A',language:'klingon'}]).items[0].language,'');
 
+// 17. 导出 -> 再导入往返一致性：保留多行富文本列表、最多 4 张配图、纯图片选项与暂停状态 enabled: false
+const roundTripInput={
+ version:2,
+ items:[
+  {
+   id:'q-rich-1',
+   type:'single',
+   q:'阅读下面条件：\r\n- **甲** 比 **乙** 大 2 岁\r\n- ==两人年龄之和== 为 $18$',
+   a:['','',''],
+   optionImages:['data:image/webp;base64,AAA','data:image/webp;base64,BBB','/api/media/opt-c.webp'],
+   k:1,
+   difficulty:3,
+   tip:'解题步骤：\n- 设乙为 $x$\n- 则 $2x+2=18$',
+   images:['/api/media/1.webp','https://example.com/2.png','data:image/jpeg;base64,333','https://example.com/4.png','https://example.com/5-ignored.png'],
+   enabled:false
+  },
+  {
+   id:'q-subj-1',
+   type:'subjective',
+   q:'证明勾股定理：\n- 画出直角三角形\n- 写出推导过程',
+   modelAnswer:'第一步：构造正方形\r\n第二步：面积恒等式 $a^2+b^2=c^2$',
+   rubric:'图形正确 40 分\n推导严密 60 分',
+   difficulty:4,
+   enabled:true
+  }
+ ]
+};
+const roundTrip=normalizeBank(parseBankJson(JSON.stringify(roundTripInput)));
+assert.deepEqual(roundTrip.issues,[]);
+assert.equal(roundTrip.items.length,2);
+const rt0=roundTrip.items[0];
+assert.equal(rt0.q,'阅读下面条件：\n- **甲** 比 **乙** 大 2 岁\n- ==两人年龄之和== 为 $18$');
+assert.deepEqual(rt0.a,['','','']);
+assert.deepEqual(rt0.optionImages,['data:image/webp;base64,AAA','data:image/webp;base64,BBB','/api/media/opt-c.webp']);
+assert.equal(rt0.k,1);
+assert.equal(rt0.tip,'解题步骤：\n- 设乙为 $x$\n- 则 $2x+2=18$');
+assert.equal(rt0.images.length,4);
+assert.equal(rt0.image,'/api/media/1.webp');
+assert.equal(rt0.enabled,false);
+
+const rt1=roundTrip.items[1];
+assert.equal(rt1.q,'证明勾股定理：\n- 画出直角三角形\n- 写出推导过程');
+assert.equal(rt1.modelAnswer,'第一步：构造正方形\n第二步：面积恒等式 $a^2+b^2=c^2$');
+assert.equal(rt1.rubric,'图形正确 40 分\n推导严密 60 分');
+assert.equal(rt1.enabled,undefined);
+
 console.log('question-import tests passed');

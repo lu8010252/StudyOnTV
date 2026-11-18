@@ -16,8 +16,42 @@ object AiTtsRegression {
         grading.close()
         context.deleteDatabase("ai-tts-regression.db")
         languageFallback()
+        wavParsing()
         failureNotice(context)
         ttsProbe(context)
+    }
+
+    /**
+     * DeepSeek 朗读返回 WAV：华为等设备的 MediaPlayer 播不了（Prepare failed status=0x1），
+     * 改成自己解析 PCM 交给 AudioTrack。这里断言解析器认标准 WAV、容忍附带 chunk、拒绝非音频。
+     */
+    private fun wavParsing() {
+        fun wav(rate: Int, channels: Int, bits: Int, frames: Int, extraChunk: Boolean = false): ByteArray {
+            val dataSize = frames * channels * bits / 8
+            val out = java.io.ByteArrayOutputStream()
+            fun le32(v: Int) { out.write(v and 0xFF); out.write(v shr 8 and 0xFF); out.write(v shr 16 and 0xFF); out.write(v shr 24 and 0xFF) }
+            fun le16(v: Int) { out.write(v and 0xFF); out.write(v shr 8 and 0xFF) }
+            out.write("RIFF".toByteArray()); le32(36 + dataSize); out.write("WAVE".toByteArray())
+            if (extraChunk) { out.write("LIST".toByteArray()); le32(4); out.write(byteArrayOf(1, 2, 3, 4)) }
+            out.write("fmt ".toByteArray()); le32(16); le16(1); le16(channels); le32(rate)
+            le32(rate * channels * bits / 8); le16(channels * bits / 8); le16(bits)
+            out.write("data".toByteArray()); le32(dataSize); out.write(ByteArray(dataSize))
+            return out.toByteArray()
+        }
+
+        val mono = WavAudio.parse(wav(16000, 1, 16, 800))
+        check(mono != null) { "标准 16 位 PCM WAV 必须能解析" }
+        check(mono!!.sampleRate == 16000 && mono.channels == 1 && mono.bitsPerSample == 16)
+        check(mono.frames == 800L && mono.data.size == 1600) { "帧数 / PCM 长度要按声道和位深算对" }
+
+        val stereo = WavAudio.parse(wav(24000, 2, 16, 120, extraChunk = true))
+        check(stereo != null && stereo.channels == 2 && stereo.frames == 120L) { "带 LIST 等附加 chunk 的 WAV 也要能解析" }
+
+        check(WavAudio.parse(wav(16000, 1, 8, 100)) == null) { "非 16 位 PCM 交给 MediaPlayer，不自己播" }
+        check(WavAudio.parse(wav(16000, 1, 16, 0)) == null) { "没有音频数据时不能当成可播放" }
+        check(WavAudio.parse("{\"error\":\"insufficient balance\"}".toByteArray()) == null)
+        check(!WavAudio.isWave("{\"error\":\"x\"}".toByteArray())) { "JSON 错误体不能当成音频" }
+        check(WavAudio.isWave(wav(16000, 1, 16, 10)))
     }
 
     /** #128：引擎探测无论有没有引擎都要给出可读结果，按超时返回，不抛异常 */
@@ -174,6 +208,9 @@ object AiTtsRegression {
 
     /** 失败信息结构（桥方法 speechStatus / SOTV_SPEECH_NOTICE 都用它）+ 无引擎时不崩 */
     private fun failureNotice(context: Context) {
+        // 设备上可能留着云端朗读的设置（手工测过 DeepSeek）：语言回落这条要固定走系统引擎，
+        // 否则 xx-XX 会被送去云端合成，401 之类的原因混进来，和 #87 本身无关。
+        runCatching { SpeechReader.save(DeviceRuntime.store, JSONObject().put("mode", "system")) }
         val notice = SpeechReader.failureNotice("system", "language-unavailable", "ja-JP", "", true, "这台设备的系统语音不支持 ja-JP")
         check(!notice.getBoolean("ok"))
         check(notice.getString("reason") == "language-unavailable")

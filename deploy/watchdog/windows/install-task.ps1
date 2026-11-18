@@ -24,15 +24,23 @@ if ([string]::IsNullOrWhiteSpace($Serial)) { throw '-Serial is required when ins
 # Scheduled tasks have a restricted PATH: store absolute executable paths.
 $pythonExecutable = (Get-Command $PythonPath -CommandType Application -ErrorAction Stop).Source
 $adbExecutable = (Get-Command $AdbPath -CommandType Application -ErrorAction Stop).Source
-$launcher = Join-Path $PSScriptRoot 'start-watchdog.ps1'
-$logFile = Join-Path $env:LOCALAPPDATA 'StudyOnTV/watchdog.log'
-foreach ($taskPath in @($pythonExecutable, $adbExecutable, $launcher, $logFile)) {
+$pwshCmd = Get-Command pwsh.exe -CommandType Application -ErrorAction SilentlyContinue
+$shellExecutable = if ($pwshCmd) {
+    $pwshCmd.Source
+} else {
+    $psDir = Join-Path (Join-Path (Join-Path $env:SystemRoot 'System32') 'WindowsPowerShell') 'v1.0'
+    Join-Path $psDir 'powershell.exe'
+}
+$launcher = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'start-watchdog.ps1'))
+$logDir = Join-Path $env:LOCALAPPDATA 'StudyOnTV'
+$logFile = [IO.Path]::GetFullPath((Join-Path $logDir 'watchdog.log'))
+foreach ($taskPath in @($pythonExecutable, $adbExecutable, $shellExecutable, $launcher, $logFile)) {
     if ($taskPath -match '["`\r\n]') { throw 'Executable paths cannot contain quotes, backticks or newlines.' }
 }
 $arguments = '-NoProfile -NonInteractive -WindowStyle Hidden -File "{0}" -Serial "{1}" -Package "{2}" -Interval {3} -AdbPath "{4}" -PythonPath "{5}" -LogFile "{6}"' -f $launcher,$Serial,$Package,$Interval,$adbExecutable,$pythonExecutable,$logFile
 if ($RepairAccessibility) { $arguments += ' -RepairAccessibility' }
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-$action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument $arguments
+$action = New-ScheduledTaskAction -Execute $shellExecutable -Argument $arguments
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $identity
 $principal = New-ScheduledTaskPrincipal -UserId $identity -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries

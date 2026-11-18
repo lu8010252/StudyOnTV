@@ -17,6 +17,7 @@ const HELP_TEXT = [
   "/unlock 30  临时解锁 30 分钟（1–1440，默认 30）",
   "/lock       立即锁定，直到手动取消",
   "/cancel     取消当前的临时解锁或暂停",
+  "/credit 10  奖励或扣减今日时长（-480–480 非零整数，如 10 或 -10）",
   "/status     查看剩余时间和今日学习统计",
 ].join("\n");
 
@@ -127,6 +128,23 @@ async function handleCommand(env, text) {
       });
       return "已取消当前的临时解锁 / 暂停，按当前规则恢复管控。";
 
+    case "/credit": {
+      const raw = parts[1];
+      const minutes = raw === undefined ? NaN : Number(raw);
+      if (!Number.isInteger(minutes) || minutes === 0 || minutes < -480 || minutes > 480) {
+        return "用法：/credit 10 或 /credit -10\n分钟数必须是 -480 到 480 之间的非零整数。";
+      }
+      const data = await deviceFetch(env, "/api/remote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "credit", minutes }),
+      });
+      const remaining = data && data.learning ? data.learning.remainingSeconds : undefined;
+      const remainingText = typeof remaining === "number" ? `，剩余可看 ${formatDuration(remaining)}` : "";
+      const actionText = minutes > 0 ? `已奖励 ${minutes} 分钟` : `已扣减 ${Math.abs(minutes)} 分钟`;
+      return `${actionText}${remainingText}。`;
+    }
+
     case "/status": {
       const state = await deviceFetch(env, "/api/state", { method: "GET" });
       return formatState(state);
@@ -150,13 +168,23 @@ function formatState(state) {
   const correct = Number(today.correct || 0);
   const accuracy = Number(today.accuracy || 0);
 
-  const lines = [
+  const children = Array.isArray(state && state.children) ? state.children : [];
+  const activeChildId = state && typeof state.activeChild === "string" ? state.activeChild : "";
+  const activeChildItem =
+    children.find((item) => item && item.id === activeChildId) ||
+    children.find((item) => item && item.active);
+  const activeChildName =
+    activeChildItem && typeof activeChildItem.name === "string" ? activeChildItem.name.trim() : "";
+
+  const lines = [];
+  if (activeChildName) lines.push(`当前孩子：${activeChildName}`);
+  lines.push(
     `学习状态：${reasonText(learning.reason)}`,
     `剩余可看：${formatDuration(learning.remainingSeconds)}`,
     `今日已看：${used} 分钟`,
     `今日答题：答对 ${correct} / ${answered} 题（准确率 ${accuracy}%）`,
     `完成答题组：${rounds} 组`,
-  ];
+  );
   if (learning.nextAtText) lines.push(`下次可用：${learning.nextAtText}`);
 
   const override = learning.override;

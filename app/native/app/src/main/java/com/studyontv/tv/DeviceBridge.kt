@@ -87,6 +87,8 @@ open class DeviceBridge(protected val activity: Activity, private val connection
             AdminAuth.markVerified()
             val status = DeviceRuntime.learning.remote("unlock", QUIZ_UNLOCK_MINUTES, "quiz")
             Diag.info("Auth", "家长在锁定页临时解锁 $QUIZ_UNLOCK_MINUTES 分钟")
+            GateService.hideGates()
+            GateService.refreshNow()
             JSONObject().put("ok", true).put("status", status).toString()
         } catch (e: Exception) {
             Diag.warn("Auth", "quiz unlock failed: ${e.message}")

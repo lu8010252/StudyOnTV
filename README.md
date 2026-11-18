@@ -11,6 +11,9 @@
 [![Platform](https://img.shields.io/badge/Android-5.0%2B-3DDC84?style=for-the-badge&logo=android)](https://github.com/chadyi/StudyOnTV)
 [![License](https://img.shields.io/badge/license-Personal%20Use%20Only-orange?style=for-the-badge)](./LICENSE)
 
+[![Trendshift: #1 Kotlin Repository of the Day](https://trendshift.io/api/badge/trendshift/repositories/338664/daily?language=Kotlin)](https://trendshift.io/repositories/338664)
+[![Trendshift: #9 Kotlin Repository of the Week](https://trendshift.io/api/badge/trendshift/repositories/338664/weekly?language=Kotlin)](https://trendshift.io/repositories/338664)
+
 </div>
 
 ---

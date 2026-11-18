@@ -1,8 +1,18 @@
-.question-media { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-bottom: 18px; }
+.question-media { display: -webkit-flex; display: flex; -webkit-flex-wrap: wrap; flex-wrap: wrap; -webkit-align-items: center; align-items: center; margin: 0 -16px 2px 0; }
+.question-media > * { margin: 0 16px 16px 0; }
 .question-media:empty { display: none; }
-.question-media-image { display: block; max-width: 100%; max-height: 28vh; object-fit: contain; border-radius: 12px; }
+.question-media-image { display: block; max-width: 100%; max-height: 28vh; object-fit: contain; border-radius: 12px; background: rgba(255,255,255,.04); }
+.question-media-image.is-multi { max-width: calc(50% - 16px); max-height: 24vh; }
 .question-media audio { max-width: 100%; }
-html.tv-device #stage { overflow-y: auto; max-height: calc(100vh - 9rem); }
+.question, .fb-tip { white-space: pre-wrap; }
+.sotv-mark { background: rgba(255,176,32,.25); color: #FFD166; padding: 0 .22em; border-radius: .25em; }
+html:not(.tv-device) .sotv-mark, html.tv-device[data-mode="light"] .sotv-mark { background: rgba(245,158,11,.22); color: #92400E; }
+html:not(.tv-device)[data-mode="dark"] .sotv-mark { background: rgba(255,176,32,.25); color: #FFD166; }
+.sotv-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .88em; background: rgba(255,255,255,.08); padding: .08em .35em; border-radius: .28em; }
+html:not(.tv-device) .sotv-code, html.tv-device[data-mode="light"] .sotv-code { background: rgba(0,0,0,.06); }
+html:not(.tv-device)[data-mode="dark"] .sotv-code { background: rgba(255,255,255,.08); }
+.sotv-li { display: inline-block; padding-left: .2em; }
+html.tv-device #stage { overflow-y: auto; max-height: calc(100vh - 10rem); }
 .btn:disabled { opacity: .65; cursor: default; }
 html:not(.tv-device) .question { font-size: calc(28px * var(--learn-scale, 1)); }
 html:not(.tv-device) .question.long { font-size: calc(23px * var(--learn-scale, 1)); }
@@ -10,8 +20,250 @@ html:not(.tv-device) .question.longer { font-size: calc(19px * var(--learn-scale
 html:not(.tv-device) .opt-text, html:not(.tv-device) .written-answer { font-size: calc(18px * var(--learn-scale, 1)); }
 html:not(.tv-device) .fb-answer, html:not(.tv-device) .fb-tip { font-size: calc(16px * var(--learn-scale, 1)); }
 @media (min-width: 900px) {
- html:not(.tv-device) .question { font-size: calc(40px * var(--learn-scale, 1)); }
- html:not(.tv-device) .question.long { font-size: calc(32px * var(--learn-scale, 1)); }
- html:not(.tv-device) .question.longer { font-size: calc(26px * var(--learn-scale, 1)); }
- html:not(.tv-device) .opt-text { font-size: calc(24px * var(--learn-scale, 1)); }
+  html:not(.tv-device) .question { font-size: calc(40px * var(--learn-scale, 1)); }
+  html:not(.tv-device) .question.long { font-size: calc(32px * var(--learn-scale, 1)); }
+  html:not(.tv-device) .question.longer { font-size: calc(26px * var(--learn-scale, 1)); }
+  html:not(.tv-device) .opt-text { font-size: calc(24px * var(--learn-scale, 1)); }
+}
+.opt-body { display: -webkit-flex; display: flex; -webkit-flex-direction: column; flex-direction: column; min-width: 0; -webkit-flex: 1; flex: 1; }
+.opt-body > * + * { margin-top: 8px; }
+.opt-image { display: block; max-width: 100%; max-height: 14vh; object-fit: contain; border-radius: 10px; background: rgba(255,255,255,.04); }
+
+/* =====================================================================
+ * 自主学习中心 (#screen-hub) — 兼容 Android 5+ WebView (margin 间距回退)
+ * ===================================================================== */
+.hub-wrap {
+  width: 100%; max-width: 144rem; margin: 0 auto;
+  display: -webkit-flex; display: flex;
+  -webkit-flex-direction: column; flex-direction: column;
+  -webkit-justify-content: center; justify-content: center;
+}
+.hub-top {
+  display: -webkit-flex; display: flex;
+  -webkit-flex-wrap: wrap; flex-wrap: wrap;
+  -webkit-align-items: center; align-items: center;
+  -webkit-justify-content: space-between; justify-content: space-between;
+  margin-bottom: 2.4rem;
+}
+.hub-stats {
+  display: -webkit-flex; display: flex;
+  -webkit-flex-wrap: wrap; flex-wrap: wrap;
+  -webkit-align-items: center; align-items: center;
+}
+.hub-stat {
+  display: inline-block;
+  margin: 0 1.4rem 1rem 0;
+  padding: .9rem 1.8rem;
+  border-radius: 999px;
+  font-size: 1.9rem; font-weight: 600;
+  background: rgba(255,255,255,.08);
+  color: #E8E8E8;
+}
+.hub-stat-streak { background: rgba(255,152,0,.18); color: #FFB74D; }
+.hub-children {
+  display: -webkit-flex; display: flex;
+  -webkit-flex-wrap: wrap; flex-wrap: wrap;
+  -webkit-align-items: center; align-items: center;
+}
+.hub-child-btn {
+  margin: 0 1rem 1rem 0;
+  padding: .8rem 1.8rem !important;
+  font-size: 1.8rem !important;
+  border-radius: 999px !important;
+}
+.hub-heading { margin-bottom: 3rem; }
+.hub-title { margin: 0 0 .8rem; font-size: 4.6rem; font-weight: 800; color: #F2F2F4; letter-spacing: -.01em; }
+.hub-subtitle { margin: 0; font-size: 2.1rem; color: #9A9AA2; }
+.hub-grid {
+  display: -webkit-flex; display: flex;
+  -webkit-flex-wrap: wrap; flex-wrap: wrap;
+  margin: 0 -2% 1rem 0;
+}
+.hub-card {
+  width: 48%; margin: 0 2% 2.2rem 0;
+  padding: 2.6rem 3rem;
+  border-radius: 2.2rem;
+  border: 0;
+  background: #222222;
+  color: #E8E8E8;
+  font-family: inherit;
+  text-align: left;
+  cursor: default;
+  outline: none;
+  display: -webkit-flex; display: flex;
+  -webkit-flex-direction: column; flex-direction: column;
+  -webkit-transition: -webkit-transform .18s ease, box-shadow .18s ease, background .18s ease;
+  transition: transform .18s ease, box-shadow .18s ease, background .18s ease;
+}
+.hub-card.focused {
+  background: #2A2A2A;
+  -webkit-transform: scale(1.03); transform: scale(1.03);
+  -webkit-box-shadow: inset 0 0 0 .24rem rgba(229,229,229,.78), 0 1.8rem 4rem rgba(0,0,0,.45);
+  box-shadow: inset 0 0 0 .24rem rgba(229,229,229,.78), 0 1.8rem 4rem rgba(0,0,0,.45);
+}
+.hub-card-head {
+  display: -webkit-flex; display: flex;
+  -webkit-align-items: center; align-items: center;
+  -webkit-justify-content: space-between; justify-content: space-between;
+  margin-bottom: 1.4rem;
+}
+.hub-card-emoji { font-size: 3.4rem; line-height: 1; }
+.hub-card-badge {
+  padding: .5rem 1.4rem;
+  border-radius: 999px;
+  font-size: 1.7rem; font-weight: 700;
+  background: rgba(255,255,255,.1);
+  color: #D4D4D8;
+}
+.hub-badge-warn { background: rgba(244,63,94,.2); color: #FDA4AF; }
+.hub-badge-ok { background: rgba(52,211,153,.2); color: #6EE7B7; }
+.hub-card-title { font-size: 3rem; font-weight: 700; margin-bottom: .7rem; color: inherit; }
+.hub-card-desc { font-size: 1.9rem; line-height: 1.45; color: #A3A3A3; }
+.hub-foot {
+  display: -webkit-flex; display: flex;
+  -webkit-flex-wrap: wrap; flex-wrap: wrap;
+  -webkit-align-items: center; align-items: center;
+  -webkit-justify-content: space-between; justify-content: space-between;
+  margin-top: .8rem;
+}
+.hub-actions { display: -webkit-flex; display: flex; -webkit-flex-wrap: wrap; flex-wrap: wrap; }
+.hub-note { margin: .6rem 0 0; font-size: 1.8rem; color: #8E8E96; }
+
+/* 电视浅色模式下的学习中心 */
+html.tv-device[data-mode="light"] .hub-title { color: #1E1E1E; }
+html.tv-device[data-mode="light"] .hub-subtitle, html.tv-device[data-mode="light"] .hub-card-desc, html.tv-device[data-mode="light"] .hub-note { color: #666666; }
+html.tv-device[data-mode="light"] .hub-stat { background: rgba(0,0,0,.06); color: #1E1E1E; }
+html.tv-device[data-mode="light"] .hub-stat-streak { background: rgba(245,158,11,.15); color: #B45309; }
+html.tv-device[data-mode="light"] .hub-card { background: #FFFFFF; color: #1E1E1E; -webkit-box-shadow: 0 .6rem 2rem rgba(0,0,0,.06); box-shadow: 0 .6rem 2rem rgba(0,0,0,.06); }
+html.tv-device[data-mode="light"] .hub-card.focused { -webkit-box-shadow: inset 0 0 0 .24rem rgba(30,30,30,.55), 0 1.4rem 3.4rem rgba(0,0,0,.1); box-shadow: inset 0 0 0 .24rem rgba(30,30,30,.55), 0 1.4rem 3.4rem rgba(0,0,0,.1); }
+html.tv-device[data-mode="light"] .hub-card-badge { background: #F0F0F0; color: #444444; }
+html.tv-device[data-mode="light"] .hub-badge-warn { background: #FFE4E6; color: #BE123C; }
+html.tv-device[data-mode="light"] .hub-badge-ok { background: #D1FAE5; color: #047857; }
+
+/* 手机 / 平板下的学习中心 */
+html:not(.tv-device) .hub-wrap { max-width: 100%; padding: 8px 0 32px; }
+html:not(.tv-device) .hub-top { margin-bottom: 16px; }
+html:not(.tv-device) .hub-stat { font-size: 13px; padding: 6px 12px; margin: 0 8px 8px 0; background: var(--m-surface); color: var(--m-text); border: 1px solid var(--m-line); }
+html:not(.tv-device) .hub-stat-streak { background: rgba(245,158,11,.14); color: #B45309; border-color: rgba(245,158,11,.25); }
+html:not(.tv-device)[data-mode="dark"] .hub-stat-streak { color: #FBBF24; }
+html:not(.tv-device) .hub-child-btn { font-size: 13px !important; padding: 6px 14px !important; min-height: 34px !important; margin: 0 8px 8px 0; }
+html:not(.tv-device) .hub-heading { margin-bottom: 20px; }
+html:not(.tv-device) .hub-title { font-size: 26px; color: var(--m-text); margin-bottom: 6px; }
+html:not(.tv-device) .hub-subtitle { font-size: 14px; color: var(--m-text-2); }
+html:not(.tv-device) .hub-grid { margin: 0 -8px 12px 0; }
+html:not(.tv-device) .hub-card {
+  width: calc(50% - 12px); margin: 0 12px 12px 0;
+  padding: 18px 20px; border-radius: 18px;
+  background: var(--m-surface); color: var(--m-text);
+  border: 1px solid var(--m-line);
+  box-shadow: none;
+}
+html:not(.tv-device) .hub-card:active, html:not(.tv-device) .hub-card.focused {
+  transform: none; background: var(--m-surface);
+  box-shadow: inset 0 0 0 2px var(--m-ring);
+}
+html:not(.tv-device) .hub-card-head { margin-bottom: 10px; }
+html:not(.tv-device) .hub-card-emoji { font-size: 26px; }
+html:not(.tv-device) .hub-card-badge { font-size: 12px; padding: 3px 10px; background: var(--m-surface-2); color: var(--m-text-2); }
+html:not(.tv-device) .hub-badge-warn { background: rgba(244,63,94,.14); color: #E11D48; }
+html:not(.tv-device)[data-mode="dark"] .hub-badge-warn { color: #FB7185; }
+html:not(.tv-device) .hub-badge-ok { background: rgba(16,185,129,.14); color: #059669; }
+html:not(.tv-device)[data-mode="dark"] .hub-badge-ok { color: #34D399; }
+html:not(.tv-device) .hub-card-title { font-size: 18px; margin-bottom: 4px; }
+html:not(.tv-device) .hub-card-desc { font-size: 13px; color: var(--m-text-2); }
+html:not(.tv-device) .hub-note { font-size: 13px; color: var(--m-text-2); }
+@media (max-width: 640px) {
+  html:not(.tv-device) .hub-grid { margin-right: 0; }
+  html:not(.tv-device) .hub-card { width: 100%; margin: 0 0 12px 0; }
+}
+
+/* =====================================================================
+ * 闪卡背诵 & 先背再测卡片视图 (#qOptions.study-card-area)
+ * ===================================================================== */
+#qOptions.study-card-area { display: block; width: 100%; }
+.study-choices-preview {
+  display: -webkit-flex; display: flex;
+  -webkit-flex-wrap: wrap; flex-wrap: wrap;
+  margin: 0 -1.6rem 1.6rem 0;
+}
+.study-choice-item {
+  width: calc(50% - 1.6rem);
+  margin: 0 1.6rem 1.2rem 0;
+  padding: 1.4rem 2rem;
+  border-radius: 1.4rem;
+  background: rgba(255,255,255,.05);
+  color: #CFCFCF;
+  font-size: 2.3rem;
+  display: -webkit-flex; display: flex;
+  -webkit-align-items: center; align-items: center;
+}
+.study-choice-letter { font-weight: 700; margin-right: 1.2rem; opacity: .75; }
+.study-card-back {
+  width: 100%;
+  padding: 2.4rem 3rem;
+  margin-bottom: 2.2rem;
+  border-radius: 2rem;
+  background: #1E2A23;
+  border: 2px solid rgba(93,176,122,.45);
+}
+.study-back-label { font-size: 1.8rem; font-weight: 700; color: #7BC294; margin-bottom: .6rem; }
+.study-back-answer { font-size: 3.1rem; font-weight: 700; color: #F2F2F4; white-space: pre-wrap; line-height: 1.4; }
+.study-back-tip { margin-top: 1.4rem; padding-top: 1.4rem; border-top: 1px solid rgba(255,255,255,.1); font-size: 2.2rem; line-height: 1.55; color: #D4D4D8; white-space: pre-wrap; }
+.study-reveal-row, .memorize-nav-row {
+  display: -webkit-flex; display: flex;
+  -webkit-flex-wrap: wrap; flex-wrap: wrap;
+  -webkit-align-items: center; align-items: center;
+}
+.study-reveal-row > *, .memorize-nav-row > * { margin: 0 1.6rem 1.2rem 0; }
+.anki-rate-grid {
+  display: -webkit-flex; display: flex;
+  -webkit-flex-wrap: wrap; flex-wrap: wrap;
+  margin: 0 -1.4rem 0 0;
+}
+.anki-rate-btn {
+  -webkit-flex: 1 1 20%; flex: 1 1 20%;
+  min-width: 16rem;
+  margin: 0 1.4rem 1.4rem 0 !important;
+  padding: 1.6rem 1.8rem !important;
+  -webkit-flex-direction: column; flex-direction: column;
+}
+.anki-rate-btn .rate-title { display: block; font-size: 2.3rem; font-weight: 700; }
+.anki-rate-btn .rate-sub { display: block; margin-top: .3rem; font-size: 1.6rem; opacity: .78; font-weight: 500; }
+.anki-rate-btn.rate-again { border-bottom: .35rem solid #E07870; }
+.anki-rate-btn.rate-hard { border-bottom: .35rem solid #EAB308; }
+.anki-rate-btn.rate-good { border-bottom: .35rem solid #5DB07A; }
+.anki-rate-btn.rate-easy { border-bottom: .35rem solid #38BDF8; }
+
+html.tv-device[data-mode="light"] .study-choice-item { background: rgba(0,0,0,.04); color: #333333; }
+html.tv-device[data-mode="light"] .study-card-back { background: #F3F9F4; border-color: rgba(59,154,90,.4); }
+html.tv-device[data-mode="light"] .study-back-label { color: #2F8A4E; }
+html.tv-device[data-mode="light"] .study-back-answer { color: #1E1E1E; }
+html.tv-device[data-mode="light"] .study-back-tip { border-top-color: rgba(0,0,0,.08); color: #444444; }
+
+html:not(.tv-device) .study-choices-preview { margin: 0 -10px 14px 0; }
+html:not(.tv-device) .study-choice-item {
+  width: calc(50% - 10px); margin: 0 10px 10px 0;
+  padding: 12px 14px; border-radius: 12px;
+  font-size: 15px; background: var(--m-surface); color: var(--m-text); border: 1px solid var(--m-line);
+}
+html:not(.tv-device) .study-card-back {
+  padding: 18px 20px; margin-bottom: 18px; border-radius: 16px;
+  background: var(--m-ok-bg); border: 1px solid var(--m-ok);
+}
+html:not(.tv-device) .study-back-label { font-size: 12px; color: var(--m-ok-strong); margin-bottom: 4px; }
+html:not(.tv-device) .study-back-answer { font-size: 19px; color: var(--m-text); }
+html:not(.tv-device) .study-back-tip { margin-top: 10px; padding-top: 10px; border-top-color: var(--m-line); font-size: 15px; color: var(--m-text-2); }
+html:not(.tv-device) .study-reveal-row > *, html:not(.tv-device) .memorize-nav-row > * { margin: 0 10px 10px 0; }
+html:not(.tv-device) .anki-rate-grid { margin: 0 -8px 0 0; }
+html:not(.tv-device) .anki-rate-btn {
+  min-width: calc(25% - 8px);
+  margin: 0 8px 8px 0 !important;
+  padding: 10px 8px !important;
+  min-height: 58px !important;
+}
+html:not(.tv-device) .anki-rate-btn .rate-title { font-size: 15px; }
+html:not(.tv-device) .anki-rate-btn .rate-sub { font-size: 12px; margin-top: 2px; }
+@media (max-width: 600px) {
+  html:not(.tv-device) .study-choice-item { width: 100%; margin: 0 0 8px 0; }
+  html:not(.tv-device) .anki-rate-btn { min-width: calc(50% - 8px); }
 }

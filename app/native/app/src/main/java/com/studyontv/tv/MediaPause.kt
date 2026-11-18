@@ -27,6 +27,8 @@ object MediaPause {
     val ownerCount: Int get() = owners.size
     /** 音乐流是否已经被我们静音（enforce 落库后的状态） */
     val levelMuted: Boolean get() = muted
+    /** 累计写音量的次数；诊断用（#162 家长可以把数字发给我们核对） */
+    val writeCount: Int get() = muteWrites
     /** 最近一次开始静音的时间（elapsedRealtime），用于诊断「静音了多久」 */
     @Volatile var lastPauseAt: Long = 0L
         private set
@@ -45,13 +47,27 @@ object MediaPause {
         lastKey = SystemClock.elapsedRealtime()
     }
 
+    // 只在状态确实要变时才写音量：厂商音量面板靠音量变化广播判断显隐（#162），
+    // 每秒 tick 重复写同一个值既没用也会让面板闪。写入次数顺手记进诊断日志。
+    private var muteWrites = 0
+
     @Suppress("DEPRECATION")
     private fun setMuted(audio: AudioManager, value: Boolean) {
+        val already = try {
+            if (Build.VERSION.SDK_INT >= 23) audio.isStreamMute(AudioManager.STREAM_MUSIC)
+            else audio.getStreamVolume(AudioManager.STREAM_MUSIC) == 0
+        } catch (_: Exception) { false }
+        // 流已经是目标状态就不写；这和「用户刚用遥控器调过音量」不冲突，
+        // 那种情况下 enforce 会先把状态读出来再决定要不要写。
+        if (already == value) return
+        muteWrites++
+        Diag.info("Audio", "mute write $value (#$muteWrites)")
         if (Build.VERSION.SDK_INT >= 23) audio.adjustStreamVolume(AudioManager.STREAM_MUSIC,
             if (value) AudioManager.ADJUST_MUTE else AudioManager.ADJUST_UNMUTE, 0)
         else audio.setStreamMute(AudioManager.STREAM_MUSIC, value)
     }
 
+    @Synchronized
     @Suppress("DEPRECATION")
     fun pause(context: Context) {
         if (owners.contains(context)) return
@@ -74,6 +90,7 @@ object MediaPause {
         } catch (e: Exception) { android.util.Log.w("StudyOnTV", "Pause media failed", e) }
     }
 
+    @Synchronized
     fun enforce(context: Context) {
         if (!active) return
         val audio = audio(context) ?: return
@@ -119,7 +136,10 @@ object MediaPause {
     @Suppress("DEPRECATION")
     private fun restore(context: Context): Boolean {
         val state = prefs(context)
-        if (!state.getBoolean("media_muted", false)) return true
+        if (!state.getBoolean("media_muted", false)) {
+            muted = false
+            return true
+        }
         val audio = audio(context) ?: return false
         return try {
             val wasMuted = state.getBoolean("media_original_muted", false)
@@ -178,6 +198,7 @@ object MediaPause {
             }
             state.edit().remove("media_muted").remove("media_original_volume").remove("media_original_muted")
                 .remove("media_user_touched").remove("media_user_volume").remove("media_restore_attempts").commit()
+            muted = false
             Diag.info("Audio", "restored volume=$savedVolume wasMuted=$wasMuted originallyMuted=$originallyMuted touched=$touched userVolume=$userVolume holding=$holding")
             true
         } catch (e: Exception) {
@@ -188,13 +209,16 @@ object MediaPause {
     }
 
     /** Also used on startup after process death; never undo another currently visible gate's mute. */
+    @Synchronized
     fun recover(context: Context) { if (!active) restore(context) }
 
+    @Synchronized
     fun releaseAll(context: Context) {
         owners.clear()
         release(context)
     }
 
+    @Synchronized
     @Suppress("DEPRECATION")
     fun release(context: Context) {
         val removed = owners.remove(context)

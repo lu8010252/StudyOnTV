@@ -1,42 +1,48 @@
-
-
-
-
-
-
-
-
-
 (function () {
   'use strict';
 
   var CONFIG = {
-    ga4Id: 'G-561826488',        
-    clarityId: 'z7790sezw1',      
+    ga4Id: 'G-561826488',
+    clarityId: 'z7790sezw1',
     enabled: true,
-    debug: false                  
+    debug: false
   };
+
+  function extend(target, source) {
+    var out = {};
+    var key;
+    if (target) {
+      for (key in target) {
+        if (Object.prototype.hasOwnProperty.call(target, key)) out[key] = target[key];
+      }
+    }
+    if (source) {
+      for (key in source) {
+        if (Object.prototype.hasOwnProperty.call(source, key)) out[key] = source[key];
+      }
+    }
+    return out;
+  }
 
   var queue = [];
   window.SOTV_TRACK = function (name, params) {
     var event = { name: name, params: params || {}, ts: Date.now() };
     if (CONFIG.debug || !CONFIG.enabled || CONFIG.ga4Id.indexOf('XXXX') > -1) {
-      if (CONFIG.debug) { console.log('[track]', event); }
+      if (CONFIG.debug && window.console && console.log) { console.log('[track]', event); }
       return;
     }
     try {
       if (window.gtag) {
-        window.gtag('event', name, Object.assign({ page: location.pathname }, event.params));
+        window.gtag('event', name, extend({ page: location.pathname }, event.params));
       }
       if (window.clarity) {
         window.clarity('event', name);
       }
     } catch (e) {
-      queue.push(event);
+      if (queue.length < 50) queue.push(event);
     }
   };
 
-  
   if (CONFIG.enabled && CONFIG.ga4Id.indexOf('XXXX') < 0) {
     var ga = document.createElement('script');
     ga.async = true;
@@ -48,7 +54,6 @@
     window.gtag('config', CONFIG.ga4Id, { send_page_view: true });
   }
 
-  
   if (CONFIG.enabled && CONFIG.clarityId.indexOf('abcdef') < 0) {
     (function (c, l, a, r, i, t, y) {
       c[a] = c[a] || function () { (c[a].q = c[a].q || []).push(arguments); };
@@ -57,7 +62,6 @@
     })(window, document, 'clarity', 'script', CONFIG.clarityId);
   }
 
-  
   document.addEventListener('DOMContentLoaded', function () {
     window.SOTV_TRACK('page_view', {
       page: location.pathname,

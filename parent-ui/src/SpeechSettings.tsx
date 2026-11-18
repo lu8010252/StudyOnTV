@@ -13,16 +13,19 @@ import {Select,SelectContent,SelectItem,SelectTrigger,SelectValue} from '@/compo
 import {Switch} from '@/components/ui/switch';
 
 // deepseek：DeepSeek 语音合成。老电视（华为智慧屏、TCL 等）常常没有内置朗读引擎，选这个才有声音
-const modes=['system','auto','deepseek','azure','aliyun'];
-const modeLabels:Record<string,string>={system:'本地系统语音',auto:'自动',deepseek:'DeepSeek 语音（推荐）',azure:'Azure',aliyun:'阿里云'};
+const modes=['system','edge','auto','deepseek','azure','aliyun'];
+const modeLabels:Record<string,string>={system:'本地系统语音',edge:'微软 Edge 语音（免费）',auto:'自动',deepseek:'DeepSeek 语音（推荐）',azure:'Azure',aliyun:'阿里云'};
 // 每种通路一句话说清区别和前提，家长不用猜为什么点朗读没声音（#128）
 const modeHints:Record<string,string>={
  system:'不需要网络，但电视可能没装中文语音包；读不出声音时点下面的「检测本地语音」',
- auto:'有云端 Key 就用云端，没有就用本地系统语音',
+ edge:'免费在线朗读（无需 API Key），电视没装系统语音时可直接使用；失败会自动回落系统语音',
+ auto:'有云端 Key 就用云端；没有 Key 时优先用本地语音，无本地语音则自动用免费 Edge 语音',
  deepseek:'效果最好，需要 DeepSeek Key；电视没有本地语音时选这个',
  azure:'需要 Azure 语音服务的区域和 Key',
  aliyun:'需要阿里云的 AppKey 和 AccessKey',
 };
+const speechRates:[string,string][]=[['0.8','0.8x（较慢）'],['1','1.0x（正常）'],['1.2','1.2x（较快）'],['1.4','1.4x（快速）']];
+const edgeVoices:[string,string][]=[['auto','按题目语言自动选择'],['zh-CN-XiaoxiaoNeural','晓晓（普通话女声）'],['zh-CN-YunxiNeural','云希（普通话男声）'],['zh-CN-YunjianNeural','云健（普通话解说）'],['zh-CN-XiaoyiNeural','晓伊（普通话童声/女声）'],['zh-HK-HiuGaaiNeural','晓佳（粤语女声）'],['zh-TW-HsiaoChenNeural','晓臻（台湾女声）'],['en-US-JennyNeural','Jenny（美式英语）'],['en-GB-SoniaNeural','Sonia（英式英语）']];
 const deepseekVoices:[string,string][]=[['stella','stella（女声）'],['tide','tide（男声）']];
 const recognizeModes:[string,string][]=[['system','设备系统识别'],['auto','自动（填了 Key 用 DeepSeek）'],['deepseek','DeepSeek 转写']];
 /** #126：设备级朗读语言。空 = 跟随每道题的标注，"system" = 跟随系统语言 */
@@ -101,7 +104,7 @@ export default function SpeechSettings({sessionId}:{sessionId:number}){
   return()=>window.clearTimeout(timer);
  },[dirty,validationError,query.data,save.isPending,failedSignature,signature]);
  const saveState:SaveState=save.isPending?'saving':saveError?'error':dirty?(validationError?'error':'pending'):saved?'saved':'idle';
- const azureVisible=form.mode==='auto'||form.mode==='azure',aliyunVisible=form.mode==='auto'||form.mode==='aliyun';
+ const edgeVisible=form.mode==='edge',azureVisible=form.mode==='auto'||form.mode==='azure',aliyunVisible=form.mode==='auto'||form.mode==='aliyun';
  const deepseekVisible=form.mode==='auto'||form.mode==='deepseek';
  const hiddenErrors=Object.entries(errors).filter(([key])=>!((azureFields.includes(key)&&azureVisible)||(aliyunFields.includes(key)&&aliyunVisible)||(deepseekFields.includes(key)&&deepseekVisible)||key==='mode'||key==='recognizeMode'));
  const input=(key:string,label:string,password=false)=>{
@@ -150,6 +153,15 @@ export default function SpeechSettings({sessionId}:{sessionId:number}){
      </Select>
      </ItemActions>
     </Item>
+    <Item size="sm" className="rounded-none px-0 py-4">
+     <ItemContent><ItemTitle>朗读语速</ItemTitle><ItemDescription className="text-xs">适用于本地系统语音与免费 Edge 语音。</ItemDescription></ItemContent>
+     <ItemActions>
+      <Select value={String(form.speechRate??1)} onValueChange={value=>change('speechRate',Number(value))}>
+       <SelectTrigger aria-label="朗读语速" className="w-full sm:w-44"><SelectValue>{speechRates.find(([v])=>Number(v)===(Number(form.speechRate)||1))?.[1]||'1.0x（正常）'}</SelectValue></SelectTrigger>
+       <SelectContent>{speechRates.map(([value,label])=><SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent>
+      </Select>
+     </ItemActions>
+    </Item>
     <div className="space-y-2 py-4">
      <div className="flex flex-wrap items-center gap-2">
       <span className="text-sm font-medium">本地语音自检</span>
@@ -178,6 +190,16 @@ export default function SpeechSettings({sessionId}:{sessionId:number}){
      </Select>
      </ItemActions>
     </Item>
+    {edgeVisible&&<div className="py-4">
+     <Field>
+      <FieldLabel htmlFor="speech-edgeVoice">Edge 音色</FieldLabel>
+      <Select value={form.edgeVoice||'auto'} onValueChange={value=>change('edgeVoice',value==='auto'?'':value)}>
+       <SelectTrigger id="speech-edgeVoice" aria-label="Edge 音色" className="w-full sm:w-64"><SelectValue>{edgeVoices.find(([value])=>value===(form.edgeVoice||'auto'))?.[1]||'按题目语言自动选择'}</SelectValue></SelectTrigger>
+       <SelectContent>{edgeVoices.map(([value,label])=><SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent>
+      </Select>
+      <FieldDescription className="text-xs">直接连接微软 Edge 免费朗读服务，无需配置密钥；网络异常时自动回落本地语音。</FieldDescription>
+     </Field>
+    </div>}
     {deepseekVisible&&<div className="grid gap-4 py-4 sm:grid-cols-2">{input('deepseekKey','DeepSeek API Key（platform.deepseek.com）',true)}
      <Field data-invalid={!!errors.deepseekVoice}>
       <FieldLabel htmlFor="speech-deepseekVoice">DeepSeek 音色</FieldLabel>
@@ -193,7 +215,7 @@ export default function SpeechSettings({sessionId}:{sessionId:number}){
     {aliyunVisible&&<div className="grid gap-4 py-4 sm:grid-cols-2">{input('aliyunAppKey','阿里云 AppKey')}{input('aliyunAccessKeyId','阿里云 AccessKey ID')}{input('aliyunSecret','阿里云 AccessKey Secret',true)}{input('aliyunVoice','阿里云音色，例如 xiaoyun')}</div>}
     {hiddenErrors.length>0&&<div className="py-3"><FieldError>切回对应朗读通路后修正：{hiddenErrors.map(([key,message])=>`${labels[key]||key}：${message}`).join('；')}</FieldError></div>}
     {((!query.data&&query.isError)||saveError)&&<div className="flex flex-wrap items-center justify-between gap-2 py-3">
-     <FieldError>{!query.data?'无法读取朗读设置，password改。':saveError}</FieldError>
+     <FieldError>{!query.data?'无法读取朗读设置，暂时不能修改。':saveError}</FieldError>
      {/* 读不到设置时不能拿默认值去覆盖设备，只能重新拉；存失败则原样重试一次 */}
      <Button type="button" variant="outline" size="sm" onClick={()=>{setSaveError('');setFailedSignature('');if(!query.data)query.refetch();else save.mutate(form);}}>重试</Button>
     </div>}

@@ -39,8 +39,10 @@ object AnswerInput {
                 .putExtra("requestId", requestId)
                 .apply(extras)
                 .apply {
+                    // 不再加 MULTIPLE_TASK：它每次都会新建一个独立任务，输入页 finish 后任务被移除，
+                    // 前台瞬间掉回桌面，小米等固件会据此强停整个应用（#160）。
                     if (context !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_MULTIPLE_TASK or Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+                        Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
                 })
         } catch (_: RuntimeException) {
             active = false
@@ -68,7 +70,15 @@ object AnswerInput {
             requestId = ""
             screen = null
             target.clear()
-            if (result == null || view == null) return@post
+            GateService.refreshNow()
+            if (view == null) return@post
+            if (result == null) {
+                // 取消密码或作答输入时主动通知网页复位（否则锁定页的 unlockPending 会一直卡在等待态）
+                view.postDelayed({
+                    try { view.evaluateJavascript("window.SOTV_INPUT_CANCEL&&window.SOTV_INPUT_CANCEL()", null) } catch (_: Throwable) { }
+                }, 120)
+                return@post
+            }
             val token = UUID.randomUUID().toString()
             val payload = result.toString()
             var attempt = 0

@@ -158,14 +158,37 @@ object Updater {
     }
 
     fun isNewer(latest: String, current: String): Boolean {
-        val a = latest.split(".", "-").map { it.toIntOrNull() ?: 0 }
-        val b = current.split(".", "-").map { it.toIntOrNull() ?: 0 }
-        for (i in 0 until maxOf(a.size, b.size)) {
-            val x = a.getOrElse(i) { 0 }
-            val y = b.getOrElse(i) { 0 }
+        val remoteClean = latest.trim().removePrefix("v").removePrefix("V").substringBefore('+')
+        val localClean = current.trim().removePrefix("v").removePrefix("V").substringBefore('+')
+        if (remoteClean.isEmpty()) return false
+        val remoteCore = remoteClean.substringBefore('-').split('.').map { it.toIntOrNull() ?: 0 }
+        val localCore = localClean.substringBefore('-').split('.').map { it.toIntOrNull() ?: 0 }
+        for (i in 0 until maxOf(remoteCore.size, localCore.size)) {
+            val x = remoteCore.getOrElse(i) { 0 }
+            val y = localCore.getOrElse(i) { 0 }
             if (x != y) return x > y
         }
-        return false
+        val remotePre = remoteClean.substringAfter('-', "")
+        val localPre = localClean.substringAfter('-', "")
+        if (remotePre.isEmpty() && localPre.isEmpty()) return false
+        if (remotePre.isEmpty() && localPre.isNotEmpty()) return true
+        if (remotePre.isNotEmpty() && localPre.isEmpty()) return false
+        val rParts = remotePre.split('.', '-')
+        val lParts = localPre.split('.', '-')
+        for (i in 0 until minOf(rParts.size, lParts.size)) {
+            val rp = rParts[i]
+            val lp = lParts[i]
+            if (rp == lp) continue
+            val rn = rp.toIntOrNull()
+            val ln = lp.toIntOrNull()
+            return when {
+                rn != null && ln != null -> rn > ln
+                rn != null -> false
+                ln != null -> true
+                else -> rp > lp
+            }
+        }
+        return rParts.size > lParts.size
     }
 
     fun currentVersion(ctx: Context): String =

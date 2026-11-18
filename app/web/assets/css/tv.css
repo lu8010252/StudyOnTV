@@ -417,8 +417,9 @@ html:not(.tv-device) .btn.focused { transform:none;box-shadow:0 0 0 3px #f9e6ce;
 html:not(.tv-device) .written-answer { display:block;resize:vertical;min-height:170px;border:1px solid #e6ece0;border-radius:16px;padding:20px;font-size:20px;line-height:1.8;background:#fcfdfb;color:#2f3b31;font-family:inherit; }
 html:not(.tv-device) .written-answer:focus { outline:none;border-color:#e5bb87; }
 html:not(.tv-device) .answer-submit { margin:28px 0 0 auto;min-width:170px; }
-.input-tools { display:flex;width:100%;gap:12px;margin-top:8px; }
+.input-tools { display:-webkit-flex;display:flex;width:100%;margin-top:8px; }
 .input-tools .btn { margin-right:0; }
+.input-tools > * + * { margin-left:12px; }
 .drawing-preview { display:block;width:100%;max-height:300px;object-fit:contain;background:white;border:1px solid #e7ebe2;border-radius:12px;margin-top:16px; }
 html:not(.tv-device) .lock-wrap { min-height:65vh;padding:48px 16px; }
 html:not(.tv-device) .lock-title { color:#2e3a31;font-size:36px;font-weight:600; }
@@ -829,7 +830,8 @@ html:not(.tv-device) .feedback.is-wrong .btn, html:not(.tv-device) .btn-danger {
   html:not(.tv-device) .option { width: auto; margin: 0; min-height: 96px; padding: 22px 26px; font-size: 24px; }
   html:not(.tv-device) .option .letter { width: 44px; height: 44px; line-height: 44px; font-size: 17px; margin-right: 20px; }
   html:not(.tv-device) .written-answer { grid-column: 1 / -1; font-size: 22px; min-height: 200px; }
-  html:not(.tv-device) .input-tools, html:not(.tv-device) .answer-submit { grid-column: 1 / -1; }
+  html:not(.tv-device) .input-tools, html:not(.tv-device) .answer-submit,
+  #qOptions .drawing-preview, #qOptions [data-action="clear-drawing"] { grid-column: 1 / -1; }
   html:not(.tv-device) .btn { font-size: 18px; min-height: 56px; padding: 0 30px; }
   html:not(.tv-device) .feedback { padding: 22px max(40px, calc((100vw - 1100px) / 2)) 26px; }
   html:not(.tv-device) .fb-title { font-size: 24px; }
@@ -904,5 +906,5 @@ html.tv-device[data-mode="light"] .tv-input-hint { color: #8A8A8A; background: r
 .quiz-foot-right { display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center; }
 html.tv-device .read-aloud-btn { font-size: 1.8rem; padding: 1rem 2rem; margin-right: 2.4rem; opacity: .6; }
 html.tv-device .read-aloud-btn.focused { opacity: 1; }
-html:not(.tv-device) .quiz-foot-right,
-html:not(.tv-device) .read-aloud-btn { display: none !important; }
+/* 手机 / 平板也保留「朗读」按钮：家长常用于让孩子重听题干（以前这里把整个页脚右侧连同按钮一起隐藏了） */
+html:not(.tv-device) .read-aloud-btn { font-size: 1.5rem; padding: .8rem 1.8rem; margin-left: 1.2rem; }

@@ -14,6 +14,10 @@ class BootReceiver : BroadcastReceiver() {
                 "android.intent.action.LOCKED_BOOT_COMPLETED",
                 "com.tcl.android.intent.action.BOOT_COMPLETED",
                 "com.hisense.intent.action.BOOT_COMPLETED")) {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                val um = context.getSystemService(Context.USER_SERVICE) as? android.os.UserManager
+                if (um != null && !um.isUserUnlocked) return
+            }
             UninstallGuard.restoreOwnerPolicy(context)
             Prefs.setUpdateInProgress(context, false)
             if (action != Intent.ACTION_MY_PACKAGE_REPLACED) Watchdog.bootBroadcast(context)

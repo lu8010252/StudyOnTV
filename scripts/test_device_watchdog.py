@@ -33,7 +33,8 @@ class MockAdb:
         elif shell == ["ps"]:
             output = ""
         elif shell[:3] == ["dumpsys", "activity", "services"]:
-            output = "ServiceRecord{123 u0 com.studyontv.tv/com.studyontv.tv.GateService}\n isForeground=true\n" if self.service else ""
+            target_pkg = shell[3] if len(shell) > 3 else "com.studyontv.tv"
+            output = f"ServiceRecord{{123 u0 {target_pkg}/com.studyontv.tv.GateService}}\n isForeground=true\n" if self.service else ""
         elif shell[:4] == ["settings", "get", "secure", "enabled_accessibility_services"]:
             output = self.accessibility
         elif shell[:3] == ["settings", "put", "secure"]:
@@ -54,8 +55,8 @@ class MockAdb:
 
 
 class WatchdogTest(unittest.TestCase):
-    def watchdog(self, mock):
-        return module.Watchdog("emulator-5554", "com.studyontv.tv", runner=mock)
+    def watchdog(self, mock, package="com.studyontv.tv"):
+        return module.Watchdog("emulator-5554", package, runner=mock)
 
     def test_healthy_is_read_only(self):
         mock = MockAdb()
@@ -86,6 +87,37 @@ class WatchdogTest(unittest.TestCase):
     def test_abbreviated_existing_component_is_not_duplicated(self):
         mock = MockAdb(accessibility="com.studyontv.tv/.WatchAccessibilityService")
         self.assertEqual(self.watchdog(mock).ensure(True)["actions"], [])
+
+    def test_mobile_and_debug_accessibility_components(self):
+        # Mobile flavor uses applicationId com.studyontv.mobile with service class in com.studyontv.tv namespace
+        for enabled in [
+            "com.studyontv.mobile/com.studyontv.tv.WatchAccessibilityService",
+            "com.studyontv.mobile/.WatchAccessibilityService",
+            "com.studyontv.mobile/com.studyontv.mobile.WatchAccessibilityService",
+        ]:
+            self.assertTrue(module.own_accessibility(enabled, "com.studyontv.mobile"), enabled)
+            self.assertFalse(module.own_accessibility(enabled, "com.studyontv.tv"), enabled)
+            mock = MockAdb(accessibility=enabled)
+            result = self.watchdog(mock, package="com.studyontv.mobile").ensure(True)
+            self.assertTrue(result["state"]["accessibility_enabled"])
+            self.assertEqual(result["actions"], [])
+            self.assertEqual(mock.mutations(), [])
+
+        # Debug flavors work for both full class and shorthand
+        for pkg in ["com.studyontv.tv.debug", "com.studyontv.mobile.debug"]:
+            self.assertTrue(module.own_accessibility(f"{pkg}/com.studyontv.tv.WatchAccessibilityService", pkg))
+            self.assertTrue(module.own_accessibility(f"{pkg}/.WatchAccessibilityService", pkg))
+
+        # Cross-flavor isolation: TV service enabled does not satisfy Mobile watchdog, and repair preserves TV entry
+        mock = MockAdb(accessibility="com.studyontv.tv/.WatchAccessibilityService")
+        result = self.watchdog(mock, package="com.studyontv.mobile").ensure(True)
+        self.assertFalse(result["state"]["accessibility_enabled"])
+        self.assertEqual(result["actions"], ["restore_accessibility"])
+        written = mock.mutations()[0][-1]
+        self.assertEqual(
+            written,
+            "com.studyontv.tv/.WatchAccessibilityService:com.studyontv.mobile/com.studyontv.tv.WatchAccessibilityService",
+        )
 
     def test_nested_component_shell_quoting(self):
         mock = MockAdb(accessibility="other.app/other.app.Service$Inner")

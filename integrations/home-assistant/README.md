@@ -1,8 +1,8 @@
 # StudyOnTV for Home Assistant
 
-把「题了个题」电视端的学习状态接进 Home Assistant。这是一个只读的自定义集成（custom integration），通过设备自带的局域网 HTTP 接口轮询数据，用于面板展示和周报统计。
+把「题了个题」电视端的学习状态与远程控制接进 Home Assistant。这个自定义集成（custom integration）通过设备自带的局域网 HTTP 接口轮询数据做面板展示和周报统计，并提供常用快捷控制按钮（调用 `POST /api/remote`）。
 
-- 只读：只请求 `GET /api/state` 和 `GET /api/device`，不会修改规则、题库、密码或权限。
+- 按需授权：默认只需 **只读** 权限（请求 `GET /api/state` 和 `GET /api/device`）；如果需要使用控制按钮（临时解锁、立即锁定、恢复按规则管控、奖励/扣减时长），在设备端为集成令牌勾选 **控制** 权限即可，不会修改规则、题库、密码或权限。
 - 不包含自动发现：设备没有 mDNS / SSDP 广播，需要在 HA 里手动填写电视的 IP 和端口。
 - 不做设备层控制：HDMI、音量、关机等仍由 HA 自己的自动化负责。
 - 只用 Home Assistant 内置依赖，`requirements` 为空；需要 Home Assistant 2024.11 或更新版本。
@@ -31,6 +31,8 @@
        └── studyontv/
            ├── __init__.py
            ├── binary_sensor.py
+           ├── button.py
+           ├── client.py
            ├── config_flow.py
            ├── const.py
            ├── coordinator.py
@@ -98,6 +100,16 @@ HACS 只从仓库根目录的 `custom_components/` 安装集成。本仓库把�
 | 题库题数 | `questions` | 启用中的题目数量 |
 | 下次可用时间 | `learning.nextAvailableAt` | 时间戳（设备返回毫秒，集成转换为 HA 时间）；`0` 表示没有，显示为 unknown |
 | 设备在线 | 轮询是否成功 | `on` = 最近一次轮询成功；`off` = 轮询失败 |
+
+控制按钮实体（需要集成令牌开启 **控制** 权限，点击后调用 `POST /api/remote` 并刷新状态）：
+
+| 按钮名称 | 调用动作 | 说明 |
+|---|---|---|
+| 临时解锁 30 分钟 | `{"action":"unlock","minutes":30}` | 临时解锁 30 分钟，到点自动恢复原有规则 |
+| 立即锁定 | `{"action":"lock","minutes":0}` | 立即暂停/锁定设备，直到手动恢复 |
+| 恢复按规则管控 | `{"action":"cancel","minutes":0}` | 取消当前的临时解锁或暂停状态 |
+| 奖励 10 分钟 | `{"action":"credit","minutes":10}` | 今日可用余额增加 10 分钟 |
+| 扣减 10 分钟 | `{"action":"credit","minutes":-10}` | 今日可用余额减少 10 分钟 |
 
 学习状态的取值：
 
@@ -182,6 +194,8 @@ integrations/home-assistant/
 │   └── studyontv/
 │       ├── __init__.py
 │       ├── binary_sensor.py
+│       ├── button.py
+│       ├── client.py
 │       ├── config_flow.py
 │       ├── const.py
 │       ├── coordinator.py

@@ -7,7 +7,11 @@ from homeassistant.const import Platform
 DOMAIN = "studyontv"
 NAME = "StudyOnTV"
 
-PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.SENSOR]
+PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+    Platform.SENSOR,
+]
 
 # Configuration keys
 CONF_SCAN_INTERVAL = "scan_interval"
@@ -22,6 +26,7 @@ REQUEST_TIMEOUT = 10
 # Device API paths. They are served by the LAN HTTP server on the TV.
 API_STATE = "/api/state"
 API_DEVICE = "/api/device"
+API_REMOTE = "/api/remote"
 
 # learning.reason values returned by /api/state. An empty reason means the
 # device is currently usable, which is exposed as "available".

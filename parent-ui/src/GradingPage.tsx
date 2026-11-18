@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bot, Check, ClipboardCheck, History, LoaderCircle, RefreshCw } from 'lucide-react';
+import { Bot, ClipboardCheck, History, LoaderCircle, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { Badge } from '@/components/ui/badge';
@@ -21,24 +21,16 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from '@/components/ui/empty';
-import { Field, FieldDescription, FieldGroup, FieldLabel, FieldTitle } from '@/components/ui/field';
+import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field';
+import { SectionHeading } from '@/components/ui/section-heading';
+import { SaveStatus, type SaveState } from '@/components/ui/save-status';
 import { Input } from '@/components/ui/input';
 import { Item, ItemContent, ItemDescription, ItemGroup, ItemTitle } from '@/components/ui/item';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { Toolbar, ToolbarGroup } from '@/components/ui/toolbar';
-import { api } from './api';
-import { answerOf, MathText } from './QuestionBank';
-
-type Provider = {
-  id: string;
-  name: string;
-  baseUrl: string;
-  model: string;
-  visionModel: string;
-  note: string;
-  keyUrl?: string;
-};
+import { api, resolveMediaUrl } from './api';
+import { answerOf, MathText, questionImages } from './components/bank/shared';
 
 export default function GradingPage({ sessionId }: { sessionId: number }) {
   const settings = useQuery({ queryKey: ['grading', sessionId], queryFn: () => api('/api/grading') });
@@ -68,41 +60,16 @@ export default function GradingPage({ sessionId }: { sessionId: number }) {
     hasKey: false,
   });
   const [dirty, setDirty] = useState(false);
-  const [models, setModels] = useState<string[]>([]);
-  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
-  const providers: Provider[] = settings.data?.providers || [];
-  const provider = providers.find(item => item.id === config.provider);
 
   useEffect(() => {
     if (settings.data && !dirty) setConfig({ mode: 'manual', ...settings.data, apiKey: '' });
-  }, [settings.data]);
+  }, [settings.data, dirty]);
 
   function change(key: string, value: any) {
     setDirty(true);
-    setResult(null);
     setConfig((current: any) => ({ ...current, [key]: value }));
   }
 
-  function pick(id: string) {
-    const next = providers.find(item => item.id === id);
-    setDirty(true);
-    setResult(null);
-    setModels([]);
-    setConfig((current: any) => ({
-      ...current,
-      provider: id,
-      ...(next && next.id !== 'custom'
-        ? { endpoint: next.baseUrl, model: current.vision && next.visionModel ? next.visionModel : next.model }
-        : {}),
-    }));
-  }
-
-  const payload = () => ({
-    endpoint: config.endpoint,
-    model: config.model,
-    vision: config.vision,
-    apiKey: config.apiKey,
-  });
   const save = useMutation({
     mutationFn: (value: any) => api('/api/grading', 'PUT', value),
     onSuccess: response => {
@@ -112,24 +79,15 @@ export default function GradingPage({ sessionId }: { sessionId: number }) {
     },
     onError: (error: any) => toast.error(error.message),
   });
-  const test = useMutation({
-    mutationFn: () => api('/api/grading/test', 'POST', payload()),
-    onSuccess: response =>
-      setResult({
-        ok: response.ok,
-        message: response.message + (response.ms ? ` · ${(response.ms / 1000).toFixed(1)} 秒` : ''),
-      }),
-    onError: (error: any) => setResult({ ok: false, message: error.message }),
-  });
-  const list = useMutation({
-    mutationFn: () => api('/api/grading/models', 'POST', payload()),
-    onSuccess: response => {
-      if (!response.ok) return toast.error(response.message);
-      setModels(response.items);
-      toast.success(`获取到 ${response.items.length} 个模型`);
-    },
-    onError: (error: any) => toast.error(error.message),
-  });
+
+  const aiConfigured = !!(
+    settings.data?.endpoint &&
+    settings.data?.model &&
+    (settings.data?.hasKey ||
+      settings.data?.provider === 'ollama' ||
+      settings.data?.provider === 'custom')
+  );
+
   const valid =
     Number.isFinite(Number(config.passScore)) &&
     Number(config.passScore) >= 1 &&
@@ -144,7 +102,10 @@ export default function GradingPage({ sessionId }: { sessionId: number }) {
         }
         return (
           !!config.model.trim() &&
-          (!!config.hasKey || !!config.apiKey.trim() || config.provider === 'ollama')
+          (!!config.hasKey ||
+            !!config.apiKey.trim() ||
+            config.provider === 'ollama' ||
+            config.provider === 'custom')
         );
       })());
 
@@ -212,8 +173,8 @@ export default function GradingPage({ sessionId }: { sessionId: number }) {
                   </ItemDescription>
                 </ItemContent>
                 <div className="flex flex-wrap items-center justify-end gap-2 max-sm:basis-full">
-                  <Badge variant="secondary">
-                    {settings.data?.hasKey ? '已配置' : '未配置'}
+                  <Badge variant={aiConfigured ? 'secondary' : 'outline'}>
+                    {aiConfigured ? '已配置' : '未配置'}
                   </Badge>
                   <span className="text-xs text-muted-foreground">
                     {settings.data?.model || '未选择模型'}
@@ -366,17 +327,18 @@ function Graded({ review }: { review: any }) {
   const image = useQuery({
     queryKey: ['review', review.id],
     queryFn: () => api('/api/reviews/' + review.id),
-    enabled: open && !!review.input?.hasDrawing,
+    enabled: open && !!review.input?.hasDrawing && !review.input?.drawing,
     staleTime: 5 * 60 * 1000,
   });
-  const drawing = image.data?.input?.drawing;
+  const drawing = review.input?.drawing || image.data?.input?.drawing;
+  const qImgs = questionImages(review.question);
   const passed = review.result?.correct;
   return (
     <article className="border-t px-4 py-4 first:border-t-0 sm:px-6">
       <div className="flex items-start justify-between gap-3">
         <MathText
           text={review.question?.q || '题目已删除'}
-          className="min-w-0 text-base font-medium leading-7"
+          className="min-w-0 whitespace-pre-wrap text-sm font-medium leading-7"
         />
         <Badge variant={passed === false ? 'destructive' : 'default'}>
           {Number(review.score) || 0} 分
@@ -388,24 +350,36 @@ function Graded({ review }: { review: any }) {
         {passed === false && <span>计为答错</span>}
         {review.gradedAt ? <span>{formatGradedTime(review.gradedAt)}</span> : null}
       </div>
-      <Accordion type="single" collapsible>
+      <Accordion type="single" collapsible onValueChange={v => setOpen(v === 'detail')}>
         <AccordionItem value="detail">
           <AccordionTrigger>查看作答与批改意见</AccordionTrigger>
           <AccordionContent className="space-y-3">
+            {qImgs.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {qImgs.map((src, i) => (
+                  <img
+                    key={i}
+                    src={resolveMediaUrl(src)}
+                    alt={`题目配图 ${i + 1}`}
+                    className="max-h-40 rounded border bg-muted/20 object-contain"
+                  />
+                ))}
+              </div>
+            )}
             <div>
               <div className="text-xs text-muted-foreground">孩子的答案</div>
               <MathText
                 className="mt-1 whitespace-pre-wrap rounded-lg bg-muted/55 p-3 leading-7"
-                text={review.input?.text || (review.input?.hasDrawing ? '手写作答' : '（空）')}
+                text={review.input?.text || ((review.input?.hasDrawing || drawing) ? '手写作答' : '（空）')}
               />
-              {review.input?.hasDrawing && (
+              {(review.input?.hasDrawing || drawing) && (
                 image.isLoading ? (
                   <div className="mt-2 text-xs text-muted-foreground">正在读取手写图片…</div>
                 ) : drawing ? (
                   <img
                     className="my-3 max-h-96 w-full rounded-lg border bg-white object-contain"
                     alt="孩子的手写答案"
-                    src={drawing}
+                    src={resolveMediaUrl(drawing)}
                   />
                 ) : null
               )}
@@ -419,7 +393,7 @@ function Graded({ review }: { review: any }) {
             <div>
               <div className="text-xs text-muted-foreground">参考答案</div>
               <MathText
-                className="mt-1 leading-7"
+                className="mt-1 whitespace-pre-wrap leading-7"
                 text={review.question?.modelAnswer || answerOf(review.question || {})}
               />
             </div>
@@ -457,10 +431,23 @@ function Review({
     onSuccess: () => toast.success('已提交 AI 重试'),
     onError: (error: any) => toast.error(error.message),
   });
+  const qImgs = questionImages(review.question);
 
   return (
-    <article className="border-t px-4 py-5 first:border-t-0 sm:px-6">
-      <MathText text={review.question.q} className="text-base font-medium leading-7" />
+    <article className="border-t py-4 first:border-t-0">
+      <MathText text={review.question.q} className="whitespace-pre-wrap text-sm font-medium leading-7" />
+      {qImgs.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {qImgs.map((src, i) => (
+            <img
+              key={i}
+              src={resolveMediaUrl(src)}
+              alt={`题目配图 ${i + 1}`}
+              className="max-h-48 rounded border bg-muted/20 object-contain"
+            />
+          ))}
+        </div>
+      )}
       <FieldGroup className="mt-4 gap-4">
         <Field>
           <FieldLabel>孩子的答案</FieldLabel>
@@ -472,7 +459,7 @@ function Review({
             <img
               className="my-3 max-h-96 w-full rounded-lg border bg-white object-contain"
               alt="孩子的手写答案"
-              src={review.input.drawing}
+              src={resolveMediaUrl(review.input.drawing)}
             />
           )}
         </Field>
@@ -481,11 +468,11 @@ function Review({
             <AccordionTrigger>参考答案与评分标准</AccordionTrigger>
             <AccordionContent className="space-y-2">
               <MathText
-                className="leading-7"
+                className="whitespace-pre-wrap leading-7"
                 text={review.question.modelAnswer || answerOf(review.question)}
               />
               <MathText
-                className="leading-7 text-muted-foreground"
+                className="whitespace-pre-wrap leading-7 text-muted-foreground"
                 text={review.question.rubric || ''}
               />
             </AccordionContent>

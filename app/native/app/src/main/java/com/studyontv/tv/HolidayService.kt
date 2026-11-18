@@ -106,8 +106,16 @@ object HolidayService {
         }
         try {
             require(connection.responseCode in 200..299) { "节假日服务返回 HTTP ${connection.responseCode}" }
-            val bytes = connection.inputStream.use { it.readBytes() }
-            require(bytes.size < 1_000_000) { "节假日数据过大" }
+            val bytes = connection.inputStream.use { input ->
+                val out = java.io.ByteArrayOutputStream()
+                val buf = ByteArray(8192)
+                var n: Int
+                while (input.read(buf).also { n = it } >= 0) {
+                    require(out.size() + n < 1_000_000) { "节假日数据过大" }
+                    out.write(buf, 0, n)
+                }
+                out.toByteArray()
+            }
             return JSONObject(String(bytes, Charsets.UTF_8))
         } finally { connection.disconnect() }
     }

@@ -62,17 +62,13 @@ class OnboardingActivity : Activity() {
         statusCopy.addView(modeTitle); statusCopy.addView(modeDescription, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(2) })
         status.addView(statusCopy, LinearLayout.LayoutParams(0, -2, 1f))
         intro.addView(status, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(24) })
-        val actions = LinearLayout(this).apply { orientation = if (tv) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL }
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val manage = TvUi.button(this, "完成，进入家长设置", true) { complete(true) }
         val learn = TvUi.button(this, "先开始学习") { complete(false) }
-        if (tv) {
-            actions.addView(manage, LinearLayout.LayoutParams(-1, dp(52)))
-            actions.addView(learn, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(12) })
-        } else {
-            actions.orientation = LinearLayout.VERTICAL
-            actions.addView(manage, LinearLayout.LayoutParams(-1, dp(52)))
-            actions.addView(learn, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(10) })
-        }
+        val studyOnly = TvUi.button(this, "仅用作刷题背诵（免权限，直接进入）") { completeStudyOnly() }
+        actions.addView(manage, LinearLayout.LayoutParams(-1, dp(52)))
+        actions.addView(learn, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(if (tv) 12 else 10) })
+        actions.addView(studyOnly, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(if (tv) 12 else 10) })
 
         // 右侧：权限列表
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -195,6 +191,17 @@ class OnboardingActivity : Activity() {
             Toast.makeText(this, "后台管理暂未启动，您仍可继续学习", Toast.LENGTH_SHORT).show()
         }
         startActivity(Intent(this, if (manage) ParentActivity::class.java else MainActivity::class.java))
+        finish()
+    }
+
+    /** 免授权纯学习模式：关闭后台时长锁屏，把应用直接当作刷题与艾宾浩斯背诵工具使用。 */
+    private fun completeStudyOnly() {
+        DeviceRuntime.store.saveConfig(org.json.JSONObject().put("supervisionEnabled", false))
+        DeviceRuntime.learning.status()
+        Prefs.setOnboarded(this, true)
+        GateService.hideGates()
+        GateService.refreshNow()
+        startActivity(Intent(this, MainActivity::class.java))
         finish()
     }
 

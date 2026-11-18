@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import aiohttp
 import voluptuous as vol
 
 from homeassistant import config_entries
@@ -15,20 +14,22 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from .client import (
+    StudyOnTVAuthError,
+    StudyOnTVClient,
+    StudyOnTVClientError,
+    StudyOnTVRateLimitError,
+)
 from .const import (
-    API_DEVICE,
     CONF_SCAN_INTERVAL,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     MAX_SCAN_INTERVAL,
     MIN_SCAN_INTERVAL,
-    REQUEST_TIMEOUT,
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
 
 
 def _clean_host(value: str) -> str:
@@ -67,36 +68,17 @@ async def _async_validate_input(
 
     Returns (error_key, device_payload). error_key is None on success.
     """
-    session = async_get_clientsession(hass)
-    url = f"http://{host}:{port}{API_DEVICE}"
-    headers = {"Authorization": f"Bearer {token}"}
-
+    client = StudyOnTVClient(async_get_clientsession(hass), host, port, token)
     try:
-        async with session.get(
-            url, headers=headers, timeout=_HTTP_TIMEOUT
-        ) as response:
-            if response.status in (401, 403):
-                return "invalid_auth", None
-            if response.status == 429:
-                return "rate_limited", None
-            if response.status != 200:
-                _LOGGER.debug(
-                    "Validation of %s returned HTTP %s", url, response.status
-                )
-                return "cannot_connect", None
-            payload = await response.json(content_type=None)
-    except aiohttp.ClientError as err:
-        _LOGGER.debug("Validation of %s failed: %s", url, err)
-        return "cannot_connect", None
-    except TimeoutError:
-        _LOGGER.debug("Validation of %s timed out", url)
-        return "cannot_connect", None
-    except ValueError:
-        _LOGGER.debug("Validation of %s returned invalid JSON", url)
+        payload = await client.async_get_device()
+    except StudyOnTVAuthError:
+        return "invalid_auth", None
+    except StudyOnTVRateLimitError:
+        return "rate_limited", None
+    except StudyOnTVClientError as err:
+        _LOGGER.debug("Validation of %s failed: %s", client.base_url, err)
         return "cannot_connect", None
 
-    if not isinstance(payload, dict):
-        return "cannot_connect", None
     return None, payload
 
 

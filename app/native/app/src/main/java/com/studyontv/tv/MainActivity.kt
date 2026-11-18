@@ -41,6 +41,8 @@ open class MainActivity : Activity() {
      * 检测上次崩溃标记，弹窗征求用户同意后自动上传。
      * 已同意且配置了 endpoint 的用户不再弹窗——DeviceRuntime.ensure() 里已自动触发上传。
      */
+    private var crashDialog: AlertDialog? = null
+
     private fun checkCrashReport() {
         if (!BuglyInit.configured) { CrashDetector.clear(this); return }   // 没配置自己的 Bugly，不弹窗、不上传
         if (!CrashDetector.hasPending(this)) return
@@ -50,7 +52,8 @@ open class MainActivity : Activity() {
 
         // 未同意：弹窗征求同意
         val summary = CrashDetector.readAndClear(this)
-        AlertDialog.Builder(this)
+        crashDialog?.dismiss()
+        crashDialog = AlertDialog.Builder(this)
             .setTitle("🚨 上次运行时发生了崩溃")
             .setMessage(
                 "是否允许上传崩溃日志帮助修复问题？\n\n" +
@@ -84,7 +87,7 @@ open class MainActivity : Activity() {
         Updater.check(this) { info ->
             val newer = Updater.newerThanCurrent(this, info) ?: return@check
             runOnUiThread {
-                if (isFinishing) return@runOnUiThread
+                if (isFinishing || isDestroyed) return@runOnUiThread
                 val raw = DeviceBridge(this).updateInfo()
                 if (newer.force) startActivity(Intent(this, UpdateActivity::class.java).putExtra("payload", raw))
                 else if (::web.isInitialized && !webReleased) web.evaluateJavascript("window.SOTV_UPDATE&&SOTV_UPDATE($raw)", null)
@@ -130,8 +133,14 @@ open class MainActivity : Activity() {
         }
     }
 
+    override fun onPause() {
+        super.onPause()
+        if (::web.isInitialized && !webReleased) web.onPause()
+    }
+
     override fun onResume() {
         super.onResume()
+        if (::web.isInitialized && !webReleased) web.onResume()
         // 前台重试一次遗留静音恢复（非前台时系统可能拦截音量写入）。
         MediaPause.recover(this)
         if (Prefs.onboarded(this)) GateService.ensureRunning(this, "app")
@@ -161,7 +170,13 @@ open class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
-        if (::web.isInitialized && !webReleased) web.destroy()
+        crashDialog?.dismiss()
+        crashDialog = null
+        if (::web.isInitialized && !webReleased) {
+            (web.parent as? android.view.ViewGroup)?.removeView(web)
+            web.destroy()
+            webReleased = true
+        }
         super.onDestroy()
     }
 

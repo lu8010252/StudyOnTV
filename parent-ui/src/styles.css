@@ -351,3 +351,21 @@
     font-size: 23px;
   }
 }
+
+.sotv-mark {
+  background: color-mix(in oklch, #f59e0b 26%, transparent);
+  color: inherit;
+  padding: 0 0.2em;
+  border-radius: 0.25em;
+}
+.sotv-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.88em;
+  background: var(--muted);
+  padding: 0.08em 0.35em;
+  border-radius: 0.28em;
+}
+.sotv-li {
+  display: inline-block;
+  padding-left: 0.15em;
+}

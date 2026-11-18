@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 按键过滤只在学习页需要拦截 Home / 任务键时由 WatchAccessibilityService 动态打开（#162）：
+     常驻 flagRequestFilterKeyEvents 会让海信 VIDAA 等固件的音量键改走无障碍通路，
+     系统音量条从厂商面板退回 AOSP 白卡片。canRequest 保留能力，默认不开。 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowStateChanged|typeWindowsChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows|flagRequestFilterKeyEvents"
+    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows"
     android:canRequestFilterKeyEvents="true"
     android:canRetrieveWindowContent="false"
     android:description="@string/accessibility_desc"

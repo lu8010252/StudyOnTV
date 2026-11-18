@@ -37,7 +37,7 @@ tags:
   - name: auth
     description: 家长登录、退出与修改管理密码
   - name: state
-    description: 学习状态、当天统计与历史
+    description: 学习状态、当天统计、历史与学情分析
   - name: children
     description: 多孩子档案与当前孩子切换
   - name: config
@@ -55,7 +55,7 @@ tags:
   - name: automation
     description: 远程题库同步与自动 AI 补题
   - name: device
-    description: 设备信息、防卸载、桌面、启动图标与崩溃上报
+    description: 设备信息、整机备份恢复、防卸载、桌面、启动图标与崩溃上报
   - name: integration
     description: 家庭自动化集成令牌与远程遥控
   - name: update
@@ -1836,6 +1836,202 @@ paths:
                 $ref: '#/components/schemas/Error'
         '401':
           $ref: '#/components/responses/Unauthorized'
+  /api/analytics:
+    get:
+      tags: [state]
+      operationId: getAnalytics
+      summary: 学情分析与记忆预测
+      description: |
+        返回指定天数窗口内的每日学习趋势、Anki 记忆成熟度分布、各科目掌握情况、高频顽固错题，
+        以及未来 7 天的待复习题量预测。
+      parameters:
+        - name: days
+          in: query
+          required: false
+          description: 统计天数窗口（默认 14 天）
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 90
+            default: 14
+      responses:
+        '200':
+          description: 学情分析数据
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/media/{name}:
+    get:
+      tags: [questions]
+      operationId: getMediaFile
+      summary: 读取本地媒体图片
+      description: |
+        按 SHA-256 内容寻址文件名（如 `<64位hex>.webp` / `.png` / `.jpg` / `.gif`）读取保存在设备本地的题干或选项图片。
+        文件名不可包含路径分隔符；响应返回不可变长缓存头（`Cache-Control: public, max-age=31536000, immutable`）。
+      security:
+        - adminToken: []
+        - adminKey: []
+        - deviceToken: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: SHA-256 文件名（64 位十六进制哈希 + 图片扩展名）
+          schema:
+            type: string
+            pattern: '^[a-f0-9]{64}\.(webp|png|jpg|jpeg|gif)$'
+      responses:
+        '200':
+          description: 图片二进制内容
+          headers:
+            Cache-Control:
+              description: 内容寻址文件缓存策略
+              schema:
+                type: string
+                example: public, max-age=31536000, immutable
+          content:
+            image/webp:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/gif:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/backup:
+    get:
+      tags: [device]
+      operationId: exportBackup
+      summary: 导出整机备份 JSON
+      description: |
+        导出当前设备的完整可迁移备份 JSON，包含学习规则、孩子档案、题库、本地媒体图片数据、
+        间隔重复进度与历史统计记录；不包含管理密码与第三方云端 API 密钥明文。
+      responses:
+        '200':
+          description: 整机备份 JSON
+          headers:
+            Content-Disposition:
+              description: 可选附件下载头，如 attachment; filename="studyontv-backup-YYYYMMDD-HHmm.json"
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceBackup'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/backup/restore:
+    post:
+      tags: [device]
+      operationId: restoreBackup
+      summary: 恢复整机备份 JSON
+      description: |
+        导入由 GET /api/backup 导出的整机备份 JSON，在事务中恢复学习规则、孩子档案、题库、
+        本地媒体文件及学习记录，并立即刷新门禁状态。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceBackup'
+      responses:
+        '200':
+          description: 恢复完成统计
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackupRestoreResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/quiz/memorized:
+    post:
+      tags: [quiz]
+      operationId: finishQuizMemorize
+      summary: 结束先背再考识记阶段（仅本机设备）
+      description: |
+        在「先背再考」（memorizeFirst）轮次中，将当前轮次从闪卡识记阶段切换到正式测验答题阶段，
+        并返回首道测验题与更新后的提交校验串 nonce。只接受本机设备的 X-Device-Token。
+      security:
+        - deviceToken: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                roundId:
+                  type: string
+                  description: 当前轮次 ID（可选校验）
+      responses:
+        '200':
+          description: 切换后的测验轮次状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuizMemorizedResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: 非本机设备访问
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/quiz/rate:
+    post:
+      tags: [quiz]
+      operationId: rateQuizCard
+      summary: 提交闪卡记忆自评（仅本机设备）
+      description: |
+        在闪卡背诵模式下，按 Anki 四档记忆质量（1=重来、3=困难、4=良好、5=简单）提交当前卡片自评，
+        更新间隔重复（SM-2 / Anki）复习计划并推进本轮进度。只接受本机设备的 X-Device-Token。
+      security:
+        - deviceToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuizRateRequest'
+      responses:
+        '200':
+          description: 自评结果与下一张卡片或本轮结算
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuizRateResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: 非本机设备访问
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 components:
   securitySchemes:
     adminToken:
@@ -3933,3 +4129,217 @@ components:
         error:
           type: string
           description: 没有进行中的一轮时为 round_missing
+    AnalyticsResponse:
+      type: object
+      additionalProperties: true
+      description: 学情分析、Anki 记忆成熟度分布、科目掌握度、顽固错题与未来 7 天复习预测
+      properties:
+        days:
+          type: integer
+          description: 统计窗口天数
+        daily:
+          type: array
+          description: 窗口内每日答题与观看统计
+          items:
+            type: object
+            additionalProperties: true
+            properties:
+              date:
+                type: string
+              label:
+                type: string
+              answered:
+                type: integer
+              correct:
+                type: integer
+              accuracy:
+                type: integer
+              rounds:
+                type: integer
+              usedMinutes:
+                type: number
+        maturity:
+          type: object
+          additionalProperties: true
+          description: Anki 记忆成熟度分布（未学、学习中、年轻、成熟等）
+          properties:
+            unseen:
+              type: integer
+            learning:
+              type: integer
+            young:
+              type: integer
+            mature:
+              type: integer
+            due:
+              type: integer
+        subjects:
+          type: array
+          description: 按科目汇总的题量、覆盖率与正确率
+          items:
+            type: object
+            additionalProperties: true
+            properties:
+              subject:
+                type: string
+              total:
+                type: integer
+              covered:
+                type: integer
+              answered:
+                type: integer
+              correct:
+                type: integer
+              accuracy:
+                type: integer
+        stubbornWrong:
+          type: array
+          description: 多次答错的高频顽固错题列表
+          items:
+            type: object
+            additionalProperties: true
+            properties:
+              id:
+                type: string
+              q:
+                type: string
+              subject:
+                type: string
+              bank:
+                type: string
+              answered:
+                type: integer
+              wrong:
+                type: integer
+        forecast:
+          type: array
+          description: 未来 7 天每日预计到期待复习题数
+          items:
+            type: object
+            additionalProperties: true
+            properties:
+              date:
+                type: string
+              label:
+                type: string
+              due:
+                type: integer
+    DeviceBackup:
+      type: object
+      additionalProperties: true
+      required: [version]
+      description: 整机导出 / 恢复的 JSON 备份包
+      properties:
+        app:
+          type: string
+          example: StudyOnTV
+        version:
+          type: integer
+          description: 备份格式版本号
+        appVersion:
+          type: string
+          description: 导出时的应用版本名
+        exportedAt:
+          type: integer
+          format: int64
+          description: 导出时间戳（毫秒）
+        deviceName:
+          type: string
+        config:
+          $ref: '#/components/schemas/Config'
+        children:
+          type: array
+          items:
+            $ref: '#/components/schemas/Child'
+        activeChild:
+          type: string
+        questions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Question'
+        media:
+          type: object
+          description: 本地媒体文件映射（SHA-256 文件名 -> base64 或 data URL）
+          additionalProperties:
+            type: string
+    BackupRestoreResponse:
+      type: object
+      additionalProperties: true
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+        questions:
+          type: integer
+          description: 恢复的题目数量
+        children:
+          type: integer
+          description: 恢复的孩子档案数量
+        media:
+          type: integer
+          description: 恢复的本地媒体文件数量
+    QuizMemorizedResponse:
+      type: object
+      additionalProperties: true
+      description: 结束先背再考识记阶段后进入测验阶段的轮次状态
+      properties:
+        id:
+          type: string
+        mode:
+          type: string
+        phase:
+          type: string
+          example: quiz
+        target:
+          type: integer
+        answered:
+          type: integer
+        correct:
+          type: integer
+        question:
+          $ref: '#/components/schemas/PublicQuestion'
+        nonce:
+          type: string
+        status:
+          $ref: '#/components/schemas/LearningStatus'
+        error:
+          type: string
+    QuizRateRequest:
+      type: object
+      required: [roundId, nonce, quality]
+      properties:
+        roundId:
+          type: string
+          description: 当前轮次 ID
+        nonce:
+          type: string
+          description: 当前卡片的校验串
+        quality:
+          type: integer
+          enum: [1, 3, 4, 5]
+          description: Anki 四档记忆评分：1=重来（Again）、3=困难（Hard）、4=良好（Good）、5=简单（Easy）
+    QuizRateResponse:
+      type: object
+      additionalProperties: true
+      properties:
+        ok:
+          type: boolean
+        quality:
+          type: integer
+          enum: [1, 3, 4, 5]
+        intervalDays:
+          type: integer
+          description: 更新后的下次复习间隔天数
+        finished:
+          type: boolean
+          description: 本轮闪卡是否全部完成
+        passed:
+          type: boolean
+        rewardMinutes:
+          type: number
+        next:
+          $ref: '#/components/schemas/QuizRound'
+        status:
+          $ref: '#/components/schemas/LearningStatus'
+        error:
+          type: string

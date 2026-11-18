@@ -4,12 +4,14 @@ import {
   ChevronLeft,
   ChevronRight,
   Copy,
+  Image as ImageIcon,
   Pencil,
   Plus,
   Search,
   Sparkles,
   Trash2,
 } from 'lucide-react';
+import { resolveMediaUrl } from '@/api';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -17,7 +19,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { FieldDescription } from '@/components/ui/field';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Toolbar, ToolbarGroup, ToolbarSeparator } from '@/components/ui/toolbar';
-import { Count, MathText, Stars, answerOf, dot, labels } from './shared';
+import { Count, MathText, Stars, answerOf, dot, labels, questionImages } from './shared';
 
 type Props = {
   items: any[];
@@ -71,6 +73,18 @@ function EmptyState({
       {action}
     </div>
   );
+}
+
+function firstPreviewMedia(q: any): string {
+  const imgs = questionImages(q);
+  if (imgs.length) return imgs[0];
+  if (Array.isArray(q?.optionImages)) {
+    const found = q.optionImages.find(
+      (s: any) => typeof s === 'string' && /^(\/api\/media\/|https?:\/\/|data:image\/)/.test(s.trim()),
+    );
+    if (found) return found.trim();
+  }
+  return '';
 }
 
 /** 题目列表：桌面表格 / 手机卡片共用同一页数据，勾选只作用于当前页。 */
@@ -176,114 +190,151 @@ export default function QuestionList(props: Props) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {items.map((q: any) => (
-              <TableRow key={q.id} className="cursor-pointer" onClick={() => props.onOpen(q.id)}>
-                <TableCell className="px-3" onClick={e => e.stopPropagation()}>
-                  <Checkbox
-                    aria-label="选择题目"
-                    checked={selected.includes(q.id)}
-                    onCheckedChange={() => props.onToggle(q.id)}
-                  />
-                </TableCell>
-                <TableCell className="max-w-0 px-3">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className={'size-1.5 shrink-0 rounded-full ' + (dot[q.type] || dot.single)} />
-                    <MathText text={q.q} className="truncate" />
-                  </div>
-                </TableCell>
-                <TableCell className="px-3">
-                  <Badge variant="secondary">{labels[q.type] || '单选'}</Badge>
-                </TableCell>
-                <TableCell className="px-3 text-muted-foreground">{q.subject || '—'}</TableCell>
-                <TableCell className="px-3 text-muted-foreground">{q.level || '—'}</TableCell>
-                <TableCell className="px-3">
-                  <Stars n={q.difficulty || 2} />
-                </TableCell>
-                <TableCell className="px-3">
-                  <MathText text={answerOf(q)} className="truncate text-muted-foreground" />
-                </TableCell>
-                <TableCell className="px-3" onClick={e => e.stopPropagation()}>
-                  <div className="flex justify-end gap-1">
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="size-8"
-                      aria-label="编辑题目"
-                      onClick={() => props.onEdit(q)}
-                    >
-                      <Pencil />
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="size-8"
-                      aria-label="复制为新题"
-                      onClick={() => props.onEdit(q, true)}
-                    >
-                      <Copy />
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="size-8"
-                      aria-label="删除题目"
-                      onClick={() => props.onRemove(q)}
-                    >
-                      <Trash2 className="text-destructive/60" />
-                    </Button>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
+            {items.map((q: any) => {
+              const thumb = firstPreviewMedia(q);
+              return (
+                <TableRow key={q.id} className="cursor-pointer" onClick={() => props.onOpen(q.id)}>
+                  <TableCell className="px-3" onClick={e => e.stopPropagation()}>
+                    <Checkbox
+                      aria-label="选择题目"
+                      checked={selected.includes(q.id)}
+                      onCheckedChange={() => props.onToggle(q.id)}
+                    />
+                  </TableCell>
+                  <TableCell className="max-w-0 px-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className={'size-1.5 shrink-0 rounded-full ' + (dot[q.type] || dot.single)} />
+                      <MathText text={q.q} plain className="truncate" />
+                      {q.enabled === false && (
+                        <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[10px]">
+                          暂停
+                        </Badge>
+                      )}
+                      {thumb && (
+                        <span className="inline-flex shrink-0 items-center gap-1" title="含配图">
+                          <img
+                            src={resolveMediaUrl(thumb)}
+                            alt=""
+                            loading="lazy"
+                            className="size-5 rounded border bg-muted/20 object-cover"
+                          />
+                          <ImageIcon className="size-3.5 text-muted-foreground sr-only" aria-label="含配图" />
+                        </span>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell className="px-3">
+                    <Badge variant="secondary">{labels[q.type] || '单选'}</Badge>
+                  </TableCell>
+                  <TableCell className="px-3 text-muted-foreground">{q.subject || '—'}</TableCell>
+                  <TableCell className="px-3 text-muted-foreground">{q.level || '—'}</TableCell>
+                  <TableCell className="px-3">
+                    <Stars n={q.difficulty || 2} />
+                  </TableCell>
+                  <TableCell className="px-3">
+                    <MathText text={answerOf(q)} className="truncate text-muted-foreground" />
+                  </TableCell>
+                  <TableCell className="px-3" onClick={e => e.stopPropagation()}>
+                    <div className="flex justify-end gap-1">
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="size-8"
+                        aria-label="编辑题目"
+                        onClick={() => props.onEdit(q)}
+                      >
+                        <Pencil />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="size-8"
+                        aria-label="复制为新题"
+                        onClick={() => props.onEdit(q, true)}
+                      >
+                        <Copy />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="size-8"
+                        aria-label="删除题目"
+                        onClick={() => props.onRemove(q)}
+                      >
+                        <Trash2 className="text-destructive/60" />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       </div>
 
       <div className="divide-y md:hidden">
-        {items.map((q: any) => (
-          <div key={q.id} className="space-y-2 px-4 py-3">
-            <Toolbar className="gap-2">
-              <ToolbarGroup className="min-w-0">
-                <Checkbox
-                  aria-label="选择题目"
-                  checked={selected.includes(q.id)}
-                  onCheckedChange={() => props.onToggle(q.id)}
-                />
-                <Badge variant="secondary">{labels[q.type] || '单选'}</Badge>
-                <Stars n={q.difficulty || 2} />
-              </ToolbarGroup>
-              <ToolbarGroup className="ms-auto">
-                <Button size="icon" variant="ghost" aria-label="查看题目" onClick={() => props.onOpen(q.id)}>
-                  <ChevronRight />
-                </Button>
-              </ToolbarGroup>
-            </Toolbar>
-            <MathText text={q.q} className="text-sm font-medium leading-6" />
-            <MathText text={'答案：' + answerOf(q)} className="truncate text-xs text-muted-foreground" />
-            <Toolbar className="gap-1">
-              <ToolbarGroup>
-                <span className="truncate text-xs text-muted-foreground">
-                  {q.subject || '未分类'}
-                  {q.level ? ' · ' + q.level : ''}
-                </span>
-              </ToolbarGroup>
-              <ToolbarGroup className="ms-auto">
-                <Button size="sm" variant="ghost" onClick={() => props.onEdit(q)}>
-                  <Pencil />
-                  编辑
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => props.onEdit(q, true)}>
-                  <Copy />
-                  复制
-                </Button>
-                <Button size="sm" variant="ghost" className="text-destructive" onClick={() => props.onRemove(q)}>
-                  <Trash2 />
-                  删除
-                </Button>
-              </ToolbarGroup>
-            </Toolbar>
-          </div>
-        ))}
+        {items.map((q: any) => {
+          const thumb = firstPreviewMedia(q);
+          return (
+            <div key={q.id} className="space-y-2 px-4 py-3">
+              <Toolbar className="gap-2">
+                <ToolbarGroup className="min-w-0">
+                  <Checkbox
+                    aria-label="选择题目"
+                    checked={selected.includes(q.id)}
+                    onCheckedChange={() => props.onToggle(q.id)}
+                  />
+                  <Badge variant="secondary">{labels[q.type] || '单选'}</Badge>
+                  <Stars n={q.difficulty || 2} />
+                  {q.enabled === false && (
+                    <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
+                      已暂停
+                    </Badge>
+                  )}
+                </ToolbarGroup>
+                <ToolbarGroup className="ms-auto">
+                  <Button size="icon" variant="ghost" aria-label="查看题目" onClick={() => props.onOpen(q.id)}>
+                    <ChevronRight />
+                  </Button>
+                </ToolbarGroup>
+              </Toolbar>
+              <div className="flex items-start gap-2.5">
+                <MathText text={q.q} plain className="min-w-0 flex-1 text-sm font-medium leading-6" />
+                {thumb && (
+                  <img
+                    src={resolveMediaUrl(thumb)}
+                    alt="题目配图"
+                    loading="lazy"
+                    className="size-12 shrink-0 rounded border bg-muted/20 object-contain"
+                  />
+                )}
+              </div>
+              <MathText text={'答案：' + answerOf(q)} className="truncate text-xs text-muted-foreground" />
+              <Toolbar className="gap-1">
+                <ToolbarGroup>
+                  <span className="truncate text-xs text-muted-foreground">
+                    {q.subject || '未分类'}
+                    {q.level ? ' · ' + q.level : ''}
+                  </span>
+                </ToolbarGroup>
+                <ToolbarGroup className="ms-auto">
+                  <Button size="sm" variant="ghost" onClick={() => props.onEdit(q)}>
+                    <Pencil />
+                    编辑
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => props.onEdit(q, true)}>
+                    <Copy />
+                    复制
+                  </Button>
+                  <Button size="sm" variant="ghost" className="text-destructive" onClick={() => props.onRemove(q)}>
+                    <Trash2 />
+                    删除
+                  </Button>
+                </ToolbarGroup>
+              </Toolbar>
+            </div>
+          );
+        })}
       </div>
 
       {!items.length &&

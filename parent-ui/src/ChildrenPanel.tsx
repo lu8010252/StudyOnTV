@@ -25,7 +25,9 @@ export default function ChildrenPanel({sessionId}:{sessionId:number}){
  const refresh=()=>{
   client.invalidateQueries({queryKey:['children',sessionId]});
   client.invalidateQueries({queryKey:['state',sessionId]});
-  client.invalidateQueries({queryKey:['records',sessionId]});
+  client.invalidateQueries({queryKey:['history',sessionId]});
+  client.invalidateQueries({queryKey:['events',sessionId]});
+  client.invalidateQueries({queryKey:['coverage',sessionId]});
  };
  const run=async(key:string,path:string,method:'POST'|'PUT',body:any,message:string)=>{
   setBusy(key);

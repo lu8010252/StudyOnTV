@@ -103,11 +103,14 @@
             </intent-filter>
         </activity-alias>
 
+        <!-- singleInstance 的任务里只能放一个 Activity：填空题输入页（TvTextInputActivity）
+             因此只能另起一个任务，输入页 finish 后任务归零，前台掉回桌面，小米固件随即强停本应用（#160）。
+             singleTask 仍然独占 com.studyontv.tv.gate 这个任务，但允许输入页叠在学习页之上。 -->
         <activity
             android:name=".GateActivity"
             android:configChanges="orientation|screenSize|keyboardHidden|navigation"
             android:excludeFromRecents="true"
-            android:launchMode="singleInstance"
+            android:launchMode="singleTask"
             android:screenOrientation="unspecified"
             android:taskAffinity="com.studyontv.tv.gate"
             android:theme="@style/GateTheme" />

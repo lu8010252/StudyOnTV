@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useState } from 'react';
+import { lazy, Suspense, useEffect, useReducer, useState } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download, Globe, MoreHorizontal, Plus, Sparkles, Trash2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
@@ -34,10 +34,10 @@ import QuestionFilters from './components/bank/QuestionFilters';
 import QuestionList from './components/bank/QuestionList';
 import QuestionDetailSheet from './components/bank/QuestionDetailSheet';
 import QuestionFormDialog from './components/bank/QuestionFormDialog';
-import QuestionImportDialog from './components/bank/QuestionImportDialog';
-import BankMarketDialog from './components/bank/BankMarketDialog';
-import AiGenerateDialog from './components/bank/AiGenerateDialog';
-import { answerOf, blank, download, MathText } from './components/bank/shared';
+const QuestionImportDialog = lazy(() => import('./components/bank/QuestionImportDialog'));
+const BankMarketDialog = lazy(() => import('./components/bank/BankMarketDialog'));
+const AiGenerateDialog = lazy(() => import('./components/bank/AiGenerateDialog'));
+import { answerOf, blank, download, MathText, questionImages } from './components/bank/shared';
 
 // GradingPage 等页面仍在从这里取这两个工具
 export { answerOf, MathText };
@@ -117,6 +117,7 @@ export default function QuestionBank({ sessionId }: { sessionId: number }) {
             type: q.type || 'single',
             q: q.q,
             opts: q.type === 'boolean' ? ['正确', '错误'] : [...(q.a || [])],
+            optionImages: q.type === 'boolean' ? [] : (q.a || []).map((_: any, i: number) => (Array.isArray(q.optionImages) ? q.optionImages[i] || '' : '')),
             correct: q.type === 'multiple' ? [...(q.correctIndices || [])] : [q.k || 0],
             accepted: (q.answers || []).join('\n'),
             difficulty: q.difficulty || 2,
@@ -127,8 +128,10 @@ export default function QuestionBank({ sessionId }: { sessionId: number }) {
             level: q.level || '',
             bank: q.bank || '默认题库',
             image: q.image || '',
+            images: questionImages(q),
             audio: q.audio || '',
             language: q.language ?? 'zh-CN',
+            enabled: copy ? true : q.enabled,
           }
         : { ...blank },
     );
@@ -188,18 +191,31 @@ export default function QuestionBank({ sessionId }: { sessionId: number }) {
     onError: (e: any) => toast.error(e.message),
   });
 
-  // 导出要的就是整份题库：单独请求全量，日常翻页仍然只取一页
+  // 导出要的就是整份题库（含暂停题与内联本地配图）：单独请求全量，日常翻页仍然只取一页
   async function exportBank() {
     if (exporting) return;
     setExporting(true);
     try {
       const result = await api(
-        '/api/questions?limit=50000&enabledOnly=false&sort=newest',
+        '/api/questions?all=1&limit=50000&inlineMedia=1',
         'GET',
         undefined,
         60000,
       );
-      download({ version: 2, items: result.items || [] }, 'studyontv-bank.json');
+      const exported = (result.items || []).map((q: any) => {
+        const item: any = { ...q };
+        const imgs = questionImages(q);
+        if (imgs.length) {
+          item.images = imgs;
+          item.image = imgs[0];
+        }
+        if (Array.isArray(q.optionImages) && q.optionImages.some(Boolean)) {
+          item.optionImages = q.optionImages;
+        }
+        item.enabled = q.enabled !== false;
+        return item;
+      });
+      download({ version: 2, items: exported }, 'studyontv-bank.json');
     } catch (e: any) {
       toast.error(e.message || '导出失败');
     } finally {
@@ -344,21 +360,33 @@ export default function QuestionBank({ sessionId }: { sessionId: number }) {
         />
       )}
 
-      <QuestionImportDialog
-        open={importing}
-        onOpenChange={setImporting}
-        meta={meta}
-        onImported={message => toast.success(message)}
-      />
+      {importing && (
+        <Suspense fallback={null}>
+          <QuestionImportDialog
+            open={importing}
+            onOpenChange={setImporting}
+            meta={meta}
+            onImported={message => toast.success(message)}
+          />
+        </Suspense>
+      )}
 
-      <BankMarketDialog open={marketOpen} onOpenChange={setMarketOpen} sessionId={sessionId} />
+      {marketOpen && (
+        <Suspense fallback={null}>
+          <BankMarketDialog open={marketOpen} onOpenChange={setMarketOpen} sessionId={sessionId} />
+        </Suspense>
+      )}
 
-      <AiGenerateDialog
-        open={aiOpen}
-        onOpenChange={setAiOpen}
-        sessionId={sessionId}
-        onOpenImport={() => setImporting(true)}
-      />
+      {aiOpen && (
+        <Suspense fallback={null}>
+          <AiGenerateDialog
+            open={aiOpen}
+            onOpenChange={setAiOpen}
+            sessionId={sessionId}
+            onOpenImport={() => setImporting(true)}
+          />
+        </Suspense>
+      )}
 
       <Dialog
         open={!!remove}

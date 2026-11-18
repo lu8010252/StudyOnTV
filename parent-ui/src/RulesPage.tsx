@@ -2,8 +2,10 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { BookOpen, ChevronDown, Clock3, Repeat2, Sparkles } from 'lucide-react';
+import { BookOpen, Check, ChevronDown, Clock3, GraduationCap, Repeat2, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { SectionHeading } from '@/components/ui/section-heading';
 import { SaveStatus, type SaveState } from '@/components/ui/save-status';
@@ -116,6 +118,9 @@ function NumberStepper({
 }
 
 const fieldLabels: Record<string, string> = {
+  supervisionEnabled: '启用屏幕时间管控',
+  memorizeFirst: '先背再测',
+  spacedScope: '间隔重复范围',
   videoMinutes: '每次视频学习分钟',
   dailyFreeMinutes: '每日免费时长',
   bootFreeMinutes: '每次开机或唤醒免费时长',
@@ -135,7 +140,6 @@ const fieldLabels: Record<string, string> = {
   roundsLimitEnabled: '启用每日组数上限',
   restEnabled: '强制休息',
   trafficAssistEnabled: '按流量判断是否在播放',
-  backgroundAnchorEnabled: '保留后台空窗口',
   blockSettingsDuringControl: '锁定时不允许进系统设置',
   allDay: '全天管控',
   childSelectLevel: '孩子选择年级',
@@ -285,28 +289,20 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
   const c = form.watch();
   const client = useQueryClient();
   const [tab, setTab] = useState<'task' | 'time' | 'scope' | 'more'>('task');
-  // 必须和 QuestionBank 用完全相同的 URL：两处共用 ['bank',…] 这个 queryKey，
-  // URL 不一致时先挂载的一方会把不完整的数据写进缓存（暂停的题在题库页凭空消失）。
-  const bank = useQuery({
-    queryKey: ['bank', sessionId],
-    queryFn: () => api('/api/questions?limit=50000&enabledOnly=false'),
+  const bankMeta = useQuery({
+    queryKey: ['bank-meta', sessionId],
+    queryFn: () => api('/api/questions/meta'),
   });
   const device = useQuery({ queryKey: ['device', sessionId], queryFn: () => api('/api/device') });
   // Radix 的 SelectItem 不接受空字符串，所以「跟随设备」在控件里用 device 代替
   const zoneChoices = zoneOptions.map(([value, label]) => [value || 'device', label] as [string, string]);
-  const scopeSubjects: any[] = [
-    ...new Set((bank.data?.items || []).map((q: any) => q.subject).filter(Boolean)),
-  ].sort();
-  const scopeLevels: any[] = [
-    ...new Set((bank.data?.items || []).map((q: any) => q.level).filter(Boolean)),
-  ].sort();
-  const scopeBanks: any[] = [
-    ...new Set((bank.data?.items || []).map((q: any) => q.bank || '默认题库')),
-  ].sort();
-  const inScope = (key: any, value: string) => Array.isArray(c[key]) && c[key].includes(value);
+  const scopeSubjects: string[] = bankMeta.data?.subjects || [];
+  const scopeLevels: string[] = bankMeta.data?.levels || [];
+  const scopeBanks: string[] = bankMeta.data?.banks || [];
+  const inScope = (key: any, value: string) => Array.isArray((c as any)[key]) && (c as any)[key].includes(value);
   const change = (key: any, value: any) => form.setValue(key, value, { shouldDirty: true, shouldValidate: true });
   const toggleScope = (key: any, value: string) => {
-    const list = Array.isArray(c[key]) ? c[key] : [];
+    const list = Array.isArray((c as any)[key]) ? (c as any)[key] : [];
     change(key, list.includes(value) ? list.filter((v: string) => v !== value) : [...list, value]);
   };
   useEffect(() => {
@@ -338,10 +334,12 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
         validationToast.current = '';
         save.mutate(form.getValues());
       } else {
-        const first = collectErrorMessages(form.formState.errors)[0];
-        if (first && validationToast.current !== first.text) {
-          validationToast.current = first.text;
-          toast.error('无法自动保存：' + first.text);
+        const parsed = ruleSchema.safeParse(form.getValues());
+        const text = (!parsed.success ? parsed.error.issues[0]?.message : undefined)
+          || collectErrorMessages(form.formState.errors)[0]?.text;
+        if (text && validationToast.current !== text) {
+          validationToast.current = text;
+          toast.error('无法自动保存：' + text);
         }
       }
     }, 800);
@@ -362,7 +360,7 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
     />
   );
   const number = (key: any, min: number, max: number) => {
-    const current = Number(c[key]);
+    const current = Number((c as any)[key]);
     return (
       <NumberStepper
         key={key}
@@ -387,6 +385,72 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
         ? 'pending'
         : 'saved';
   const statusNode = <SaveStatus state={saveState} />;
+  const supervisionEnabled = c.supervisionEnabled !== false;
+
+  const rewardAndQuotaFields = (
+    <FieldGroup className={fieldGroup}>
+      <Field orientation="responsive" className="py-3.5">
+        <FieldContent>
+          <FieldTitle>按题目星级奖励</FieldTitle>
+          <FieldDescription className="text-xs leading-5">
+            关闭时：通过一组固定解锁 N 分钟；开启时：按题目难度星级分别设置奖励时长
+          </FieldDescription>
+        </FieldContent>
+        {toggle('difficultyRewardEnabled')}
+      </Field>
+
+      {c.difficultyRewardEnabled ? (
+        [1, 2, 3, 4, 5].map(star => (
+          <Field key={star} orientation="responsive" className="py-3.5">
+            <FieldContent>
+              <FieldTitle>{'★'.repeat(star)} 每题奖励（分钟）</FieldTitle>
+            </FieldContent>
+            <Input
+              className="w-24 text-center"
+              aria-label={star + '星奖励'}
+              type="number"
+              min={0.1}
+              max={120}
+              step={0.1}
+              {...form.register(`difficultyRewards.${star}`, { valueAsNumber: true })}
+            />
+          </Field>
+        ))
+      ) : (
+        <Field orientation="responsive" className="py-3.5">
+          <FieldContent>
+            <FieldTitle>通过一组解锁（分钟）</FieldTitle>
+          </FieldContent>
+          {number('sessionMinutes', 1, 120)}
+        </Field>
+      )}
+
+      <Field orientation="responsive" className="py-3.5">
+        <FieldContent>
+          <FieldTitle>每日使用上限（分钟）</FieldTitle>
+          <FieldDescription className="text-xs leading-5">
+            超出后当天锁死；0 点重置
+          </FieldDescription>
+        </FieldContent>
+        <div className="flex items-center gap-3">
+          {toggle('dailyLimitEnabled')}
+          {c.dailyLimitEnabled && number('dailyMinutes', 1, 480)}
+        </div>
+      </Field>
+
+      <Field orientation="responsive" className="py-3.5">
+        <FieldContent>
+          <FieldTitle>每天最多解锁（组）</FieldTitle>
+          <FieldDescription className="text-xs leading-5">答完上限即锁定</FieldDescription>
+        </FieldContent>
+        <div className="flex items-center gap-3">
+          {toggle('roundsLimitEnabled')}
+          {c.roundsLimitEnabled && number('roundsPerDay', 1, 100)}
+        </div>
+      </Field>
+    </FieldGroup>
+  );
+
   return (
     <form
       onSubmit={form.handleSubmit(
@@ -395,14 +459,71 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
       )}
       className="rules-form space-y-5"
     >
+      {/* 顶部模式切换卡：降低上手门槛，不需要锁屏权限也能直接使用全部学习提分能力 */}
+      <Card className="gap-0 border-primary/20 bg-gradient-to-br from-primary/[0.03] via-card to-card py-4 shadow-xs">
+        <CardContent className="space-y-3 px-4 sm:px-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <GraduationCap className="size-4 text-primary" />
+              运行模式
+            </div>
+            {statusNode}
+          </div>
+          <div className="grid gap-2.5 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => change('supervisionEnabled', false)}
+              className={`flex flex-col items-start gap-1 rounded-xl border p-3 text-left transition-colors ${
+                !supervisionEnabled
+                  ? 'border-primary bg-primary/5 ring-1 ring-primary/30'
+                  : 'border-border/70 bg-background/60 hover:bg-muted/40'
+              }`}
+            >
+              <div className="flex w-full items-center justify-between gap-2">
+                <span className="text-sm font-semibold">📚 纯粹学习提分模式</span>
+                {!supervisionEnabled && (
+                  <Badge variant="default" className="h-5 px-1.5 text-[11px]">
+                    <Check className="me-0.5 size-3" />启用中
+                  </Badge>
+                )}
+              </div>
+              <span className="text-xs leading-5 text-muted-foreground">
+                免锁屏、免复杂权限，随时刷题背诵、错题先背再测与艾宾浩斯复习
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => change('supervisionEnabled', true)}
+              className={`flex flex-col items-start gap-1 rounded-xl border p-3 text-left transition-colors ${
+                supervisionEnabled
+                  ? 'border-primary bg-primary/5 ring-1 ring-primary/30'
+                  : 'border-border/70 bg-background/60 hover:bg-muted/40'
+              }`}
+            >
+              <div className="flex w-full items-center justify-between gap-2">
+                <span className="text-sm font-semibold">⏳ 先学再看管控模式</span>
+                {supervisionEnabled && (
+                  <Badge variant="default" className="h-5 px-1.5 text-[11px]">
+                    <Check className="me-0.5 size-3" />启用中
+                  </Badge>
+                )}
+              </div>
+              <span className="text-xs leading-5 text-muted-foreground">
+                答题达标赢取屏幕使用时间，自动管理每日时长与可用时段
+              </span>
+            </button>
+          </div>
+        </CardContent>
+      </Card>
+
       <Tabs value={tab} onValueChange={value => setTab(value as typeof tab)} className="gap-5">
         <TabsList className="w-full gap-1">
           {(
             [
-              ['task', '任务与解锁'],
-              ['time', '时间计划'],
+              ['task', '任务与背诵'],
               ['scope', '答题范围'],
-              ['more', '加练与复习'],
+              ['more', '记忆与加练'],
+              ['time', supervisionEnabled ? '时间计划' : '时间管控（未启用）'],
             ] as const
           ).map(([id, label]) => (
             <TabsTrigger key={id} type="button" value={id}>
@@ -412,16 +533,14 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
         </TabsList>
 
         <TabsContent value="task" className="mt-0">
-          <Panel title="学习任务" icon={Sparkles} status={tab === 'task' ? statusNode : undefined}>
+          <Panel title="学习任务与背诵策略" icon={Sparkles} status={tab === 'task' ? statusNode : undefined}>
             <FieldSet className="gap-0">
               <FieldGroup className={fieldGroup}>
-                {/* ── 核心设置：默认展示 ── */}
-
                 <Field orientation="responsive" className="py-3.5">
                   <FieldContent>
                     <FieldTitle>玩法</FieldTitle>
                     <FieldDescription className="text-xs leading-5">
-                      按组闯关：答对一组解锁时长；连续答对：连对 N 题解锁；自由练习：不管控，随时答题
+                      按组闯关：答完一组结算；连续答对：连对 N 题达标；答对指定题数：累计答对 N 题达标
                     </FieldDescription>
                   </FieldContent>
                   <Controller
@@ -458,65 +577,30 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
 
                 <Field orientation="responsive" className="py-3.5">
                   <FieldContent>
-                    <FieldTitle>按题目星级奖励</FieldTitle>
+                    <FieldTitle>先背再测</FieldTitle>
                     <FieldDescription className="text-xs leading-5">
-                      关闭时：通过一组固定解锁 N 分钟；开启时：按题目难度星级分别设置奖励时长
+                      做题前先展示答案与解析卡片背诵一遍，再打乱测验，适合生词、古诗文与新题入门
                     </FieldDescription>
                   </FieldContent>
-                  {toggle('difficultyRewardEnabled')}
+                  {toggle('memorizeFirst')}
                 </Field>
 
-                {c.difficultyRewardEnabled ? (
-                  [1, 2, 3, 4, 5].map(star => (
-                    <Field key={star} orientation="responsive" className="py-3.5">
-                      <FieldContent>
-                        <FieldTitle>{'★'.repeat(star)} 每题奖励（分钟）</FieldTitle>
-                      </FieldContent>
-                      <Input
-                        className="w-24 text-center"
-                        aria-label={star + '星奖励'}
-                        type="number"
-                        min={0.1}
-                        max={120}
-                        step={0.1}
-                        {...form.register(`difficultyRewards.${star}`, { valueAsNumber: true })}
-                      />
-                    </Field>
-                  ))
-                ) : (
-                  <Field orientation="responsive" className="py-3.5">
-                    <FieldContent>
-                      <FieldTitle>通过一组解锁（分钟）</FieldTitle>
-                    </FieldContent>
-                    {number('sessionMinutes', 1, 120)}
-                  </Field>
-                )}
-
-                <Field orientation="responsive" className="py-3.5">
-                  <FieldContent>
-                    <FieldTitle>每日使用上限（分钟）</FieldTitle>
-                    <FieldDescription className="text-xs leading-5">
-                      超出后当天锁死；0 点重置
-                    </FieldDescription>
-                  </FieldContent>
-                  <div className="flex items-center gap-3">
-                    {toggle('dailyLimitEnabled')}
-                    {c.dailyLimitEnabled && number('dailyMinutes', 1, 480)}
-                  </div>
-                </Field>
-
-                <Field orientation="responsive" className="py-3.5">
-                  <FieldContent>
-                    <FieldTitle>每天最多解锁（组）</FieldTitle>
-                    <FieldDescription className="text-xs leading-5">答完上限即锁定</FieldDescription>
-                  </FieldContent>
-                  <div className="flex items-center gap-3">
-                    {toggle('roundsLimitEnabled')}
-                    {c.roundsLimitEnabled && number('roundsPerDay', 1, 100)}
-                  </div>
-                </Field>
+                {supervisionEnabled && rewardAndQuotaFields}
               </FieldGroup>
             </FieldSet>
+
+            {!supervisionEnabled && (
+              <Collapsible className="border-t border-border/60">
+                <CollapsibleTrigger
+                  type="button"
+                  className="group flex items-center gap-1.5 py-3.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <ChevronDown className="size-3 transition-transform group-data-[state=open]:rotate-180" />
+                  屏幕时长与奖励规则（切换到「先学再看管控模式」后生效）
+                </CollapsibleTrigger>
+                <CollapsibleContent>{rewardAndQuotaFields}</CollapsibleContent>
+              </Collapsible>
+            )}
 
             {/* ── 高级设置：默认收起 ── */}
             <Collapsible className="border-t border-border/60">
@@ -525,7 +609,7 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
                 className="group flex items-center gap-1.5 py-3.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
               >
                 <ChevronDown className="size-3 transition-transform group-data-[state=open]:rotate-180" />
-                高级设置
+                更多答题与显示设置
               </CollapsibleTrigger>
               <CollapsibleContent>
                 <FieldSet className="gap-0">
@@ -585,25 +669,29 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
                       </>
                     )}
 
-                    <Field orientation="responsive" className="py-3.5">
-                      <FieldContent>
-                        <FieldTitle>每日免费时长（分钟）</FieldTitle>
-                        <FieldDescription className="text-xs leading-5">
-                          到期前无需答题；0 为关闭
-                        </FieldDescription>
-                      </FieldContent>
-                      {number('dailyFreeMinutes', 0, 120)}
-                    </Field>
+                    {supervisionEnabled && (
+                      <>
+                        <Field orientation="responsive" className="py-3.5">
+                          <FieldContent>
+                            <FieldTitle>每日免费时长（分钟）</FieldTitle>
+                            <FieldDescription className="text-xs leading-5">
+                              到期前无需答题；0 为关闭
+                            </FieldDescription>
+                          </FieldContent>
+                          {number('dailyFreeMinutes', 0, 120)}
+                        </Field>
 
-                    <Field orientation="responsive" className="py-3.5">
-                      <FieldContent>
-                        <FieldTitle>每次开机免费（分钟）</FieldTitle>
-                        <FieldDescription className="text-xs leading-5">
-                          真实开机或唤醒时发放，重开应用不重复；0 为关闭
-                        </FieldDescription>
-                      </FieldContent>
-                      {number('bootFreeMinutes', 0, 120)}
-                    </Field>
+                        <Field orientation="responsive" className="py-3.5">
+                          <FieldContent>
+                            <FieldTitle>每次开机免费（分钟）</FieldTitle>
+                            <FieldDescription className="text-xs leading-5">
+                              真实开机或唤醒时发放，重开应用不重复；0 为关闭
+                            </FieldDescription>
+                          </FieldContent>
+                          {number('bootFreeMinutes', 0, 120)}
+                        </Field>
+                      </>
+                    )}
 
                     {c.playMode === 'round' && (
                       <Field orientation="responsive" className="py-3.5">
@@ -634,7 +722,7 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
                       <FieldContent>
                         <FieldTitle>答错后强制查看解析（秒）</FieldTitle>
                         <FieldDescription className="text-xs leading-5">
-                          0 为不强制；期间不能提前下一题或使用奖励时长
+                          0 为不强制；期间不能提前进入下一题
                         </FieldDescription>
                       </FieldContent>
                       {number('wrongReviewSeconds', 0, 300)}
@@ -650,15 +738,17 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
                       {toggle('shuffleOptions')}
                     </Field>
 
-                    <Field orientation="responsive" className="py-3.5">
-                      <FieldContent>
-                        <FieldTitle>显示剩余时间角标</FieldTitle>
-                        <FieldDescription className="text-xs leading-5">
-                          右上角显示剩余分钟；最后一分钟闪烁
-                        </FieldDescription>
-                      </FieldContent>
-                      {toggle('showCountdown')}
-                    </Field>
+                    {supervisionEnabled && (
+                      <Field orientation="responsive" className="py-3.5">
+                        <FieldContent>
+                          <FieldTitle>显示剩余时间角标</FieldTitle>
+                          <FieldDescription className="text-xs leading-5">
+                            右上角显示剩余分钟；最后一分钟闪烁
+                          </FieldDescription>
+                        </FieldContent>
+                        {toggle('showCountdown')}
+                      </Field>
+                    )}
 
                     <Field orientation="responsive" className="py-3.5">
                       <FieldContent>
@@ -698,18 +788,22 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
                     <FieldDescription className="text-xs leading-5">只从选中的题库抽题</FieldDescription>
                   </FieldContent>
                   <div className="flex min-w-0 flex-wrap gap-2">
-                    {scopeBanks.map(v => (
-                      <FieldLabel
-                        key={v}
-                        className="cursor-pointer rounded-lg border border-border/70 px-3 py-2 font-normal transition-colors hover:bg-muted/40 has-data-[state=checked]:border-primary/40 has-data-[state=checked]:bg-primary/5"
-                      >
-                        <Checkbox
-                          checked={inScope('quizBanks', v)}
-                          onCheckedChange={() => toggleScope('quizBanks', v)}
-                        />
-                        <span>{v}</span>
-                      </FieldLabel>
-                    ))}
+                    {scopeBanks.length ? (
+                      scopeBanks.map(v => (
+                        <FieldLabel
+                          key={v}
+                          className="cursor-pointer rounded-lg border border-border/70 px-3 py-2 font-normal transition-colors hover:bg-muted/40 has-data-[state=checked]:border-primary/40 has-data-[state=checked]:bg-primary/5"
+                        >
+                          <Checkbox
+                            checked={inScope('quizBanks', v)}
+                            onCheckedChange={() => toggleScope('quizBanks', v)}
+                          />
+                          <span>{v}</span>
+                        </FieldLabel>
+                      ))
+                    ) : (
+                      <FieldDescription className="text-xs">题库里还没有题目</FieldDescription>
+                    )}
                   </div>
                 </Field>
                 <Field orientation="responsive" className="py-3.5">
@@ -792,163 +886,231 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
         </TabsContent>
 
         <TabsContent value="time" className="mt-0 space-y-5">
-          <Panel title="时段" icon={Clock3} status={tab === 'time' ? statusNode : undefined}>
+          {!supervisionEnabled && (
+            <Alert>
+              <Clock3 />
+              <AlertDescription className="flex flex-wrap items-center gap-3">
+                <span>当前处于「纯粹学习提分模式」，设备不会锁屏或限制其他应用。如需限制观看时长，请开启管控模式。</span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="ms-auto"
+                  onClick={() => change('supervisionEnabled', true)}
+                >
+                  开启先学再看管控
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
+          <div className={supervisionEnabled ? 'space-y-5' : 'space-y-5 opacity-65'}>
+            <Panel title="时段" icon={Clock3} status={tab === 'time' ? statusNode : undefined}>
+              <FieldSet className="gap-0">
+                <FieldGroup className={fieldGroup}>
+                  <Field orientation="responsive" className="py-3.5">
+                    <FieldContent>
+                      <FieldTitle>时间规则</FieldTitle>
+                    </FieldContent>
+                    <Controller
+                      control={form.control}
+                      name="scheduleMode"
+                      render={({ field }) => (
+                        <Choice
+                          label="时间规则"
+                          value={field.value || 'allow'}
+                          onChange={v => field.onChange(v)}
+                          options={[
+                            ['allow', '时段内答题解锁，时段外锁定'],
+                            ['control', '时段内答题解锁，时段外自由看'],
+                          ]}
+                        />
+                      )}
+                    />
+                  </Field>
+                  <Field orientation="responsive" className="py-3.5">
+                    <FieldContent>
+                      <FieldTitle>强制休息</FieldTitle>
+                      <FieldDescription className="text-xs leading-5">
+                        关屏、答题不计时，重启不能跳过
+                      </FieldDescription>
+                    </FieldContent>
+                    {toggle('restEnabled')}
+                  </Field>
+                  {c.restEnabled && (
+                    <>
+                      <Field orientation="responsive" className="py-3.5">
+                        <FieldContent>
+                          <FieldTitle>累计观看（分钟）</FieldTitle>
+                        </FieldContent>
+                        {number('restWatchMinutes', 1, 480)}
+                      </Field>
+                      <Field orientation="responsive" className="py-3.5">
+                        <FieldContent>
+                          <FieldTitle>强制休息（分钟）</FieldTitle>
+                        </FieldContent>
+                        {number('restMinutes', 1, 120)}
+                      </Field>
+                    </>
+                  )}
+                  <Field orientation="responsive" className="py-3.5">
+                    <FieldContent>
+                      <FieldTitle>按流量判断是否在播放</FieldTitle>
+                      <FieldDescription className="text-xs leading-5">
+                        有的电视识别不到正在播放的视频。打开后，只要有声音、同时网络有明显下载，就当作在看视频
+                      </FieldDescription>
+                    </FieldContent>
+                    {toggle('trafficAssistEnabled')}
+                  </Field>
+                  <Field orientation="responsive" className="py-3.5">
+                    <FieldContent>
+                      <FieldTitle>锁定时不允许进系统设置</FieldTitle>
+                      <FieldDescription className="text-xs leading-5">
+                        锁定期间打不开系统设置；需要开启无障碍权限
+                      </FieldDescription>
+                    </FieldContent>
+                    {toggle('blockSettingsDuringControl')}
+                  </Field>
+                  <Field orientation="responsive" className="py-3.5">
+                    <FieldContent>
+                      <FieldTitle>强制使用全屏学习页</FieldTitle>
+                      <FieldDescription className="text-xs leading-5">
+                        适合悬浮窗被视频遮挡的电视（如海信 VIDAA）
+                      </FieldDescription>
+                    </FieldContent>
+                    {toggle('forceFullscreenGate')}
+                  </Field>
+                  <Field orientation="responsive" className="py-3.5">
+                    <FieldContent>
+                      <FieldTitle>答题页输密码解锁</FieldTitle>
+                      <FieldDescription className="text-xs leading-5">
+                        锁定页显示「家长验证解锁」，输对管理密码可临时解锁 30 分钟；默认关闭
+                      </FieldDescription>
+                    </FieldContent>
+                    {toggle('allowQuizUnlock')}
+                  </Field>
+                  <Field className="py-3.5">
+                    <FieldContent>
+                      <FieldTitle>不计时的应用</FieldTitle>
+                      <FieldDescription className="text-xs leading-5">
+                        这些应用在前台时不扣观看时长、不弹题，适合系统屏保、网课 App。最多 100 个。
+                      </FieldDescription>
+                    </FieldContent>
+                    <Controller
+                      name="watchWhitelist"
+                      control={form.control}
+                      render={({ field }) => (
+                        <WatchWhitelistField
+                          value={field.value || []}
+                          onChange={field.onChange}
+                        />
+                      )}
+                    />
+                  </Field>
+                  <Field orientation="responsive" className="py-3.5">
+                    <FieldContent>
+                      <FieldTitle>时区</FieldTitle>
+                      <FieldDescription className="text-xs leading-5">
+                        可用时段、全天可用和「今天」的重置都按这个时区算。
+                        {!c.timezone && device.data?.timezone
+                          ? `设备当前：${device.data.timezone}`
+                          : '人在国外或设备时间固定在国内时区时改这里。'}
+                      </FieldDescription>
+                    </FieldContent>
+                    <Choice
+                      value={c.timezone || 'device'}
+                      onChange={v => change('timezone', v === 'device' ? '' : v)}
+                      options={zoneChoices}
+                      label="时区"
+                    />
+                  </Field>
+                  <Field orientation="responsive" className="py-3.5">
+                    <FieldContent>
+                      <FieldTitle>全天管控</FieldTitle>
+                      <FieldDescription className="text-xs leading-5">忽略上面的时段设置</FieldDescription>
+                    </FieldContent>
+                    {toggle('allDay')}
+                  </Field>
+                  {!c.allDay && (
+                    <WeekSchedule
+                      value={c.weekSlots}
+                      onChange={v => change('weekSlots', v)}
+                      holidayMode={c.holidayMode || 'sunday'}
+                      onHolidayMode={v => change('holidayMode', v)}
+                    />
+                  )}
+                </FieldGroup>
+              </FieldSet>
+            </Panel>
+            <Panel
+              title="网课时段与大人豁免"
+              icon={Clock3}
+              description="可跨午夜；优先级：解锁/暂停 > 大人豁免 > 网课 > 可用时段"
+            >
+              <TimePoints
+                points={c.timePoints}
+                exempt={c.exemptWindows}
+                onPoints={v => change('timePoints', v)}
+                onExempt={v => change('exemptWindows', v)}
+              />
+            </Panel>
+          </div>
+        </TabsContent>
+
+        {/* forceMount：保持子组件状态稳定，按 data-state 隐藏非激活页签 */}
+        <TabsContent value="more" forceMount className="mt-0 space-y-5 data-[state=inactive]:hidden">
+          <Panel title="科学记忆与错题加练" icon={Repeat2} status={tab === 'more' ? statusNode : undefined}>
             <FieldSet className="gap-0">
               <FieldGroup className={fieldGroup}>
                 <Field orientation="responsive" className="py-3.5">
                   <FieldContent>
-                    <FieldTitle>时间规则</FieldTitle>
+                    <FieldTitle>先背再测</FieldTitle>
+                    <FieldDescription className="text-xs leading-5">
+                      做题前先展示答案与解析卡片背诵一遍，再打乱顺序小测检验，大幅提升初次正确率
+                    </FieldDescription>
                   </FieldContent>
-                  <Controller
-                    control={form.control}
-                    name="scheduleMode"
-                    render={({ field }) => (
-                      <Choice
-                        label="时间规则"
-                        value={field.value || 'allow'}
-                        onChange={v => field.onChange(v)}
-                        options={[
-                          ['allow', '时段内答题解锁，时段外锁定'],
-                          ['control', '时段内答题解锁，时段外自由看'],
-                        ]}
-                      />
-                    )}
-                  />
+                  {toggle('memorizeFirst')}
                 </Field>
                 <Field orientation="responsive" className="py-3.5">
                   <FieldContent>
-                    <FieldTitle>强制休息</FieldTitle>
+                    <FieldTitle>按记忆曲线复习（Anki 间隔重复）</FieldTitle>
                     <FieldDescription className="text-xs leading-5">
-                      关屏、答题不计时，重启不能跳过
+                      到遗忘临界点自动优先安排复习，答对越稳下次复习间隔越长
                     </FieldDescription>
                   </FieldContent>
-                  {toggle('restEnabled')}
+                  {toggle('spacedRepetitionEnabled')}
                 </Field>
-                {c.restEnabled && (
+                {c.spacedRepetitionEnabled && (
                   <>
                     <Field orientation="responsive" className="py-3.5">
                       <FieldContent>
-                        <FieldTitle>累计观看（分钟）</FieldTitle>
+                        <FieldTitle>间隔重复范围</FieldTitle>
+                        <FieldDescription className="text-xs leading-5">
+                          「只背做错过的题」适合题库量大、只想专注清零错题本的场景
+                        </FieldDescription>
                       </FieldContent>
-                      {number('restWatchMinutes', 1, 480)}
+                      <Controller
+                        name="spacedScope"
+                        control={form.control}
+                        render={({ field }) => (
+                          <Choice
+                            label="间隔重复范围"
+                            value={field.value || 'all'}
+                            onChange={field.onChange}
+                            options={[
+                              ['all', '全部启用题目'],
+                              ['wrong_only', '只背做错过的题（错题艾宾浩斯）'],
+                            ]}
+                          />
+                        )}
+                      />
                     </Field>
-                    <Field orientation="responsive" className="py-3.5">
-                      <FieldContent>
-                        <FieldTitle>强制休息（分钟）</FieldTitle>
-                      </FieldContent>
-                      {number('restMinutes', 1, 120)}
+                    <Field className="py-3.5">
+                      <FieldDescription>
+                        已纳入记忆计划 {state?.repetition?.studied || 0} 题，今日到期复习 {state?.repetition?.due || 0} 题；进度跨重启保留。
+                      </FieldDescription>
                     </Field>
                   </>
                 )}
-                <Field orientation="responsive" className="py-3.5">
-                  <FieldContent>
-                    <FieldTitle>按流量判断是否在播放</FieldTitle>
-                    <FieldDescription className="text-xs leading-5">
-                      有的电视识别不到正在播放的视频。打开后，只要有声音、同时网络有明显下载，就当作在看视频
-                    </FieldDescription>
-                  </FieldContent>
-                  {toggle('trafficAssistEnabled')}
-                </Field>
-                <Field orientation="responsive" className="py-3.5">
-                  <FieldContent>
-                    <FieldTitle>锁定时不允许进系统设置</FieldTitle>
-                    <FieldDescription className="text-xs leading-5">
-                      锁定期间打不开系统设置；需要开启无障碍权限
-                    </FieldDescription>
-                  </FieldContent>
-                  {toggle('blockSettingsDuringControl')}
-                </Field>
-                <Field orientation="responsive" className="py-3.5">
-                  <FieldContent>
-                    <FieldTitle>强制使用全屏学习页</FieldTitle>
-                    <FieldDescription className="text-xs leading-5">
-                      适合悬浮窗被视频遮挡的电视（如海信 VIDAA）
-                    </FieldDescription>
-                  </FieldContent>
-                  {toggle('forceFullscreenGate')}
-                </Field>
-                <Field orientation="responsive" className="py-3.5">
-                  <FieldContent>
-                    <FieldTitle>答题页输密码解锁</FieldTitle>
-                    <FieldDescription className="text-xs leading-5">
-                      锁定页显示「家长验证解锁」，输对管理密码可临时解锁 30 分钟；默认关闭
-                    </FieldDescription>
-                  </FieldContent>
-                  {toggle('allowQuizUnlock')}
-                </Field>
-                <Field className="py-3.5">
-                  <FieldContent>
-                    <FieldTitle>不计时的应用</FieldTitle>
-                    <FieldDescription className="text-xs leading-5">
-                      这些应用在前台时不扣观看时长、不弹题，适合系统屏保、网课 App。最多 100 个。
-                    </FieldDescription>
-                  </FieldContent>
-                  <Controller
-                    name="watchWhitelist"
-                    control={form.control}
-                    render={({ field }) => (
-                      <WatchWhitelistField
-                        value={field.value || []}
-                        onChange={field.onChange}
-                      />
-                    )}
-                  />
-                </Field>
-                <Field orientation="responsive" className="py-3.5">
-                  <FieldContent>
-                    <FieldTitle>时区</FieldTitle>
-                    <FieldDescription className="text-xs leading-5">
-                      可用时段、全天可用和「今天」的重置都按这个时区算。
-                      {!c.timezone && device.data?.timezone
-                        ? `设备当前：${device.data.timezone}`
-                        : '人在国外或设备时间固定在国内时区时改这里。'}
-                    </FieldDescription>
-                  </FieldContent>
-                  <Choice
-                    value={c.timezone || 'device'}
-                    onChange={v => change('timezone', v === 'device' ? '' : v)}
-                    options={zoneChoices}
-                    label="时区"
-                  />
-                </Field>
-                <Field orientation="responsive" className="py-3.5">
-                  <FieldContent>
-                    <FieldTitle>全天管控</FieldTitle>
-                    <FieldDescription className="text-xs leading-5">忽略上面的时段设置</FieldDescription>
-                  </FieldContent>
-                  {toggle('allDay')}
-                </Field>
-                {!c.allDay && (
-                  <WeekSchedule
-                    value={c.weekSlots}
-                    onChange={v => change('weekSlots', v)}
-                    holidayMode={c.holidayMode || 'sunday'}
-                    onHolidayMode={v => change('holidayMode', v)}
-                  />
-                )}
-              </FieldGroup>
-            </FieldSet>
-          </Panel>
-          <Panel
-            title="网课时段与大人豁免"
-            icon={Clock3}
-            description="可跨午夜；优先级：解锁/暂停 > 大人豁免 > 网课 > 可用时段"
-          >
-            <TimePoints
-              points={c.timePoints}
-              exempt={c.exemptWindows}
-              onPoints={v => change('timePoints', v)}
-              onExempt={v => change('exemptWindows', v)}
-            />
-          </Panel>
-        </TabsContent>
-
-        {/* forceMount：朗读设置有自己的本地草稿和 700ms 自动保存，卸载会丢掉刚输入但还没保存的内容。
-             forceMount 的内容不会自动加 hidden，需要自己按 data-state 隐藏。 */}
-        <TabsContent value="more" forceMount className="mt-0 space-y-5 data-[state=inactive]:hidden">
-          <Panel title="加练与复习" icon={Repeat2} status={tab === 'more' ? statusNode : undefined}>
-            <FieldSet className="gap-0">
-              <FieldGroup className={fieldGroup}>
                 <Field orientation="responsive" className="py-3.5">
                   <FieldContent>
                     <FieldTitle>答错累计加练</FieldTitle>
@@ -970,20 +1132,6 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
                       {number('extraQuestions', 1, 100)}
                     </Field>
                   </>
-                )}
-                <Field orientation="responsive" className="py-3.5">
-                  <FieldContent>
-                    <FieldTitle>按记忆曲线复习</FieldTitle>
-                    <FieldDescription className="text-xs leading-5">到该复习的时候自动先出，答对后间隔会拉长</FieldDescription>
-                  </FieldContent>
-                  {toggle('spacedRepetitionEnabled')}
-                </Field>
-                {c.spacedRepetitionEnabled && (
-                  <Field className="py-3.5">
-                    <FieldDescription>
-                      已学习 {state?.repetition?.studied || 0} 题，待复习 {state?.repetition?.due || 0} 题；跨重启保留。
-                    </FieldDescription>
-                  </Field>
                 )}
               </FieldGroup>
             </FieldSet>

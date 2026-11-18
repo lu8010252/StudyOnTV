@@ -3,6 +3,7 @@ package com.studyontv.tv
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
+import java.net.InetAddress
 import java.net.URL
 import java.security.MessageDigest
 import java.util.concurrent.Executors
@@ -19,12 +20,35 @@ object BankAutomation {
     private val QUESTION_TYPES = listOf("single", "multiple", "boolean", "text", "subjective")
     /** 老版本写死的题型，配置里没有 types 时沿用，避免升级后出题行为突然变化 */
     private val LEGACY_TYPES = listOf("single", "text")
+
+    /** 与 BankMarket / GradingService 一致：公网远程题库必须走 HTTPS 防篡改，明文 HTTP 只允许局域网或本机地址。 */
+    internal fun validateUrl(raw: String): URL {
+        val url = try { URL(raw.trim()) } catch (_: Exception) {
+            throw IllegalArgumentException("请使用不含用户名密码的 HTTP/HTTPS 地址")
+        }
+        require(url.protocol in listOf("http", "https") && url.userInfo == null && url.ref == null && url.host.isNotEmpty() && url.toString().length <= 2048) {
+            "请使用不含用户名密码的 HTTP/HTTPS 地址"
+        }
+        val ok = url.protocol == "https" || (url.protocol == "http" && isPrivateHost(url.host))
+        require(ok) { "公网远程题库必须使用 HTTPS；HTTP 只允许局域网或本机地址" }
+        return url
+    }
+
+    private fun isPrivateHost(host: String): Boolean {
+        if (host.equals("localhost", true) || host.endsWith(".local") || host.endsWith(".lan")) return true
+        return try {
+            val all = InetAddress.getAllByName(host)
+            all.isNotEmpty() && all.all { it.isLoopbackAddress || it.isSiteLocalAddress || it.isLinkLocalAddress }
+        } catch (_: Exception) { false }
+    }
+
     fun settings(store: LocalStore): JSONObject = JSONObject(store.get("bank_automation", "{}"))
         .apply {
             if (!has("sources")) put("sources", JSONArray())
             if (optJSONArray("types") == null || optJSONArray("types")!!.length() == 0) put("types", JSONArray(LEGACY_TYPES))
         }
         .put("running", running.get()).put("status", JSONObject(store.get("bank_automation_status", "{}")))
+
     fun save(store: LocalStore, input: JSONObject): JSONObject {
         val sources = input.optJSONArray("sources") ?: JSONArray()
         require(sources.length() <= 20) { "最多配置 20 个远程题库" }
@@ -35,8 +59,7 @@ object BankAutomation {
             val source = sources.getJSONObject(i)
             val name = source.getString("name").trim()
             require(name.length in 1..40 && names.add(name)) { "远程题库名称需唯一，1–40 个字" }
-            val url = URL(source.getString("url").trim())
-            require(url.protocol in listOf("http", "https") && url.userInfo == null && url.toString().length <= 2048) { "请使用不含用户名密码的 HTTP/HTTPS 地址" }
+            val url = validateUrl(source.getString("url"))
             require(urls.add(url.toString())) { "同一远程地址只能配置一次" }
             clean.put(JSONObject().put("name", name).put("url", url.toString()).put("enabled", source.optBoolean("enabled", true)))
         }
@@ -47,12 +70,10 @@ object BankAutomation {
         require(minimum in 1..500 && batch in 1..20 && attempts in 1..100 && accuracy in 50..100) { "自动题库参数超出范围" }
         val topic = input.optString("topic").trim()
         require(topic.length <= 2000 && (!input.optBoolean("autoAi") || topic.isNotBlank())) { "自动补题需要填写出题范围" }
-        // #125：题型筛选。前端传了 types 就必须是至少一种有效题型，没传沿用旧的两类
         val types = input.optJSONArray("types")?.let { array ->
             (0 until array.length()).map { array.optString(it) }.filter { it in QUESTION_TYPES }.distinct()
         }
         if (input.has("types")) require(!types.isNullOrEmpty()) { "请选择至少一种自动补题的题型" }
-        // 老客户端不带 types 时不覆盖已经选好的题型
         val saved = if (types?.isNotEmpty() == true) types
             else settings(store).optJSONArray("types")?.let { array -> (0 until array.length()).map { array.optString(it) }.filter { it in QUESTION_TYPES } }.orEmpty()
                 .ifEmpty { LEGACY_TYPES }
@@ -61,12 +82,14 @@ object BankAutomation {
             .put("topic", topic).put("types", JSONArray(saved)).toString())
         return settings(store)
     }
+
     @Synchronized fun tick(store: LocalStore) {
         val now = android.os.SystemClock.elapsedRealtime()
         if (checkedAt > 0 && now - checkedAt < 15 * 60000) return
         checkedAt = now
         start(store)
     }
+
     fun start(store: LocalStore) {
         if (!running.compareAndSet(false, true)) return
         worker.execute {
@@ -110,11 +133,27 @@ object BankAutomation {
             finally { store.set("bank_automation_status", report.toString()); running.set(false) }
         }
     }
+
     fun syncSource(store: LocalStore, source: JSONObject): Int {
-        val connection = URL(source.getString("url")).openConnection() as HttpURLConnection
+        var current = validateUrl(source.getString("url"))
+        var connection = current.openConnection() as HttpURLConnection
         val text = try {
-            connection.connectTimeout = 10000; connection.readTimeout = 20000
-            require(connection.responseCode in 200..299)
+            var code: Int
+            var redirects = 0
+            while (true) {
+                connection.connectTimeout = 10_000
+                connection.readTimeout = 20_000
+                connection.instanceFollowRedirects = false
+                code = connection.responseCode
+                if (code !in listOf(301, 302, 303, 307, 308)) break
+                require(redirects++ < 5) { "重定向次数过多" }
+                val loc = connection.getHeaderField("Location") ?: break
+                val next = validateUrl(URL(current, loc).toString())
+                connection.disconnect()
+                current = next
+                connection = current.openConnection() as HttpURLConnection
+            }
+            require(code in 200..299)
             connection.inputStream.use { input ->
                 val buffer = java.io.ByteArrayOutputStream(); val chunk = ByteArray(8192)
                 while (true) { val count = input.read(chunk); if (count < 0) break; buffer.write(chunk, 0, count); require(buffer.size() <= 4_000_000) }
@@ -125,11 +164,16 @@ object BankAutomation {
         require(items.length() in 1..50000) { "远程题库需要 1–50000 题" }
         val sourceId = hash(source.getString("url"))
         val db = store.writableDatabase
+        var committed = false
         db.beginTransaction()
         try {
             val old = mutableListOf<String>()
             db.rawQuery("SELECT id,details FROM questions", null).use { cursor ->
-                while (cursor.moveToNext()) if (JSONObject(cursor.getString(1)?.takeIf { it.isNotBlank() } ?: "{}").optString("remoteSource") == sourceId) old.add(cursor.getString(0))
+                while (cursor.moveToNext()) {
+                    val rawDetails = cursor.getString(1)?.takeIf { it.isNotBlank() } ?: continue
+                    val remoteSource = try { JSONObject(rawDetails).optString("remoteSource") } catch (_: Exception) { "" }
+                    if (remoteSource == sourceId) old.add(cursor.getString(0))
+                }
             }
             val keep = mutableSetOf<String>()
             for (i in 0 until items.length()) {
@@ -141,7 +185,11 @@ object BankAutomation {
             }
             store.deleteQuestions(old.filter { it !in keep })
             db.setTransactionSuccessful()
+            committed = true
             return items.length()
-        } finally { db.endTransaction() }
+        } finally {
+            db.endTransaction()
+            if (committed) store.pruneMedia()
+        }
     }
 }

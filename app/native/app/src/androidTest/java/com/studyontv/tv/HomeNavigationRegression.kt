@@ -14,7 +14,8 @@ object HomeNavigationRegression {
         val service = (context.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager)
             .installedAccessibilityServiceList.first { it.resolveInfo.serviceInfo.packageName == context.packageName }
         check(service.capabilities and AccessibilityServiceInfo.CAPABILITY_CAN_REQUEST_FILTER_KEY_EVENTS != 0)
-        check(service.flags and AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS != 0)
+        // #162：按键过滤不再写死在 XML 里，改由 LearningNavigation 的需要在运行时开关，
+        // 避免常驻过滤影响厂商音量面板。这里只断言服务保留了申请能力。
         check(!LearningNavigation.allows(null, 1))
         check(!LearningNavigation.allows(LearningExitSnapshot(false, 100), 101))
         check(LearningNavigation.allows(LearningExitSnapshot(true, 100), 101))

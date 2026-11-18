@@ -371,6 +371,8 @@ class Esp32WatchdogTest(unittest.TestCase):
         self.assertTrue(policy.is_own_service("com.studyontv.tv/.WatchAccessibilityService", "com.studyontv.tv"))
         self.assertTrue(policy.is_own_service("com.studyontv.tv/com.studyontv.tv.WatchAccessibilityService", "com.studyontv.tv"))
         self.assertFalse(policy.is_own_service("com.studyontv.mobile/.WatchAccessibilityService", "com.studyontv.tv"))
+        self.assertTrue(policy.is_own_service("com.studyontv.mobile/com.studyontv.tv.WatchAccessibilityService", "com.studyontv.mobile"))
+        self.assertTrue(policy.is_own_service("com.studyontv.mobile/.WatchAccessibilityService", "com.studyontv.mobile"))
 
     def test_foreground_service_only_inside_own_record(self):
         text = "ServiceRecord{a}\n isForeground=true\nServiceRecord{com.studyontv.tv/com.studyontv.tv.GateService}\n isForeground=false\n"

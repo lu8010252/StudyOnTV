@@ -4,9 +4,9 @@ import math from '../../data/banks/math-100.json';
 
 let config={...defaults,version:1};
 let learning:any={usedMinutes:18,remainingSeconds:720,roundsDoneToday:1,extraPool:2,reason:'',free:false,override:null};
-let questions:any[]=math.items.slice(0,12).map((q,i)=>({...q,id:'preview-'+i,type:'single',subject:'数学',level:'二年级',difficulty:1,enabled:true,a:q.a.map(String),
+let questions:any[]=math.items.slice(0,12).map((q,i)=>({...q,id:'preview-'+i,type:'single',subject:i%3===0?'语文':i%3===1?'英语':'数学',level:'二年级',difficulty:1+(i%3),enabled:true,a:q.a.map(String),
  // #136 错题库：每 4 题里有 1 道是答错的，另有一道答对、一道没作答过，方便预览筛选
- stats:{presented:i%3+1,answered:i%3,correct:i%3===0?0:Math.max(0,i%3-1),lastCorrect:i%4===0?false:i%4===1?true:null}}));
+ stats:{presented:i%3+1,answered:i%3+1,correct:i%4===0?0:i%3+1,lastCorrect:i%4===0?false:i%4===1?true:null}}));
 let device:any={name:'客厅电视 · 开发预览',flavor:'tv',version:'0.3.10',ip:'127.0.0.1',port:5173,
  crashUpload:{consent:false,endpoint:'',builtInEndpoint:'',hasToken:false,builtInToken:false,pending:false},
  desktop:{supported:true,enabled:false,isDefault:false,homePackage:'com.android.tv.settings',homeLabel:'系统桌面'},
@@ -14,7 +14,7 @@ let device:any={name:'客厅电视 · 开发预览',flavor:'tv',version:'0.3.10'
  autostart:{known:true,ok:true,pending:false,via:'boot',startedAfterSeconds:12,bootBroadcast:true,uptimeMinutes:320,accessibility:true},
  keepalive:{ignoringBattery:true,notifications:true,usbDebugging:false,developerOptions:false,sdk:34,manufacturer:'Xiaomi',brand:'Xiaomi',model:'Mi TV 6',android:'12',
   brandTip:'小米电视：设置 → 应用 → 应用管理 → 题了个题 → 自启动，开启；省电策略设为「无限制」'}};
-let grading:any={mode:'parent',passScore:60,provider:'deepseek',endpoint:'https://api.deepseek.com/v1',model:'deepseek-flash',hasKey:false,providers:builtinProviders};
+let grading:any={mode:'manual',passScore:60,provider:'deepseek',endpoint:'https://api.deepseek.com/v1',model:'deepseek-flash',vision:false,hasKey:false,providers:builtinProviders};
 let integration:any={enabled:false,read:true,control:false,hasToken:false};
 let speech:any={mode:'system',autoRead:false,readLanguage:'',readScope:'question',azureKeySet:false,aliyunSecretSet:false};
 let children:any[]=[{id:'',name:'孩子1',createdAt:Date.now()-86400000,active:true},{id:'c2',name:'小红',createdAt:Date.now(),active:false}];
@@ -43,10 +43,17 @@ let previewReviews:any[]=[
 ];
 const update={current:'0.3.10',version:'0.3.10',checking:false,hasUpdate:false,mirrors:[],log:[],api:''};
 
+function computePreviewStudy(){
+ const wrongCount=questions.filter(q=>q.enabled!==false&&q.stats?.lastCorrect===false).length;
+ const masteredCount=questions.filter(q=>q.enabled!==false&&Number(q.stats?.correct||0)>0).length;
+ return {streakDays:5,todayAnswered:18,todayCorrect:15,dueCount:4,wrongCount,masteredCount,totalQuestions:questions.length};
+}
+
 // In-memory preview data: no device requests or persistent authentication.
 export async function previewApi(path:string,method:string,body:any){
  const route=path.split('?')[0];
- if(route==='/api/state')return structuredClone({config,learning,questions:questions.length,repetition:{studied:8,due:3},children,activeChild:children.find(c=>c.active)?.id||''});
+ const study=computePreviewStudy();
+ if(route==='/api/state')return structuredClone({config,learning,study,questions:questions.length,repetition:{studied:8,due:study.dueCount},children,activeChild:children.find(c=>c.active)?.id||''});
  if(route==='/api/apps')return{items:[
   {package:'com.android.systemui.screensaver',name:'系统屏保'},
   {package:'com.example.onlineclass',name:'网课 · 数学同步'},
@@ -67,6 +74,13 @@ export async function previewApi(path:string,method:string,body:any){
   return structuredClone({learning});
  }
  if(route==='/api/config'){if(method==='PUT')config={...config,...body,version:config.version+1};return structuredClone({config});}
+ if(route==='/api/questions/generate'){
+  const subj=body?.subject||'数学';
+  return {items:[
+   {type:'single',q:`【变式练习】${body?.topic||subj}：计算 $15 \\times 4 - 12 = ?$`,a:['46','48','52','60'],k:1,difficulty:2,subject:subj,level:body?.level||'三年级',bank:body?.bank||'默认题库',tip:'先算乘法 $15 \\times 4 = 60$，再算减法 $60 - 12 = 48$。'},
+   {type:'boolean',q:`【巩固判断】在混合运算中，没有括号时应先算乘除后算加减。`,a:['正确','错误'],k:0,difficulty:1,subject:subj,level:body?.level||'三年级',bank:body?.bank||'默认题库',tip:'四则运算基本顺序：先乘除、后加减。'}
+  ],duplicates:0};
+ }
  if(route==='/api/questions'){
   if(method==='POST'){const items=body.items||[body];let added=0;for(const item of items){const index=questions.findIndex(q=>q.id===item.id);if(index>=0){questions[index]={...item};added++;continue;}if(body.skipDuplicates&&questions.some(q=>stemKey(q.q)===stemKey(item.q)))continue;questions.push({...item,id:'preview-'+crypto.randomUUID()});added++;}return{ok:true,added,skipped:items.length-added};}
   // 真机上是服务端筛选 + 分页，预览里用同一套参数在内存里模拟
@@ -96,6 +110,45 @@ export async function previewApi(path:string,method:string,body:any){
    paused:questions.filter((q:any)=>q.enabled===false).length,
    wrong:questions.filter((q:any)=>q.stats?.lastCorrect===false).length};
  }
+ if(route==='/api/analytics'){
+  const daily=Array.from({length:14},(_,i)=>{
+   const d=new Date();d.setDate(d.getDate()-(13-i));
+   const answered=10+(i%5)*4;
+   const acc=i<7?74+(i%3)*4:84+(i%3)*4;
+   return {label:d.toLocaleDateString('zh-CN',{month:'numeric',day:'numeric'}),answered,correct:Math.round(answered*acc/100),accuracy:acc,watch:18+(i%4)*6};
+  });
+  const forecast=Array.from({length:7},(_,i)=>{
+   const d=new Date();d.setDate(d.getDate()+i);
+   return {dayOffset:i,label:i===0?'今天':i===1?'明天':d.toLocaleDateString('zh-CN',{month:'numeric',day:'numeric'}),dueCount:[4,6,3,5,2,4,1][i]};
+  });
+  return {
+   overview:{totalAnswered:186,accuracyPercent:84,recent7dAccuracy:88,prev7dAccuracy:79,streakDays:study.streakDays,dueNow:study.dueCount,wrongCount:study.wrongCount,masteredQuestions:study.masteredCount},
+   maturity:{unseen:2,learning:3,young:4,mature:3},
+   daily,
+   bySubject:[
+    {subject:'数学',total:6,answered:82,accuracy:76,mastered:4,wrong:2},
+    {subject:'语文',total:3,answered:54,accuracy:91,mastered:3,wrong:0},
+    {subject:'英语',total:3,answered:50,accuracy:86,mastered:2,wrong:1},
+   ],
+   byBank:[{bank:'默认题库',total:questions.length,covered:study.masteredCount,accuracy:84}],
+   hardQuestions:questions.filter(q=>q.stats?.lastCorrect===false).map((q,idx)=>({...q,wrongTimes:3-idx,answered:4,correct:1,tip:q.tip||'注意审题与进位计算步骤。'})),
+   forecast,
+  };
+ }
+ if(route==='/api/backup'){
+  const query=new URLSearchParams(path.split('?')[1]||'');
+  const withQ=query.get('includeQuestions')!=='0';
+  return structuredClone({format:'studyontv-backup',version:1,exportedAt:Date.now(),config,children,questions:withQ?questions:[]});
+ }
+ if(route==='/api/backup/restore'){
+  const src=body?.backup||body||{};
+  if(Array.isArray(src.children)&&src.children.length)children=src.children;
+  if(Array.isArray(src.questions)&&src.questions.length){
+   questions=body?.mode==='merge'?[...questions,...src.questions.filter((nq:any)=>!questions.some(oq=>oq.id===nq.id))]:src.questions;
+  }
+  return {ok:true,children:children.length,questions:questions.length};
+ }
+ if(route==='/api/password')return {ok:true,token:'preview-session-'+Date.now()};
  if(route==='/api/banks/market')return structuredClone({sources:bankSources,banks:bankSources.length>1?marketBanks.concat({...marketBanks[1],name:'家长自编 20 题',url:'https://example.com/banks/parent.json',source:'家长共享'}):marketBanks.filter(b=>b.source==='官方题库'),failed:[]});
  if(route==='/api/banks/sources'){
   if(method==='POST'){const url=String(body.url||'').trim();if(!/^https?:\/\//.test(url))throw new Error('请填写 http(s) 地址');if(bankSources.some(s=>s.url===url))throw new Error('这个地址已经添加过了');bankSources.push({name:String(body.name||'').trim()||'自定义题库源',url,official:false});}
@@ -128,6 +181,7 @@ export async function previewApi(path:string,method:string,body:any){
   return{ok:true,crashUpload:structuredClone(next)};
  }
  if(route==='/api/grading'){if(method==='PUT')grading={...grading,...body};return structuredClone(grading);}
+ if(route==='/api/grading/test')return{ok:true,message:'模型响应正常',ms:420};
  if(route==='/api/reviews'){
   const query=new URLSearchParams(path.split('?')[1]||'');
   const state=query.get('state')||'pending';

@@ -12,7 +12,7 @@
         "data_description": {
           "host": "电视的 IP 地址或主机名，不要带 http://、路径或端口。",
           "port": "设备面板的 HTTP 端口，默认 8099。",
-          "token": "以 sotv_ 开头的令牌，必须包含只读权限。"
+          "token": "以 sotv_ 开头的令牌，必须包含只读权限；如需使用控制按钮，请同时勾选控制权限。"
         }
       }
     },
@@ -75,6 +75,23 @@
     "binary_sensor": {
       "device_online": {
         "name": "设备在线"
+      }
+    },
+    "button": {
+      "unlock_30m": {
+        "name": "临时解锁 30 分钟"
+      },
+      "lock_now": {
+        "name": "立即锁定"
+      },
+      "cancel_override": {
+        "name": "恢复按规则管控"
+      },
+      "credit_add_10m": {
+        "name": "奖励 10 分钟"
+      },
+      "credit_sub_10m": {
+        "name": "扣减 10 分钟"
       }
     }
   }

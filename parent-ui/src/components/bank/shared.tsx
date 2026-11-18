@@ -4,19 +4,52 @@ import {Textarea} from '@/components/ui/textarea';
 import {Field as UiField,FieldLabel} from '@/components/ui/field';
 import {Select,SelectContent,SelectItem,SelectTrigger,SelectValue} from '@/components/ui/select';
 
-/** 题干 / 答案里的 $...$ 公式交给学习页同一套 KaTeX 渲染 */
-export function MathText({text,className=''}:{text:string,className?:string}){
+const VALID_MEDIA_RE=/^(\/api\/media\/|https?:\/\/|data:image\/)/;
+
+/** 题干 / 答案里的富文本与 $...$ 公式交给共享渲染器处理 */
+export function MathText({text,className='',plain=false}:{text:string,className?:string,plain?:boolean}){
  const ref=useRef<HTMLDivElement>(null);
- useEffect(()=>{if(!ref.current)return;ref.current.textContent=text||'';(window as any).SOTV_MATH?.(ref.current);},[text]);
+ useEffect(()=>{
+  if(!ref.current)return;
+  const w=window as any;
+  if(plain){
+   ref.current.textContent=w.SOTV_PLAIN?w.SOTV_PLAIN(text||''):(text||'');
+   return;
+  }
+  if(w.SOTV_RICH)w.SOTV_RICH(ref.current,text||'');
+  else{ref.current.textContent=text||'';w.SOTV_MATH?.(ref.current);}
+ },[text,plain]);
  return <div ref={ref} className={className}/>;
 }
 
-/** 题目详情、题库列表共用的答案文本 */
+/** 提取题目全部有效配图（兼容单图 image、多图 images 与设备端 /api/media/ 本地路径） */
+export function questionImages(q:any):string[]{
+ if(!q)return [];
+ const out:string[]=[];
+ const seen=new Set<string>();
+ const push=(u:any)=>{
+  const s=typeof u==='string'?u.trim():'';
+  if(s&&VALID_MEDIA_RE.test(s)&&!seen.has(s)){seen.add(s);out.push(s);}
+ };
+ if(Array.isArray(q.images))q.images.forEach(push);
+ push(q.image);
+ return out;
+}
+
+/** 题目详情、题库列表共用的答案文本（支持纯图片选项显示「选项 X」） */
 export function answerOf(q:any){
+ if(!q)return '';
  if(q.type==='subjective')return q.modelAnswer||'由家长批改';
  if(q.type==='text')return(q.answers||[]).join(' / ');
  const a=q.type==='boolean'?['正确','错误']:(q.a||[]);
- return q.type==='multiple'?(q.correctIndices||[]).map((i:number)=>a[i]).join('、'):a[q.k]||'';
+ const fmtOpt=(i:number)=>{
+  const text=String(a[i]??'').trim();
+  if(text)return text;
+  if(Array.isArray(q.optionImages)&&q.optionImages[i])return `选项 ${String.fromCharCode(65+i)}（配图）`;
+  return `选项 ${String.fromCharCode(65+i)}`;
+ };
+ if(q.type==='multiple')return(q.correctIndices||[]).map((i:number)=>fmtOpt(i)).join('、');
+ return typeof q.k==='number'&&q.k>=0&&q.k<a.length?fmtOpt(q.k):(a[q.k]||'');
 }
 
 export function download(data:any,name:string){
@@ -29,7 +62,7 @@ export const labels:{[key:string]:string}={single:'单选',multiple:'多选',boo
 export const dot:{[key:string]:string}={single:'bg-teal-600 dark:bg-teal-400',multiple:'bg-blue-600 dark:bg-blue-400',boolean:'bg-amber-600 dark:bg-amber-400',text:'bg-violet-600 dark:bg-violet-400',subjective:'bg-rose-600 dark:bg-rose-400'};
 
 /** 新增题目的空表单（编辑时用题目字段覆盖） */
-export const blank={id:'',type:'single',q:'',opts:['','','',''],correct:[0],accepted:'',difficulty:2,tip:'',modelAnswer:'',rubric:'',subject:'',level:'',bank:'默认题库',image:'',audio:'',language:'zh-CN'};
+export const blank={id:'',type:'single',q:'',opts:['','','',''],optionImages:['','','',''],correct:[0],accepted:'',difficulty:2,tip:'',modelAnswer:'',rubric:'',subject:'',level:'',bank:'默认题库',image:'',images:[] as string[],audio:'',language:'zh-CN'};
 
 export function Stars({n}:{n:number}){
  return <span className="whitespace-nowrap text-xs tracking-wide" title={n+' 星'}><span className="text-amber-600 dark:text-amber-400">{'★'.repeat(n)}</span><span className="text-muted-foreground/40">{'☆'.repeat(5-n)}</span></span>;

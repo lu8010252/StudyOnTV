@@ -73,10 +73,10 @@ class AnswerInputActivity : Activity() {
             root.addView(ink, LinearLayout.LayoutParams(-1, dp(300)))
         }
         lateinit var use: Button
-        use = TvUi.button(this, "使用此答案", true) {
+        use = TvUi.button(this, if (passwordMode) "验证解锁" else "使用此答案", true) {
             run {
                 if (this@AnswerInputActivity.text.text.isBlank() && !ink.hasInk) {
-                    status.text = "请先填写或手写答案"; return@run
+                    status.text = if (passwordMode) "请输入家长管理密码" else "请先填写或手写答案"; return@run
                 }
                 val draft = this@AnswerInputActivity.text.text.toString()
                 val bitmap = ink.snapshot()

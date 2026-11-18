@@ -56,4 +56,17 @@ const orderConfig={...defaults} as Record<string,unknown>;
 delete orderConfig.newFirst;
 assert.equal(ruleSchema.parse(orderConfig).newFirst,false);
 assert.equal(ruleSchema.parse({...defaults,newFirst:true}).newFirst,true);
-console.log('PASS schedule validation, quotas, rest/review/font bounds, video settings, watch whitelist, question order and backward-compatible defaults');
+// Phase 5：纯粹学习模式开关、先背再测、只背错题
+const prePhase5={...defaults} as Record<string,unknown>;
+delete prePhase5.supervisionEnabled;
+delete prePhase5.memorizeFirst;
+delete prePhase5.spacedScope;
+const migratedPhase5=ruleSchema.parse(prePhase5);
+assert.equal(migratedPhase5.supervisionEnabled,true);
+assert.equal(migratedPhase5.memorizeFirst,false);
+assert.equal(migratedPhase5.spacedScope,'all');
+assert.equal(ruleSchema.parse({...defaults,supervisionEnabled:false,memorizeFirst:true,spacedScope:'wrong_only'}).supervisionEnabled,false);
+assert.equal(ruleSchema.parse({...defaults,memorizeFirst:true}).memorizeFirst,true);
+assert.equal(ruleSchema.parse({...defaults,spacedScope:'wrong_only'}).spacedScope,'wrong_only');
+assert.equal(ruleSchema.safeParse({...defaults,spacedScope:'invalid'}).success,false);
+console.log('PASS schedule validation, quotas, rest/review/font bounds, video settings, watch whitelist, question order, study modes and backward-compatible defaults');
