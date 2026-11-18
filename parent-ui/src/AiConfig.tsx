@@ -97,8 +97,8 @@ export default function AiConfig({sessionId,onClose}:{sessionId:number;onClose:(
  return <Dialog open onOpenChange={open=>{if(!open)onClose();}}>
   <DialogContent className="max-h-[90svh] gap-0 overflow-y-auto p-0 sm:max-w-xl">
    <DialogHeader className="border-b bg-muted/20 px-5 py-4 text-start">
-    <DialogTitle className="flex items-center gap-2 text-base"><Bot className="size-4 text-primary"/>模型 API</DialogTitle>
-    <DialogDescription className="text-xs leading-5">AI 出题和批改共用这个服务。选好服务商，填 API Key 即可；本地 Ollama 可以填局域网地址。</DialogDescription>
+    <DialogTitle className="flex items-center gap-2 text-sm"><Bot className="size-4 text-primary"/>模型 API</DialogTitle>
+    <DialogDescription className="text-xs leading-5">AI 出题和批改共用；本地 Ollama 可填局域网地址。</DialogDescription>
    </DialogHeader>
    <div className="px-5 py-5">
     <FieldGroup className="gap-5">
@@ -137,7 +137,7 @@ export default function AiConfig({sessionId,onClose}:{sessionId:number;onClose:(
       />
      </Field>
      <Field orientation="responsive" className="border-t border-border/60 pt-4">
-      <FieldDescription className="text-xs leading-5">测试会发一道 1+1 的示例题，不会保存设置。启用后，题目与孩子答案会发送到您配置的服务。</FieldDescription>
+      <FieldDescription className="text-xs leading-5">测试会发一道 1+1，不保存设置；启用后题目和答案会发送到所配置服务。</FieldDescription>
       <div className="flex flex-wrap items-center justify-end gap-2">
        <Button type="button" variant="outline" disabled={test.isPending} onClick={()=>test.mutate()}>{test.isPending?<RefreshCw className="animate-spin"/>:<PlugZap/>}{test.isPending?'测试中…':'测试连接'}</Button>
        {result&&<Badge variant={result.ok?'secondary':'destructive'} role="status" className="max-w-full whitespace-normal py-1 text-left">{result.ok?'连接正常':'连接失败'} · {result.message}</Badge>}

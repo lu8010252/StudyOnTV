@@ -3,7 +3,9 @@ import {useMutation,useQueryClient} from '@tanstack/react-query';
 import {MessageCircleHeart} from 'lucide-react';
 import {toast} from 'sonner';
 import {Button} from '@/components/ui/button';
-import {Card,CardContent,CardDescription,CardFooter,CardHeader,CardTitle} from '@/components/ui/card';
+import {Card,CardContent} from '@/components/ui/card';
+import {SectionHeading} from '@/components/ui/section-heading';
+import {SaveStatus,type SaveState} from '@/components/ui/save-status';
 import {Field,FieldDescription,FieldError,FieldGroup,FieldLabel,FieldLegend,FieldSet} from '@/components/ui/field';
 import {Input} from '@/components/ui/input';
 import {Item,ItemActions,ItemContent,ItemDescription,ItemGroup,ItemTitle} from '@/components/ui/item';
@@ -54,17 +56,15 @@ export default function FeedbackPanel({state,sessionId}:{state:any,sessionId:num
  },[dirty,valid,save.isPending,failedSignature,signature]);
  const change=(setter:(value:string)=>void,value:string)=>{setDirty(true);setSaved(false);setSaveError('');setter(value);};
  function restoreDefaults(){setDirty(true);setSaved(false);setSaveError('');setPraise('');setEncourage('');}
- const status=save.isPending?'正在保存…':saveError?'保存失败':dirty?(valid?'等待自动保存':'请修正错误'):saved?'已自动保存':'更改后自动保存';
+ const saveState:SaveState=save.isPending?'saving':saveError?'error':dirty?(valid?'pending':'error'):saved?'saved':'idle';
  const current=['dark','light','system'].includes(config?.theme)?config.theme:'dark';
 
- return <Card className="gap-0 overflow-hidden py-0 shadow-xs">
-  <CardHeader className="gap-1.5 px-4 py-4 sm:px-6">
-   <CardTitle className="flex items-center gap-2 text-base"><span className="grid size-8 place-items-center rounded-lg bg-muted text-muted-foreground"><MessageCircleHeart className="size-4"/></span>界面与反馈<span aria-live="polite" className="ms-auto text-xs font-normal text-muted-foreground">{status}</span></CardTitle>
-   <CardDescription className="text-xs">电视学习页外观与答题反馈。</CardDescription>
-  </CardHeader>
-  <CardContent className="border-t p-0">
+ return <section className="space-y-2">
+  <SectionHeading icon={MessageCircleHeart} title="界面与反馈" action={<SaveStatus state={saveState}/>}/>
+  <Card className="gap-0 overflow-hidden py-0 shadow-xs">
+  <CardContent className="px-4 sm:px-5">
    <ItemGroup className="divide-y divide-border/60">
-    <Item size="sm" className="flex-col items-stretch rounded-none px-4 py-4 sm:px-6">
+    <Item size="sm" className="flex-col items-stretch rounded-none px-0 py-4">
      <FieldSet className="gap-3">
      <FieldLegend variant="label" className="mb-0">电视学习页外观</FieldLegend>
      <div className="grid grid-cols-3 gap-2">
@@ -75,13 +75,13 @@ export default function FeedbackPanel({state,sessionId}:{state:any,sessionId:num
          <div className="h-1.5 w-8 rounded-full" style={{background:t.text,opacity:.85}}/>
          <div className="flex gap-1"><div className="h-4 flex-1 rounded-sm sm:h-5" style={{background:t.focus,boxShadow:`inset 0 0 0 2px ${t.ring}`}}/><div className="h-4 flex-1 rounded-sm sm:h-5" style={{background:t.card}}/></div>
         </div>
-        <div className="w-full px-0.5 pb-0.5"><div className="text-xs font-medium">{t.name}{on&&' ✓'}</div><div className="line-clamp-1 text-[10px] leading-4 text-muted-foreground">{t.note}</div></div>
+        <div className="w-full px-0.5 pb-0.5"><div className="text-xs font-medium">{t.name}{on&&' ✓'}</div><div className="line-clamp-1 text-xs leading-4 text-muted-foreground">{t.note}</div></div>
        </Button>;
       })}
      </div>
     </FieldSet>
     </Item>
-    <Item size="sm" className="rounded-none px-4 py-4 sm:px-6" data-invalid={!!autoError}>
+    <Item size="sm" className="rounded-none px-0 py-4" data-invalid={!!autoError}>
      <ItemContent>
       <ItemTitle>进入下一题</ItemTitle>
       <ItemDescription className="text-xs">0 表示由孩子手动选择“继续”。</ItemDescription>
@@ -89,7 +89,7 @@ export default function FeedbackPanel({state,sessionId}:{state:any,sessionId:num
      </ItemContent>
      <div className="flex items-center gap-2"><Input aria-label="自动下一题秒数" aria-invalid={!!autoError} className="h-8 w-16 text-center" type="number" min={0} max={30} value={auto} onChange={e=>change(setAuto,e.target.value)}/><span className="text-xs text-muted-foreground">秒后自动</span></div>
     </Item>
-    <div className="grid gap-4 px-4 py-4 sm:grid-cols-2 sm:px-6">
+    <div className="grid gap-4 py-4 sm:grid-cols-2">
       <Field data-invalid={!!praiseError}>
        <FieldLabel htmlFor="feedback-praise">答对时（每行一句，随机显示）</FieldLabel>
        <Textarea id="feedback-praise" aria-invalid={!!praiseError} className="min-h-24 resize-y" rows={4} value={praise} onChange={e=>change(setPraise,e.target.value)}/>
@@ -101,11 +101,12 @@ export default function FeedbackPanel({state,sessionId}:{state:any,sessionId:num
        <FieldError>{encourageError}</FieldError>
       </Field>
     </div>
-    {saveError&&<div className="px-4 py-3 sm:px-6"><FieldError>{saveError}</FieldError></div>}
+    {saveError&&<div className="py-3"><FieldError>{saveError}</FieldError></div>}
    </ItemGroup>
+   <div className="flex justify-end gap-2 border-t py-3">
+    <Button type="button" variant="ghost" size="sm" disabled={save.isPending} onClick={restoreDefaults}>恢复默认</Button>
+   </div>
   </CardContent>
-  <CardFooter className="justify-end gap-2 border-t px-4 py-3 sm:px-6">
-   <Button type="button" variant="ghost" size="sm" disabled={save.isPending} onClick={restoreDefaults}>恢复默认</Button>
-  </CardFooter>
- </Card>;
+ </Card>
+ </section>;
 }

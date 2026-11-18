@@ -469,7 +469,7 @@ export default function RecordsPage({ sessionId }: { sessionId: number }) {
     <div className="space-y-4 pb-6">
       {/* 1. 核心学情概览卡 */}
       <Card
-        className="gap-0 overflow-hidden py-0 shadow-sm"
+        className="gap-0 overflow-hidden rounded-md py-0 shadow-sm"
         aria-labelledby="records-summary-title"
       >
         <CardHeader className="border-b border-border/70 px-4 py-3 sm:px-5">

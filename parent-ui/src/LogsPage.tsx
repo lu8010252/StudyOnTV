@@ -5,11 +5,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import {
   Card,
-  CardAction,
   CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import {
@@ -20,6 +16,7 @@ import {
   ItemGroup,
   ItemTitle,
 } from '@/components/ui/item';
+import { SectionHeading } from '@/components/ui/section-heading';
 import { Switch } from '@/components/ui/switch';
 import { Toolbar, ToolbarGroup } from '@/components/ui/toolbar';
 import { api, downloadLogs } from './api';
@@ -68,25 +65,22 @@ export default function LogsPage({ sessionId }: { sessionId: number }) {
   }
 
   return (
-    <Card className="gap-0 overflow-hidden py-0 shadow-xs">
-      <CardHeader className="gap-1.5 px-4 py-4 sm:px-6">
-        <CardTitle className="flex items-center gap-2 text-base">
-          <span className="grid size-8 place-items-center rounded-lg bg-muted text-muted-foreground">
-            <RefreshCw className="size-4" />
-          </span>
-          诊断日志
-        </CardTitle>
-        <CardDescription className="text-xs">只保存在本机，不会自动上传。</CardDescription>
-        <CardAction>
+    <section className="space-y-2">
+      <SectionHeading
+        icon={RefreshCw}
+        title="诊断日志"
+        description="只保存在本机，不会自动上传"
+        action={
           <Button size="sm" variant="outline" onClick={() => logs.refetch()} disabled={logs.isFetching}>
             <RefreshCw className={logs.isFetching ? 'animate-spin' : ''} />
             刷新
           </Button>
-        </CardAction>
-      </CardHeader>
-      <CardContent className="border-t p-0">
+        }
+      />
+      <Card className="gap-0 overflow-hidden py-0 shadow-xs">
+      <CardContent className="px-4 sm:px-5">
         <ItemGroup className="divide-y divide-border/60">
-          <Item size="sm" className="rounded-none px-4 py-4 sm:px-6">
+          <Item size="sm" className="rounded-none px-0 py-4">
             <ItemContent>
               <ItemTitle>自动刷新</ItemTitle>
               <ItemDescription className="text-xs">每 3 秒刷新。</ItemDescription>
@@ -95,7 +89,7 @@ export default function LogsPage({ sessionId }: { sessionId: number }) {
               <Switch aria-label="自动刷新日志" checked={auto} onCheckedChange={setAuto} />
             </ItemActions>
           </Item>
-          <div className="px-4 py-3 sm:px-6">
+          <div className="py-3">
             <Toolbar aria-label="日志工具栏" className="flex-col gap-3 sm:flex-row">
               <ToolbarGroup className="flex-wrap">
                 <Button variant="outline" onClick={exportLogs} disabled={busy}>
@@ -117,13 +111,14 @@ export default function LogsPage({ sessionId }: { sessionId: number }) {
             </Toolbar>
           </div>
         </ItemGroup>
-        <pre className="m-4 max-h-[55svh] overflow-auto rounded-lg bg-muted/45 p-3 font-mono text-[11px] leading-5 whitespace-pre-wrap break-all sm:mx-6">
+        <pre className="my-4 max-h-[55svh] overflow-auto rounded-lg bg-muted/45 p-3 font-mono text-xs leading-5 whitespace-pre-wrap break-all">
           {logs.isLoading ? '正在读取日志…' : shown.length ? shown.join('\n') : '暂时没有日志。'}
         </pre>
-        <p className="px-4 pb-4 text-xs text-muted-foreground sm:px-6">
+        <p className="pb-4 text-xs text-muted-foreground">
           共 {lines.length} 行{query ? `，筛出 ${shown.length} 行` : ''}
         </p>
       </CardContent>
-    </Card>
+      </Card>
+    </section>
   );
 }

@@ -19,14 +19,8 @@ import { keepAliveSummary } from './keepalive';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
+import { SectionHeading } from '@/components/ui/section-heading';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
@@ -93,23 +87,15 @@ function SettingsCard({
   footer?: ReactNode;
 }) {
   return (
-    <Card className="gap-0 overflow-hidden py-0 shadow-xs">
-      <CardHeader className="gap-1.5 px-4 py-4 sm:px-6">
-        <CardTitle className="flex items-center gap-2 text-base">
-          <span className="grid size-8 place-items-center rounded-lg bg-muted text-muted-foreground">
-            <Icon className="size-4" />
-          </span>
-          {title}
-        </CardTitle>
-        {description && <CardDescription className="text-xs leading-5">{description}</CardDescription>}
-      </CardHeader>
-      <CardContent className="border-t p-0">
-        <ItemGroup className="divide-y divide-border/60">{children}</ItemGroup>
-      </CardContent>
-      {footer && (
-        <CardFooter className="justify-end gap-2 border-t px-4 py-3 sm:px-6">{footer}</CardFooter>
-      )}
-    </Card>
+    <section className="space-y-2">
+      <SectionHeading icon={Icon} title={title} description={description} />
+      <Card className="gap-0 overflow-hidden py-0 shadow-xs">
+        <CardContent className="px-4 sm:px-5">
+          <ItemGroup className="divide-y divide-border/60">{children}</ItemGroup>
+          {footer && <div className="flex justify-end gap-2 border-t py-3">{footer}</div>}
+        </CardContent>
+      </Card>
+    </section>
   );
 }
 
@@ -127,7 +113,7 @@ function SettingItem({
   return (
     <Item
       size="sm"
-      className={`items-start gap-3 rounded-none px-4 py-4 sm:px-6 ${wideControl ? 'flex-col sm:flex-row' : ''}`}
+      className={`items-start gap-3 rounded-none px-0 py-4 ${wideControl ? 'flex-col sm:flex-row' : ''}`}
     >
       <ItemContent className={wideControl ? 'w-full min-w-0 gap-1 sm:w-auto sm:flex-1' : 'min-w-0 gap-1'}>
         <ItemTitle>{title}</ItemTitle>
@@ -542,7 +528,7 @@ export default function DevicePanel({
             )}
             <SettingItem
               title="后台保活"
-              description="服务、权限和开机自启逐项检查，并按品牌给出设置步骤"
+              description="逐项检查服务和权限"
               wideControl
             >
               <div className="flex items-center gap-2">
@@ -580,8 +566,8 @@ export default function DevicePanel({
                       variant="outline"
                       className={
                         available
-                          ? 'border-emerald-600/30 text-emerald-700 dark:text-emerald-400'
-                          : 'border-amber-600/30 text-amber-700 dark:text-amber-400'
+                          ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300'
+                          : 'bg-amber-50 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300'
                       }
                     >
                       {available ? <Check /> : null}
@@ -646,6 +632,8 @@ export default function DevicePanel({
                 aria-label="隐藏桌面图标"
               />
             </SettingItem>
+            {/* 默认发的包不带电视桌面，设备会报 supported: false，这时整项隐藏 */}
+            {device.data?.desktop?.supported !== false && (
             <SettingItem
               title="把题了个题设为电视桌面"
               description={
@@ -685,9 +673,10 @@ export default function DevicePanel({
                 />
               </div>
             </SettingItem>
+            )}
             <SettingItem
               title="浏览器练习"
-              description="供 iPad 或旧设备使用；题库与学习端相互独立。"
+              description="供 iPad 或旧设备使用，题库独立。"
             >
               <Button variant="link" className="h-auto p-0" asChild>
                 <a
@@ -765,7 +754,7 @@ export default function DevicePanel({
                 }}
               />
             </SettingItem>
-            <SettingItem title="设备名称" description="修改后自动保存。" wideControl>
+            <SettingItem title="设备名称" wideControl>
               <div className="flex w-full items-center gap-2 sm:w-auto">
                 <Input
                   aria-label="设备名称"
@@ -879,7 +868,7 @@ export default function DevicePanel({
               </Button>
             }
           >
-            <FieldGroup className="grid gap-4 px-4 py-4 sm:grid-cols-3 sm:px-6">
+            <FieldGroup className="grid gap-4 py-4 sm:grid-cols-3">
               <Field>
                 <FieldLabel htmlFor="current-password">当前密码</FieldLabel>
                 <Input
@@ -919,7 +908,7 @@ export default function DevicePanel({
           <SettingsCard
             title="家庭自动化"
             icon={RadioTower}
-            description="供 Home Assistant 等局域网系统使用，可随时吊销。"
+            description="供 Home Assistant 等使用，可吊销。"
           >
             <SettingItem title="启用接口" description="只接受局域网请求。">
               <Switch
@@ -955,7 +944,7 @@ export default function DevicePanel({
                 </Button>
               )}
             </SettingItem>
-            <SettingItem title="权限" description="只读用于查询状态，控制用于解锁或暂停。">
+            <SettingItem title="权限" description="只读：查询状态；控制：解锁或暂停。">
               <div className="grid w-full gap-3 sm:w-auto sm:grid-cols-2">
                 <Field orientation="horizontal" className="w-auto">
                   <Checkbox
@@ -987,7 +976,7 @@ export default function DevicePanel({
                 </Field>
               </div>
             </SettingItem>
-            <div className="px-4 py-2 sm:px-6">
+            <div className="py-3.5">
               <Accordion type="single" collapsible>
                 <AccordionItem value="examples">
                   <AccordionTrigger>接口示例与 Home Assistant 配置</AccordionTrigger>

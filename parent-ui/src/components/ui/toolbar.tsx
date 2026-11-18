@@ -34,7 +34,7 @@ function ToolbarButton({
     <ToolbarPrimitive.Button
       data-slot="toolbar-button"
       className={cn(
-        'inline-flex size-9 shrink-0 items-center justify-center rounded-md text-sm font-medium outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&_svg:not([class*=size-])]:size-4',
+        'inline-flex size-8 shrink-0 items-center justify-center rounded-md text-[13px] font-medium outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&_svg:not([class*=size-])]:size-4',
         className,
       )}
       {...props}
@@ -50,7 +50,7 @@ function ToolbarLink({
     <ToolbarPrimitive.Link
       data-slot="toolbar-link"
       className={cn(
-        'inline-flex items-center justify-center rounded-md px-2 py-1 text-sm font-medium underline-offset-4 hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50',
+        'inline-flex items-center justify-center rounded-md px-2 py-1 text-[13px] font-medium underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-ring/50',
         className,
       )}
       {...props}

@@ -36,10 +36,10 @@ export default function ChildrenPanel({sessionId}:{sessionId:number}){
   finally{setBusy('');}
  };
 
- return <Panel title="孩子档案" icon={Users} description="每个孩子单独记录学习进度、使用时长和奖励额度；题库、朗读与批改设置全家共用" hint={query.isFetching?'正在读取…':undefined}>
+ return <Panel title="孩子档案" icon={Users} description="学习记录按孩子分开；题库、朗读与批改设置共用" hint={query.isFetching?'正在读取…':undefined}>
   {query.error&&<p role="alert" className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">无法读取孩子档案：{(query.error as any).message||'请确认设备仍在同一局域网'}</p>}
   <div className="divide-y divide-border/60">
-   {items.map((child:any)=><div key={child.id} className="flex flex-wrap items-center gap-2 py-3 first:pt-0 last:pb-0">
+   {items.map((child:any)=><div key={child.id} className="flex flex-wrap items-center gap-2 py-3.5 first:pt-0 last:pb-0">
     {rename?.id===child.id
      ? <>
         <Input aria-label="孩子名字" className="h-9 w-40" maxLength={12} value={rename.name} onChange={e=>setRename({id:child.id,name:e.target.value})}/>
@@ -58,12 +58,12 @@ export default function ChildrenPanel({sessionId}:{sessionId:number}){
        </>}
    </div>)}
   </div>
-  {items.length>0&&<p className="mt-3 text-xs leading-5 text-muted-foreground">第一个孩子不能删除（可以改名）。电视上开始答题时会列出所有孩子，孩子点自己的名字就能开始。</p>}
+  {items.length>0&&<p className="mt-3 text-xs leading-5 text-muted-foreground">第一个孩子不能删除；电视上点名字开始答题。</p>}
   <div className="mt-4 flex flex-wrap items-center gap-2 border-t pt-4">
    <Input aria-label="新孩子名字" className="h-9 w-40" maxLength={12} placeholder="例如：小明" value={adding} onChange={e=>setAdding(e.target.value)}/>
    <Button size="sm" disabled={busy==='add'||items.length>=8||!adding.trim()}
     onClick={async()=>{if(await run('add','/api/children','POST',{name:adding},'已添加'))setAdding('');}}><Plus/>添加孩子</Button>
-   <span className="text-xs text-muted-foreground">最多 8 个；新孩子默认沿用当前的规则，之后可以单独调整。</span>
+   <span className="text-xs text-muted-foreground">最多 8 个；新孩子沿用当前规则。</span>
   </div>
  </Panel>;
 }

@@ -5,11 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   Card,
-  CardAction,
   CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
 } from '@/components/ui/card';
 import {
   Item,
@@ -19,6 +15,7 @@ import {
   ItemGroup,
   ItemTitle,
 } from '@/components/ui/item';
+import { SectionHeading } from '@/components/ui/section-heading';
 import { api } from './api';
 import { builtinProviders } from './ai-providers';
 import AiConfig from './AiConfig';
@@ -35,22 +32,17 @@ export default function AiSettings({ sessionId }: { sessionId: number }) {
 
   return (
     <>
+      <section className="space-y-2">
+        <SectionHeading
+          icon={Bot}
+          title="模型 API"
+          description="批改与出题共用"
+          action={<Badge variant={ready ? 'secondary' : 'outline'}>{ready ? '已配置' : '未配置'}</Badge>}
+        />
       <Card className="gap-0 overflow-hidden py-0 shadow-xs">
-        <CardHeader className="gap-1.5 px-4 py-4 sm:px-6">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <span className="grid size-8 place-items-center rounded-lg bg-muted text-muted-foreground">
-              <Bot className="size-4" />
-            </span>
-            模型 API
-          </CardTitle>
-          <CardDescription className="text-xs">自动批改和自动出题共用。</CardDescription>
-          <CardAction>
-            <Badge variant={ready ? 'secondary' : 'outline'}>{ready ? '已配置' : '未配置'}</Badge>
-          </CardAction>
-        </CardHeader>
-        <CardContent className="border-t p-0">
+        <CardContent className="px-4 sm:px-5">
           <ItemGroup className="divide-y divide-border/60">
-            <Item size="sm" className="rounded-none px-4 py-4 sm:px-6">
+            <Item size="sm" className="rounded-none px-0 py-4">
               <ItemContent>
                 <ItemTitle>当前状态</ItemTitle>
                 <ItemDescription className="text-xs">
@@ -62,7 +54,7 @@ export default function AiSettings({ sessionId }: { sessionId: number }) {
                 </ItemDescription>
               </ItemContent>
             </Item>
-            <Item size="sm" className="rounded-none px-4 py-4 sm:px-6">
+            <Item size="sm" className="rounded-none px-0 py-4">
               <ItemContent>
                 <ItemTitle>服务商 / 模型</ItemTitle>
                 <ItemDescription className="line-clamp-none text-xs">
@@ -81,6 +73,7 @@ export default function AiSettings({ sessionId }: { sessionId: number }) {
           </ItemGroup>
         </CardContent>
       </Card>
+      </section>
       {open && <AiConfig sessionId={sessionId} onClose={() => setOpen(false)} />}
     </>
   );

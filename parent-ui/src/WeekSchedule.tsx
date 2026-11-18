@@ -52,7 +52,7 @@ export default function WeekSchedule({value,onChange,holidayMode,onHolidayMode}:
    </ToolbarGroup>
   </Toolbar>
   <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-   <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-sm" style={{background:'var(--primary)'}}/>绿色：可以看（到点答题解锁）</span>
+   <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-sm" style={{background:'var(--primary)'}}/>蓝色：可以看（到点答题解锁）</span>
    <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-sm" style={{background:'var(--secondary)'}}/>灰色：不开放</span>
   </div>
   <div className="week-wrap min-w-0">
@@ -64,7 +64,7 @@ export default function WeekSchedule({value,onChange,holidayMode,onHolidayMode}:
     </div>)}
    </div>
   </div>
-  <FieldDescription className="text-xs">点击或拖动格子设置，每格 30 分钟；点星期几可以整行切换。每周共 {hours} 小时。</FieldDescription>
+  <FieldDescription className="text-xs">拖动设置，每格 30 分钟；点星期整行切换；每周共 {hours} 小时。</FieldDescription>
   <Field orientation="responsive" className="border-t border-border/60 pt-4">
    <FieldContent>
     <FieldTitle className="items-center"><CalendarDays className="size-4 text-muted-foreground"/>节假日</FieldTitle>

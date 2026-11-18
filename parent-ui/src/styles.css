@@ -14,12 +14,9 @@
 
   body {
     @apply min-h-svh w-full bg-background text-foreground;
-    background-image:
-      radial-gradient(circle at 8% 0%, color-mix(in oklab, var(--chart-1) 7%, transparent), transparent 30%),
-      radial-gradient(circle at 92% 12%, color-mix(in oklab, var(--chart-2) 6%, transparent), transparent 26%);
-    background-attachment: fixed;
-    font-family: "HarmonyOS Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
     font-size: 14px;
+    line-height: 1.5;
     font-synthesis: none;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
@@ -67,84 +64,86 @@
 
 .brand-icon {
   display: inline-flex;
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  border-radius: 13px;
-  background: linear-gradient(
-    145deg,
-    color-mix(in oklab, var(--chart-1) 17%, white),
-    color-mix(in oklab, var(--chart-2) 12%, white)
-  );
-  color: color-mix(in oklab, var(--foreground) 84%, var(--chart-1));
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.7), 0 7px 18px rgb(40 55 80 / 0.08);
+  background: transparent;
+  color: var(--primary);
 }
 
 .brand-icon svg {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
 }
 
 [data-slot="sidebar-inner"] {
-  background: linear-gradient(168deg, #eef7f6 0%, #f7faf8 34%, #fbfaf7 100%);
+  background: var(--sidebar);
 }
 
 [data-slot="sidebar-header"] {
-  padding: 18px 14px 10px;
+  padding: 12px 12px 8px;
 }
 
 [data-slot="sidebar-group"] {
-  padding: 10px 12px;
+  padding: 6px 0;
 }
 
 [data-slot="sidebar-group-label"] {
-  padding: 0 10px 7px;
-  color: color-mix(in oklab, var(--muted-foreground) 80%, transparent);
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.09em;
+  padding: 0 12px 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+[data-slot="sidebar-menu"] {
+  gap: 0;
 }
 
 [data-slot="sidebar-menu-button"] {
-  min-height: 42px;
-  border-radius: 14px;
+  min-height: 36px;
+  border-radius: 0;
   padding-inline: 12px;
   font-size: 13px;
-  transition: background 160ms ease, color 160ms ease, box-shadow 160ms ease;
+  transition: background 150ms ease, color 150ms ease, box-shadow 150ms ease;
+}
+
+[data-slot="sidebar-menu-button"]:hover {
+  background: var(--sidebar-accent);
 }
 
 [data-slot="sidebar-menu-button"][data-active="true"] {
-  background: rgb(255 255 255 / 0.92);
-  color: var(--foreground);
-  box-shadow: 0 8px 22px rgb(47 72 76 / 0.08), inset 0 0 0 1px rgb(255 255 255 / 0.88);
+  background: color-mix(in oklab, var(--primary) 10%, transparent);
+  color: var(--primary);
+  font-weight: 500;
+  box-shadow: inset 2px 0 0 var(--primary);
+}
+
+[data-slot="sidebar-menu-button"][data-active="true"]:hover {
+  background: color-mix(in oklab, var(--primary) 14%, transparent);
 }
 
 [data-slot="sidebar-menu-button"][data-active="true"] > svg {
-  color: color-mix(in oklab, var(--chart-1) 78%, var(--foreground));
+  color: var(--primary);
 }
 
 [data-slot="sidebar-footer"] {
-  padding: 12px 14px 18px;
-}
-
-[data-slot="sidebar-footer"] [data-slot="sidebar-menu-button"] {
-  background: rgb(255 255 255 / 0.52);
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.55);
+  padding: 8px 12px 12px;
 }
 
 [data-slot="sidebar-container"] {
-  border-color: rgb(24 32 40 / 0.055);
+  border-color: var(--border);
 }
 
 [data-slot="sidebar"][data-collapsible="icon"] [data-slot="sidebar-header"],
 [data-slot="sidebar"][data-collapsible="icon"] [data-slot="sidebar-footer"] {
-  padding: 10px 7px;
+  padding: 8px 6px;
 }
 
 [data-slot="sidebar"][data-collapsible="icon"] [data-slot="sidebar-group"] {
-  padding: 8px 7px;
+  padding: 6px;
 }
 
 [data-slot="sidebar"][data-collapsible="icon"] [data-slot="sidebar-menu"],
@@ -162,7 +161,7 @@
   min-height: 32px;
   margin: 0 auto !important;
   justify-content: center;
-  border-radius: 11px;
+  border-radius: 4px;
   padding: 0 !important;
 }
 
@@ -171,41 +170,34 @@
   flex: none;
 }
 
-.dark [data-slot="sidebar-inner"] {
-  background: linear-gradient(168deg, #19272a 0%, #1b2023 44%, #211f1c 100%);
-}
-
 .dark [data-slot="sidebar-menu-button"][data-active="true"] {
-  background: rgb(255 255 255 / 0.09);
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.06);
+  background: color-mix(in oklab, var(--primary) 22%, transparent);
+  color: var(--primary);
+  box-shadow: inset 2px 0 0 var(--primary);
 }
 
 .app-header {
-  background: transparent;
+  background: color-mix(in oklab, var(--background) 94%, transparent);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(8px);
 }
 
 .app-header-inner {
-  transition: background 180ms ease, box-shadow 180ms ease;
-}
-
-.app-header.is-scrolled .app-header-inner {
-  box-shadow: 0 10px 28px rgb(28 38 48 / 0.05);
+  transition: background 150ms ease;
 }
 
 .bottom-nav {
   position: fixed;
-  right: 12px;
-  bottom: calc(10px + env(safe-area-inset-bottom));
-  left: 12px;
+  right: 0;
+  bottom: 0;
+  left: 0;
   z-index: 40;
   display: flex;
-  gap: 2px;
-  padding: 6px;
-  border: 1px solid color-mix(in oklab, var(--border) 75%, transparent);
-  border-radius: 24px;
-  background: color-mix(in oklab, var(--card) 92%, transparent);
-  box-shadow: 0 14px 38px rgb(28 36 48 / 0.14);
-  backdrop-filter: blur(18px);
+  gap: 0;
+  padding: 0 0 env(safe-area-inset-bottom);
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--background);
 }
 
 .bottom-nav button {
@@ -213,24 +205,23 @@
   min-width: 0;
   flex: 1;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
   height: auto;
-  padding: 7px 2px 5px;
-  border-radius: 18px;
+  padding: 8px 2px 7px;
+  border-radius: 0;
   color: var(--muted-foreground);
-  font-size: 10px;
-  font-weight: 550;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .bottom-nav button svg {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
 }
 
 .bottom-nav button[aria-current="page"] {
-  background: var(--background);
-  color: var(--foreground);
-  box-shadow: 0 6px 16px rgb(20 28 36 / 0.09), inset 0 0 0 1px var(--border);
+  background: color-mix(in oklab, var(--primary) 8%, transparent);
+  color: var(--primary);
 }
 
 .bottom-nav .badge {
@@ -246,7 +237,7 @@
 }
 
 .page-content {
-  padding-bottom: calc(112px + env(safe-area-inset-bottom));
+  padding-bottom: calc(76px + env(safe-area-inset-bottom));
 }
 
 @media (min-width: 768px) {
@@ -271,7 +262,7 @@
   margin-bottom: 4px;
   padding-left: 44px;
   color: var(--muted-foreground);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .week-row {
@@ -290,7 +281,7 @@
 
 .week-cell {
   min-width: 4px;
-  height: 14px;
+  height: 16px;
   flex: 1;
   border-radius: 2px;
   background: var(--secondary);
@@ -330,7 +321,7 @@
 }
 
 .dashboard-ring strong {
-  font-size: 26px;
+  font-size: 24px;
   font-weight: 600;
   line-height: 1.2;
 }
@@ -338,7 +329,7 @@
 .dashboard-ring span {
   margin-top: 3px;
   color: var(--muted-foreground);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 @media (max-width: 767px) {

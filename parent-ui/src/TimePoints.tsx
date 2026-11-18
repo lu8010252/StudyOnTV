@@ -74,7 +74,7 @@ export default function TimePoints({points,exempt,onPoints,onExempt}:{
    <span className="text-sm font-medium">网课时段</span>
    <Button type="button" size="sm" variant="outline" onClick={add} disabled={list.length>=50}><Plus/>新增网课</Button>
   </div>
-  {list.length===0?<FieldDescription className="text-xs">还没有网课时段。添加后可以设置「自由使用不扣时长」或「计入每日限额并使用该时段自己的上限」。</FieldDescription>
+  {list.length===0?<FieldDescription className="text-xs">添加后可设置是否扣时长和独立上限。</FieldDescription>
    :list.map((item,index)=><Row key={item.id||index} label={item.name||'网课'} onRemove={()=>onPoints(list.filter((_,i)=>i!==index))}>
     <div className="w-full space-y-3">
      <div className="flex flex-wrap items-end gap-3">
@@ -111,7 +111,7 @@ export default function TimePoints({points,exempt,onPoints,onExempt}:{
    <span className="text-sm font-medium">大人豁免时段</span>
    <Button type="button" size="sm" variant="outline" onClick={addExempt} disabled={windows.length>=50}><Plus/>新增豁免</Button>
   </div>
-  {windows.length===0?<FieldDescription className="text-xs">到点自动解锁给大人使用，不用去改设置；优先级高于网课时段。</FieldDescription>
+  {windows.length===0?<FieldDescription className="text-xs">到点自动解锁；优先级高于网课时段。</FieldDescription>
    :windows.map((item,index)=><Row key={item.id||index} label={item.name||'大人豁免'} onRemove={()=>onExempt(windows.filter((_,i)=>i!==index))}>
     <div className="w-full space-y-3">
      <div className="flex flex-wrap items-end gap-3">
