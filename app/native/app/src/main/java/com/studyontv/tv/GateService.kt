@@ -798,6 +798,8 @@ class GateService : Service() {
                 .put("overlay", OverlayAccess.canDraw(context))
                 .put("usage", Foreground.hasUsageAccess(context))
                 .put("accessibility", WatchAccessibilityService.connected)
+                .put("notificationListener", RevivalListener.enabled(context))
+                .put("notificationListenerConnected", RevivalListener.connected)
                 .put("accessibilityEnabled", WatchAccessibilityService.enabled(context))
                 .put("accessibilityLost", !WatchAccessibilityService.enabled(context) && context.getSharedPreferences("sotv", Context.MODE_PRIVATE).getBoolean("accessibility_lost", false))
                 // === #120 红米电视：无障碍被系统清理连带关掉、进程被反复杀，给出可数的证据 ===

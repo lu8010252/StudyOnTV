@@ -28,6 +28,7 @@ object SelfGrant {
             .put("accessibility", WatchAccessibilityService.connected).put("background", idle)
             .put("running", running.get()).put("monitor", GateService.monitorMode)
             .put("heal", AccessibilityHeal.canHeal(context))
+            .put("listener", RevivalListener.enabled(context))
         last?.let { o.put("last", it) }
         try {
             val st = DeviceRuntime.learning.status()
@@ -99,6 +100,8 @@ object SelfGrant {
             }
             sh("开启无障碍服务", "settings put secure enabled_accessibility_services '" + (others + service).joinToString(":") + "'")
             sh("无障碍总开关", "settings put secure accessibility_enabled 1")
+            // 通知使用权（RevivalListener）：被系统强停后由它把服务拉回来，等于替你敲 adb shell cmd notification allow_listener
+            sh("通知使用权（被杀后自动拉起）", "cmd notification allow_listener " + RevivalListener.component(ctx), optional = true)
             sh("后台运行（省电白名单）", "dumpsys deviceidle whitelist +$pkg")
         }
         // 等服务真正连上（最多 8 秒），连不上就如实告诉家长

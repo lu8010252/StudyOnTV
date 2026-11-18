@@ -61,8 +61,19 @@ export function keepAliveChecks(device:any):KeepAliveCheck[]{
   checks.push(item('accessibility','无障碍服务','ok','已连接，切换应用时能及时响应'));
  }else if(monitor.accessibilityEnabled){
   checks.push(item('accessibility','无障碍服务','unknown','已在系统中开启，等待服务连接'));
+ }else if(tv){
+  // #141：小米等电视的设置里根本没有无障碍入口，报「需要处理」家长也无从下手
+  checks.push(item('accessibility','无障碍服务','unknown','未开启，可以忽略。不少电视没有无障碍设置入口；悬浮窗 + 使用情况访问已经能计时，无障碍只是让切换应用时响应更快'));
  }else{
   checks.push(item('accessibility','无障碍服务','warn','未开启。它是最可靠的后台拉起方式，建议到系统设置里开启'));
+ }
+
+ if(monitor.notificationListener){
+  checks.push(item('listener','通知监听复活','ok',
+   monitor.notificationListenerConnected?'已连接，被系统强停后会由它把管控服务拉回来':'已授权，等待系统连接'));
+ }else{
+  checks.push(item('listener','通知监听复活','unknown',
+   '未开启（可选）。被系统强停后能由通知服务拉起，不读取通知内容；电视上没有入口时可用 ADB 开启'));
  }
 
  if(keepalive.ignoringBattery){

@@ -155,6 +155,49 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
+        <!-- 通知监听复活：系统在进程被强停后会重新绑定它，借此拉起 GateService。
+             只使用绑定生命周期，不读取任何通知内容。 -->
+        <service
+            android:name=".RevivalListener"
+            android:exported="true"
+            android:label="@string/notification_listener_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- 同步框架自愈（GuardSync.kt）：settings authority 上的本地同步。
+             固件强停时「把自己从无障碍列表里摘掉」本身是 settings 写入，会触发 LOCAL 同步，
+             系统随之显式 bind 拉起进程；周期同步则在 stopped 状态下兜底并清除 stopped 标记。 -->
+        <service
+            android:name=".GuardAccountService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.accounts.AccountAuthenticator" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accounts.AccountAuthenticator"
+                android:resource="@xml/guard_account" />
+        </service>
+
+        <service
+            android:name=".GuardSyncService"
+            android:exported="true"
+            android:permission="android.permission.BIND_SYNC_ADAPTER">
+            <intent-filter>
+                <action android:name="android.content.SyncAdapter" />
+            </intent-filter>
+            <meta-data
+                android:name="android.content.SyncAdapter"
+                android:resource="@xml/guard_sync" />
+        </service>
+
+        <!-- 系统 PackageInstaller 的安装结果回到这里，失败原因写进诊断日志和家长面板 -->
+        <receiver
+            android:name=".UpdateInstallReceiver"
+            android:exported="false" />
+
         <provider
             android:name=".ApkProvider"
             android:authorities="${applicationId}.apk"

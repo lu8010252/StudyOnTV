@@ -73,7 +73,8 @@
       row('悬浮窗', d.overlay, '显示学习锁屏页'),
       row('使用情况访问', d.usage, '识别现在开的是哪个 App，计时才准'),
       row('无障碍服务', d.accessibility, '及时发现 App 切换；开机自动启动；锁屏更难绕开'),
-      row('后台运行', d.background, '加入省电白名单，避免被系统杀掉')
+      row('后台运行', d.background, '加入省电白名单，避免被系统杀掉'),
+      row('通知使用权', d.listener, '被系统强停后自动拉起；不读取通知内容')
     ];
     if (d.running) kids.push(el('div', { text: '⏳ 正在授权…第一次使用时，请看电视屏幕：弹出“允许 USB 调试吗？”时，勾选“始终允许”，再点确定。', style: 'margin:12px 0;padding:10px;background:#fff6e5;border-radius:8px' }));
     if (last) {

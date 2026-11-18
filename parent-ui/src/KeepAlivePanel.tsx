@@ -57,7 +57,7 @@ export default function KeepAlivePanel({sessionId}:{sessionId:number}){
   else toast.error('复制失败，请手动选中文字复制');
  };
 
- return <Panel title="后台保活自检" icon={ShieldCheck} description="检查系统是否允许应用在后台运行，以及重启后能否自动恢复；每 5 秒自动刷新" hint={device.isFetching?'正在检测…':undefined}>
+ return <Panel title="后台保活自检" icon={ShieldCheck} description="检查后台运行与重启恢复；每 5 秒刷新" hint={device.isFetching?'正在检测…':undefined}>
   {device.error&&<p role="alert" className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">无法读取设备状态：{(device.error as any).message||'请确认设备仍在同一局域网'}</p>}
   {!data&&device.isLoading&&<p className="text-sm text-muted-foreground py-3">正在读取设备状态…</p>}
   {data&&!data.keepalive&&<p className="rounded-xl border bg-secondary/40 p-3 text-sm text-muted-foreground">当前设备上的应用版本还不支持这项自检。请先更新被控设备上的应用。</p>}
