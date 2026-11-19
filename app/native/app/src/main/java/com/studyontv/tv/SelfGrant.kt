@@ -87,7 +87,12 @@ object SelfGrant {
             // 授予“修改安全设置”：之后无障碍被杀/被关，应用能自己写回去（见 AccessibilityHeal）
             sh("无障碍自愈授权", "pm grant $pkg android.permission.WRITE_SECURE_SETTINGS")
             sh("允许后台运行", "appops set $pkg RUN_IN_BACKGROUND allow", optional = true)
-            sh("允许后台长时间运行", "appops set $pkg RUN_ANY_IN_BACKGROUND allow", optional = true)
+            // RUN_ANY_IN_BACKGROUND 是安卓 9（API 28）才有的操作项，安卓 8.0（极米 new z6x）上会报 Unknown operation，直接跳过
+            if (Build.VERSION.SDK_INT >= 28) {
+                sh("允许后台长时间运行", "appops set $pkg RUN_ANY_IN_BACKGROUND allow", optional = true)
+            } else {
+                steps.put(JSONObject().put("step", "允许后台长时间运行").put("ok", true).put("out", "安卓 8 没有这一项，已跳过"))
+            }
             val current = sh("读取已有无障碍服务", "settings get secure enabled_accessibility_services")
             val list = if (current.isEmpty() || current == "null") emptyList() else current.split(':')
             // 应用被更新或强行停止后，系统不会自动重新连接已启用的无障碍服务，所以先从列表里拿掉再加回来，
