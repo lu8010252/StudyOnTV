@@ -81,10 +81,14 @@ object GuardSync {
     private const val PERIODIC_SYNC_SECONDS = 300L
 
     /** 「串在但服务没绑上」时的重绑冷却，防止写 settings → 触发同步 → 再重绑的风暴 */
-    private const val REBIND_COOLDOWN_MS = 10 * 60 * 1000L
+    internal const val REBIND_COOLDOWN_MS = 10 * 60 * 1000L
 
     @Volatile
-    private var lastRebindAt = 0L
+    private var lastRebindAt = -1L
+
+    /** 首次冷启动（lastRebindAt < 0）允许立即重绑，之后严格受冷却间隔保护（ST-105） */
+    internal fun canRebind(lastRebindAt: Long, now: Long, cooldownMs: Long = REBIND_COOLDOWN_MS): Boolean =
+        lastRebindAt < 0L || now - lastRebindAt > cooldownMs
 
     /** 注册（或确认已注册）同步账户与周期同步。进程每次启动都调用，幂等、开销可忽略。 */
     fun ensure(context: Context) {
@@ -152,7 +156,7 @@ object GuardSync {
                         log(app, "accessibility healed: re-added to enabled services")
                     }
                     !WatchAccessibilityService.connected &&
-                        SystemClock.elapsedRealtime() - lastRebindAt > REBIND_COOLDOWN_MS -> {
+                        canRebind(lastRebindAt, SystemClock.elapsedRealtime()) -> {
                         // 与 Aerial 的 rebindIfStalled 相同：两次连续写入会被系统合并，
                         // 先摘掉，1.5 秒后再补回（补回时重新读列表，不覆盖别人的段）。
                         lastRebindAt = SystemClock.elapsedRealtime()

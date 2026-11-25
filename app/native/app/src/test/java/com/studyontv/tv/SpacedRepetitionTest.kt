@@ -67,7 +67,7 @@ class SpacedRepetitionTest {
         assertEquals(300_000L, AdminAuth.lockoutDurationMs(20))
 
         assertEquals("*", LanServer.allowedCorsOrigin(null))
-        assertEquals("null", LanServer.allowedCorsOrigin("null"))
+        assertNull(LanServer.allowedCorsOrigin("null"))
         assertEquals("http://127.0.0.1:5173", LanServer.allowedCorsOrigin("http://127.0.0.1:5173"))
         assertEquals("http://localhost:5173", LanServer.allowedCorsOrigin("http://localhost:5173"))
         assertEquals("http://192.168.1.25:8099", LanServer.allowedCorsOrigin("http://192.168.1.25:8099"))

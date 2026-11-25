@@ -25,6 +25,8 @@ const IMAGE_KEYS=['image','imageUrl','img','图片','图片地址'];
 const IMAGES_KEYS=['images','imageUrls','imgs','配图','图片列表'];
 const OPTION_IMAGES_KEYS=['optionImages','option_images','选项配图','选项图片'];
 const AUDIO_KEYS=['audio','audioUrl','音频','音频地址'];
+// 听力文本：只交给朗读、不显示在屏幕上（与 audio 二选一）
+const LISTEN_KEYS=['listen','listenText','listening','听力','听力文本','朗读文本','听力内容'];
 const LANGUAGE_KEYS=['language','lang','语言'];
 
 // 本项目的答案字段（序号从 0 开始）；其余答案字段（answer / 答案…）的序号规则要看整份题库。
@@ -288,6 +290,16 @@ function normalizeItem(item:any,numbering:'zero'|'one'):any{
  if(images.length)out.images=images;
  const audio=clean(lookup(item,AUDIO_KEYS));
  if(audio)out.audio=audio;
+ const listen=clean(lookup(item,LISTEN_KEYS)).slice(0,1000);
+ if(listen)out.listen=listen;
+ // 听力文本优先：设备端不接受同时带音频地址，导入时先丢掉多余的 audio
+ if(listen)delete (out as any).audio;
+ const listenTimes=Number(lookup(item,['listenTimes','播放次数']));
+ if(listen&&listenTimes>=1&&listenTimes<=5)out.listenTimes=Math.floor(listenTimes);
+ const listenRequired=lookup(item,['listenRequired','必须播放']);
+ if(listen&&typeof listenRequired==='boolean')out.listenRequired=listenRequired;
+ const listenRate=Number(lookup(item,['listenRate','语速']));
+ if(listen&&listenRate>=0.7&&listenRate<=1.5)out.listenRate=listenRate;
  const language=lookup(item,LANGUAGE_KEYS);
  if(language!==undefined)out.language=languageOf(language);
  const rawEnabled=lookup(item,['enabled','启用']);

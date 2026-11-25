@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {defaults,ruleSchema,segments} from './schema.ts';
+import {defaults,normalizeGradeSubjects,normalizeRules,normalizeTimePoints,ruleSchema,segments} from './schema.ts';
 assert.equal(ruleSchema.safeParse({...defaults,allDay:false,windowStart:'',windowEnd:''}).success,false);
 assert.equal(ruleSchema.safeParse({...defaults,allDay:false,windowStart:'18:30',windowEnd:'18:30'}).success,false);
 assert.equal(ruleSchema.safeParse({...defaults,allDay:true,windowStart:'18:30',windowEnd:'18:30'}).success,true);
@@ -17,11 +17,18 @@ assert.equal(ruleSchema.safeParse({...defaults,dailyFreeMinutes:NaN}).success,fa
 assert.equal(ruleSchema.safeParse({...defaults,dailyFreeMinutes:0}).success,true);
 assert.equal(ruleSchema.safeParse({...defaults,dailyFreeMinutes:120}).success,true);
 assert.equal(ruleSchema.safeParse({...defaults,dailyFreeMinutes:121}).success,false);
+for (const bootFreeIntervalMinutes of [0, 120, 1440]) {
+  assert.equal(ruleSchema.parse({...defaults,bootFreeIntervalMinutes}).bootFreeIntervalMinutes,bootFreeIntervalMinutes);
+}
+for (const bootFreeIntervalMinutes of [-1, 1.5, 1441]) {
+  assert.equal(ruleSchema.safeParse({...defaults,bootFreeIntervalMinutes}).success,false);
+}
 const legacy={...defaults} as Record<string,unknown>;
-delete legacy.shuffleOptions;delete legacy.showCountdown;
+delete legacy.shuffleOptions;delete legacy.showCountdown;delete legacy.bootFreeIntervalMinutes;
 const migrated=ruleSchema.parse(legacy);
 assert.equal(migrated.shuffleOptions,false);
 assert.equal(migrated.showCountdown,true);
+assert.equal(migrated.bootFreeIntervalMinutes,0);
 // #136：旧版本没有「错题优先」，读出来默认关闭
 delete legacy.wrongFirst;
 assert.equal(ruleSchema.parse(legacy).wrongFirst,false);
@@ -69,4 +76,40 @@ assert.equal(ruleSchema.parse({...defaults,supervisionEnabled:false,memorizeFirs
 assert.equal(ruleSchema.parse({...defaults,memorizeFirst:true}).memorizeFirst,true);
 assert.equal(ruleSchema.parse({...defaults,spacedScope:'wrong_only'}).spacedScope,'wrong_only');
 assert.equal(ruleSchema.safeParse({...defaults,spacedScope:'invalid'}).success,false);
+// ST-501：旧配置 timePoints 归一化（counted 缺省/null/越界）
+const normalizedPoints=normalizeTimePoints([
+ {id:'a',name:'网课1',days:[0],start:'19:00',end:'20:00',mode:'counted'},
+ {id:'b',name:'网课2',days:[1],start:'19:00',end:'20:00',mode:'counted',dailyMinutes:null as unknown as number},
+ {id:'c',name:'网课3',days:[2],start:'19:00',end:'20:00',mode:'counted',dailyMinutes:0},
+ {id:'d',name:'网课4',days:[3],start:'19:00',end:'20:00',mode:'counted',dailyMinutes:999},
+ {id:'e',name:'网课5',days:[4],start:'19:00',end:'20:00',mode:'counted',dailyMinutes:45},
+ {id:'f',name:'网课6',days:[5],start:'19:00',end:'20:00',mode:'free'},
+]);
+assert.equal(normalizedPoints[0].dailyMinutes,60);
+assert.equal(normalizedPoints[1].dailyMinutes,60);
+assert.equal(normalizedPoints[2].dailyMinutes,1);
+assert.equal(normalizedPoints[3].dailyMinutes,480);
+assert.equal(normalizedPoints[4].dailyMinutes,45);
+assert.equal(normalizedPoints[5].dailyMinutes,undefined);
+assert.deepEqual(normalizeTimePoints(undefined),[]);
+assert.equal(normalizeRules({timePoints:[{id:'x',name:'数学',days:[0],start:'19:00',end:'20:00',mode:'counted'}]}).timePoints[0].dailyMinutes,60);
+// ST-604：科目与年级主从组合（gradeSubjects）默认值、校验与归一化
+const preGradeSubjects={...defaults} as Record<string,unknown>;
+delete preGradeSubjects.gradeSubjects;
+assert.deepEqual(ruleSchema.parse(preGradeSubjects).gradeSubjects,{});
+assert.deepEqual(
+ ruleSchema.parse({...defaults,gradeSubjects:{'三年级':['英语'],'四年级':['语文','数学','英语'],'五年级':[]}}).gradeSubjects,
+ {'三年级':['英语'],'四年级':['语文','数学','英语'],'五年级':[]}
+);
+assert.equal(ruleSchema.safeParse({...defaults,gradeSubjects:{'三年级':'英语'} as unknown as Record<string,string[]>}).success,false);
+assert.deepEqual(
+ normalizeGradeSubjects({' 三年级 ':[' 英语 ','英语',' ','数学'],'  ':['语文'],'四年级':[],'五年级':null}),
+ {'三年级':['英语','数学'],'四年级':[],'五年级':[]}
+);
+assert.deepEqual(normalizeGradeSubjects(null),{});
+assert.deepEqual(normalizeGradeSubjects(['三年级']),{});
+assert.deepEqual(
+ normalizeRules({gradeSubjects:{'三年级':['英语','英语','']}}).gradeSubjects,
+ {'三年级':['英语']}
+);
 console.log('PASS schedule validation, quotas, rest/review/font bounds, video settings, watch whitelist, question order, study modes and backward-compatible defaults');

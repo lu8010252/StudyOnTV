@@ -7,13 +7,18 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
+import java.io.EOFException
 import java.io.File
+import java.io.InputStream
 import java.io.OutputStream
+import java.net.HttpURLConnection
 import java.net.Inet4Address
 import java.net.NetworkInterface
+import java.net.Proxy
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URI
+import java.net.URL
 import java.util.Locale
 import java.util.concurrent.Executors
 
@@ -29,6 +34,41 @@ class LanServer(
         private const val MAX_DEVICE_BODY = 3_000_000
         private const val MAX_PARENT_BODY = 24_000_000
 
+        /** 按 RFC 3986 路径段规则解码 UTF-8 百分号编码（保留字面 `+`，拒绝非法 `%` 序列）。 */
+        internal fun decodePathSegment(raw: String): String {
+            if ('%' !in raw) return raw
+            val out = ByteArrayOutputStream(raw.length)
+            var i = 0
+            while (i < raw.length) {
+                val ch = raw[i]
+                if (ch == '%') {
+                    require(i + 2 < raw.length) { "路径参数编码无效" }
+                    val hi = Character.digit(raw[i + 1], 16)
+                    val lo = Character.digit(raw[i + 2], 16)
+                    require(hi in 0..15 && lo in 0..15) { "路径参数编码无效" }
+                    out.write((hi shl 4) or lo)
+                    i += 3
+                } else {
+                    if (ch.code < 0x80) out.write(ch.code)
+                    else out.write(ch.toString().toByteArray(Charsets.UTF_8))
+                    i++
+                }
+            }
+            return String(out.toByteArray(), Charsets.UTF_8)
+        }
+
+        /** 严格按 Content-Length 读取完整请求体；若客户端中途断连导致 EOF 则抛 EOFException 中止请求。 */
+        internal fun readExactBody(input: InputStream, length: Int): String {
+            val buf = ByteArray(length)
+            var read = 0
+            while (read < length) {
+                val n = input.read(buf, read, length - read)
+                if (n < 0) throw EOFException("请求体未接收完整（已读 $read / $length 字节）")
+                read += n
+            }
+            return String(buf, 0, read, Charsets.UTF_8)
+        }
+
         /**
          * 仅允许本机、沙盒页面或局域网私有地址来源的跨域请求，防止公网恶意网页利用浏览器 Private Network Access 探测电视接口。
          * 只做纯语法校验，绝不对未知域名发起 DNS 解析（防止 DNS Rebinding 与阻塞）。
@@ -36,7 +76,7 @@ class LanServer(
         internal fun allowedCorsOrigin(origin: String?): String? {
             if (origin == null || origin.isBlank()) return "*"
             val trimmed = origin.trim()
-            if (trimmed == "null") return "null"
+            if (trimmed.equals("null", ignoreCase = true)) return null
             val uri = try { URI(trimmed) } catch (_: Exception) { return null }
             val scheme = uri.scheme?.lowercase(Locale.US) ?: return null
             if (scheme != "http" && scheme != "https") return null
@@ -85,6 +125,103 @@ class LanServer(
             ) -> true
             else -> false
         }
+
+        internal data class ChildSwitchDecision(
+            val allowed: Boolean,
+            val errorCode: String? = null,
+            val message: String? = null
+        )
+
+        /** 解析可选 pin 字段：未传或 null 返回 null（不改动）；传 "" 表示清空；非空返回字符串。 */
+        internal fun extractOptionalPin(input: JSONObject): String? =
+            if (input.has("pin") && !input.isNull("pin")) input.optString("pin", "") else null
+
+        /**
+         * 评估孩子切换权限（ST-610）：
+         * - 家长端已鉴权会话直接放行；
+         * - 切换到当前已激活孩子或未设密码的孩子直接放行；
+         * - 电视/平板学习页切换到已设密码的其他孩子时，必须携带该孩子的切换密码（或家长主密码兜底）。
+         */
+        internal fun evaluateChildSwitch(
+            targetId: String,
+            activeId: String,
+            isParent: Boolean,
+            targetHasPin: Boolean,
+            pin: String?,
+            verifyChildPin: (String) -> Boolean,
+            verifyParentPassword: (String) -> Boolean
+        ): ChildSwitchDecision {
+            if (isParent || targetId == activeId || !targetHasPin) {
+                return ChildSwitchDecision(allowed = true)
+            }
+            val candidate = pin?.trim().orEmpty()
+            if (candidate.isEmpty()) {
+                return ChildSwitchDecision(
+                    allowed = false,
+                    errorCode = "child_pin_required",
+                    message = "请输入该孩子的切换密码"
+                )
+            }
+            if (verifyChildPin(candidate) || verifyParentPassword(candidate)) {
+                return ChildSwitchDecision(allowed = true)
+            }
+            return ChildSwitchDecision(
+                allowed = false,
+                errorCode = "child_pin_invalid",
+                message = "切换密码错误，请重试"
+            )
+        }
+
+        /**
+         * 统一 `/api/` 接口鉴权裁决（纯函数，便于单测直接验证家长/设备/集成令牌隔离）。
+         * 返回 `null` 表示放行；否则返回 `(httpStatus, message)`。
+         */
+        internal fun checkApiAccess(
+            method: String,
+            path: String,
+            deviceAccess: Boolean,
+            parent: Boolean,
+            integration: IntegrationAuth.Scope?
+        ): Pair<Int, String>? {
+            val isPublicApi = path == "/api/hello" || (method == "GET" && path.startsWith(MediaStore.PREFIX))
+            if (!path.startsWith("/api/") || isPublicApi) return null
+            if (!deviceAccess && !parent && integration == null) return 401 to "unauthorized"
+            if (integration != null && !deviceAccess && !parent) {
+                val scope = when {
+                    path == "/api/state" && method == "GET" -> "read"
+                    path == "/api/device" && method == "GET" -> "read"
+                    path == "/api/coverage" && method == "GET" -> "read"
+                    path == "/api/analytics" && method == "GET" -> "read"
+                    path == "/api/remote" && method == "POST" -> "control"
+                    else -> null
+                } ?: return 403 to "这个接口需要家长登录"
+                if ((scope == "read" && !integration.read) || (scope == "control" && !integration.control)) {
+                    return 403 to "集成令牌没有这个权限"
+                }
+            }
+            if (deviceAccess && !parent && integration == null && !isDeviceRouteAllowed(method, path)) {
+                return 403 to "forbidden"
+            }
+            return null
+        }
+
+        internal fun formatSyncSuccessMessage(
+            scopes: Set<String>,
+            mode: String,
+            syncedQuestions: Int,
+            totalQuestions: Int
+        ): String {
+            val parts = mutableListOf<String>()
+            if ("config" in scopes) parts.add("学习计划")
+            if ("questions" in scopes) {
+                val modeLabel = if (mode == "replace") "覆盖" else "合并"
+                val count = if (mode == "replace") totalQuestions else syncedQuestions
+                parts.add("题库（$modeLabel ${count} 题）")
+            }
+            if ("speech" in scopes) parts.add("朗读设置")
+            if ("grading" in scopes) parts.add("AI 模型配置")
+            return if (parts.isEmpty()) "同步完成" else "已同步" + parts.joinToString("、")
+        }
     }
 
     private var socket: ServerSocket? = null
@@ -100,6 +237,7 @@ class LanServer(
         if (running) return
         running = true
         if (!open()) Diag.error("Server", "无法监听 $port / 8090，稍后自动重试")
+        PeerDiscovery.start(context, store, portProvider = { boundPort }, ipProvider = { localIp() })
         // 守护线程：端口被旧进程占着时抢回默认端口；监听挂死（进程被冻结、网络切换后）时重新监听
         Thread {
             var bad = 0
@@ -156,6 +294,7 @@ class LanServer(
 
     fun stop() {
         running = false
+        PeerDiscovery.stop()
         try { socket?.close() } catch (_: Exception) { }
         pool.shutdownNow()
     }
@@ -209,12 +348,12 @@ class LanServer(
                 var integration: IntegrationAuth.Scope? = null
                 if (path.startsWith("/api/") && !isPublicApi) {
                     val adminKey = headers["x-admin-key"]
+                    parent = AdminAuth.valid(token) || (adminKey != null && AdminAuth.verify(context, adminKey))
                     val integrationToken = token?.takeIf { it.startsWith("sotv_") }
                     integration = IntegrationAuth.verify(context, integrationToken)
                     if (integration != null && !deviceAccess && !parent && !IntegrationAuth.takeBudget()) {
                         return json(out, 429, err("too_many_requests").put("message", "请求太频繁，请稍后再试"), origin)
                     }
-                    parent = AdminAuth.valid(token) || (adminKey != null && AdminAuth.verify(context, adminKey))
                     if (!deviceAccess && !parent && integration == null) {
                         return json(out, 401, err("unauthorized"), origin)
                     }
@@ -269,25 +408,11 @@ class LanServer(
             else json(out, 200, JSONObject().put("token", session).put("expiresIn", if (remember) 30 * 86400 else 43200), origin)
         }
 
-        val isPublicApi = path == "/api/hello" || (method == "GET" && path.startsWith(MediaStore.PREFIX))
-        if (path.startsWith("/api/") && !isPublicApi) {
-            if (!deviceAccess && !parent && integration == null) return json(out, 401, err("unauthorized"), origin)
-            if (integration != null && !deviceAccess && !parent) {
-                val scope = when {
-                    path == "/api/state" && method == "GET" -> "read"
-                    path == "/api/device" && method == "GET" -> "read"
-                    path == "/api/coverage" && method == "GET" -> "read"
-                    path == "/api/analytics" && method == "GET" -> "read"
-                    path == "/api/remote" && method == "POST" -> "control"
-                    else -> null
-                } ?: return json(out, 403, err("forbidden").put("message", "这个接口需要家长登录"), origin)
-                if ((scope == "read" && !integration.read) || (scope == "control" && !integration.control)) {
-                    return json(out, 403, err("forbidden").put("message", "集成令牌没有这个权限"), origin)
-                }
-            }
-            if (deviceAccess && !parent && integration == null && !isDeviceRouteAllowed(method, path)) {
-                return json(out, 403, err("forbidden"), origin)
-            }
+        checkApiAccess(method, path, deviceAccess, parent, integration)?.let { (code, message) ->
+            val payload = if (code == 401) err("unauthorized")
+            else if (message == "forbidden") err("forbidden")
+            else err("forbidden").put("message", message)
+            return json(out, code, payload, origin)
         }
 
         if (method != "GET") Diag.info("HTTP", "$method $path")
@@ -295,6 +420,12 @@ class LanServer(
         try {
             if (router.dispatch(ctx)) return
         } catch (e: Exception) {
+            val msg = e.message.orEmpty()
+            if (e is java.net.SocketException &&
+                (msg.contains("Broken pipe", ignoreCase = true) || msg.contains("Connection reset", ignoreCase = true))
+            ) {
+                return
+            }
             Diag.error("HTTP", "$method $path failed", e)
             return json(out, 400, JSONObject().put("error", "bad_request").put("message", e.message ?: "请求格式错误"), origin)
         }
@@ -308,10 +439,12 @@ class LanServer(
         router.get("/api/hello") { ctx ->
             json(ctx, 200, JSONObject()
                 .put("app", "StudyOnTV")
+                .put("id", Prefs.deviceId(context))
                 .put("version", BuildConfig.VERSION_NAME)
                 .put("name", Prefs.deviceName(context))
                 .put("ip", localIp() ?: "")
                 .put("port", boundPort)
+                .put("isTv", BuildConfig.FLAVOR == "tv")
                 .put("questions", store.countQuestions())
                 .put("needsToken", true)
                 .put("passwordRequired", true))
@@ -380,25 +513,165 @@ class LanServer(
             val input = JSONObject(ctx.body)
             val backup = input.optJSONObject("backup") ?: input
             val mode = input.optString("mode", "replace")
-            val restored = store.restoreBackup(backup, mode)
+            val scopesArr = input.optJSONArray("scopes")
+            val scopes: Set<String>? = if (scopesArr != null) {
+                val set = LinkedHashSet<String>()
+                for (i in 0 until scopesArr.length()) {
+                    val s = scopesArr.optString(i).trim()
+                    if (s.isNotEmpty()) set.add(s)
+                }
+                set
+            } else null
+            val restored = store.restoreBackup(backup, mode, scopes)
             DeviceRuntime.learning.status()
             GateService.refreshNow()
             json(ctx, 200, restored)
+        }
+        router.get("/api/peers") { ctx ->
+            val doScan = ctx.query["scan"] == "1" || ctx.query["scan"].equals("true", ignoreCase = true)
+            val peerList = if (doScan) PeerDiscovery.scan(700L) else PeerDiscovery.listPeers()
+            val selfIp = localIp() ?: ""
+            val selfHost = if (selfIp.isNotEmpty()) "$selfIp:$boundPort" else ""
+            val selfJson = JSONObject()
+                .put("id", Prefs.deviceId(context))
+                .put("name", Prefs.deviceName(context))
+                .put("ip", selfIp)
+                .put("port", boundPort)
+                .put("host", selfHost)
+                .put("version", BuildConfig.VERSION_NAME)
+                .put("isTv", BuildConfig.FLAVOR == "tv")
+                .put("questions", store.countQuestions())
+            val peersArr = JSONArray()
+            val nowMs = System.currentTimeMillis()
+            for (p in peerList) peersArr.put(p.toJson(nowMs))
+            json(ctx, 200, JSONObject().put("self", selfJson).put("peers", peersArr))
+        }
+        router.post("/api/peers/probe") { ctx ->
+            val input = JSONObject(ctx.body)
+            val rawHost = input.optString("host").trim()
+            val parsed = PeerDiscovery.parsePrivateLanHost(rawHost)
+                ?: return@post json(ctx, 400, err("invalid_host").put("message", "仅支持局域网私有 IPv4 地址（10.x / 172.16-31.x / 192.168.x）及合法端口（1024–65535）"))
+            val probed = probePeerHello(parsed)
+            if (probed == null) {
+                return@post json(ctx, 200, JSONObject()
+                    .put("ok", false)
+                    .put("online", false)
+                    .put("host", parsed.host)
+                    .put("message", "无法连接该设备，请确认设备已开机且在同一局域网"))
+            }
+            PeerDiscovery.recordProbedPeer(probed)
+            val peerJson = probed.toJson()
+            json(ctx, 200, JSONObject()
+                .put("ok", true)
+                .put("online", true)
+                .put("host", probed.host)
+                .put("id", probed.id)
+                .put("name", probed.name)
+                .put("ip", probed.ip)
+                .put("port", probed.port)
+                .put("version", probed.version)
+                .put("isTv", probed.isTv)
+                .put("questions", probed.questions)
+                .put("peer", peerJson))
+        }
+        router.post("/api/peers/sync") { ctx ->
+            val input = JSONObject(ctx.body)
+            val targets = input.optJSONArray("targets")
+            require(targets != null && targets.length() in 1..20) { "请选择 1–20 台目标设备" }
+            val scopesRaw = mutableListOf<String>()
+            input.optJSONArray("scopes")?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    val s = arr.optString(i).trim()
+                    if (s.isNotEmpty()) scopesRaw.add(s)
+                }
+            }
+            val scopes = LocalStore.normalizeSyncScopes(scopesRaw)
+            require(scopes.isNotEmpty()) { "请至少选择一项需要同步的内容" }
+            val mode = input.optString("mode", "merge").trim().lowercase(Locale.US)
+            require(mode in listOf("merge", "replace")) { "同步模式仅支持 merge 或 replace" }
+            val defaultPassword = input.optString("defaultPassword", "")
+
+            DeviceRuntime.learning.flushUsage()
+            val scopedPayload = store.exportScopedSync(scopes)
+            val selfIp = localIp()
+            val results = JSONArray()
+            var allOk = true
+
+            for (i in 0 until targets.length()) {
+                val t = targets.optJSONObject(i) ?: continue
+                val rawHost = t.optString("host").trim()
+                val hintedName = t.optString("name").trim()
+                val parsed = PeerDiscovery.parsePrivateLanHost(rawHost)
+                if (parsed == null) {
+                    allOk = false
+                    results.put(JSONObject()
+                        .put("host", rawHost)
+                        .put("name", hintedName)
+                        .put("ok", false)
+                        .put("message", "仅支持局域网私有 IPv4 地址及合法端口（1024–65535）"))
+                    continue
+                }
+                if (selfIp != null && parsed.ip == selfIp && parsed.port == boundPort) {
+                    allOk = false
+                    results.put(JSONObject()
+                        .put("host", parsed.host)
+                        .put("name", Prefs.deviceName(context))
+                        .put("ok", false)
+                        .put("message", "无需同步到当前本机设备"))
+                    continue
+                }
+                val knownPeer = PeerDiscovery.listPeers().firstOrNull { it.ip == parsed.ip && it.port == parsed.port }
+                val targetName = hintedName.ifEmpty { knownPeer?.name ?: parsed.host }
+                val password = t.optString("password", "").ifEmpty { defaultPassword }
+                if (password.isEmpty()) {
+                    allOk = false
+                    results.put(JSONObject()
+                        .put("host", parsed.host)
+                        .put("name", targetName)
+                        .put("ok", false)
+                        .put("message", "需要输入该台设备的管理密码"))
+                    continue
+                }
+                val syncResult = syncToPeer(parsed, targetName, password, scopedPayload, scopes, mode)
+                if (!syncResult.optBoolean("ok")) allOk = false
+                results.put(syncResult)
+            }
+            json(ctx, 200, JSONObject().put("ok", allOk).put("results", results))
         }
         router.get("/api/children") { ctx ->
             json(ctx, 200, JSONObject().put("items", store.children()).put("active", store.activeChild()))
         }
         router.post("/api/children") { ctx ->
-            val child = store.createChild(JSONObject(ctx.body).getString("name"))
+            val input = JSONObject(ctx.body)
+            val child = store.createChild(input.getString("name"), extractOptionalPin(input))
             json(ctx, 200, JSONObject().put("ok", true).put("child", child).put("items", store.children()))
         }
         router.put("/api/children") { ctx ->
             val input = JSONObject(ctx.body)
-            store.renameChild(input.getString("id"), input.getString("name"))
+            store.updateChild(input.getString("id"), input.getString("name"), extractOptionalPin(input))
             json(ctx, 200, JSONObject().put("ok", true).put("items", store.children()))
         }
         router.post("/api/children/switch") { ctx ->
-            DeviceRuntime.learning.switchChild(JSONObject(ctx.body).optString("id"))
+            val input = JSONObject(ctx.body)
+            val targetId = input.optString("id")
+            val decision = evaluateChildSwitch(
+                targetId = targetId,
+                activeId = store.activeChild(),
+                isParent = ctx.parent,
+                targetHasPin = store.childHasPin(targetId),
+                pin = extractOptionalPin(input),
+                verifyChildPin = { store.verifyChildPin(targetId, it) },
+                verifyParentPassword = { AdminAuth.verify(context, it) }
+            )
+            if (!decision.allowed) {
+                return@post json(
+                    ctx,
+                    403,
+                    err(decision.errorCode ?: "child_pin_invalid")
+                        .put("message", decision.message ?: "切换密码错误，请重试")
+                )
+            }
+            DeviceRuntime.learning.switchChild(targetId)
             GateService.refreshNow()
             json(ctx, 200, JSONObject().put("ok", true).put("items", store.children())
                 .put("active", store.activeChild()))
@@ -451,7 +724,38 @@ class LanServer(
             json(ctx, 200, store.questionMeta())
         }
         router.get("/api/coverage") { ctx ->
-            json(ctx, 200, store.coverage(ctx.query["sample"]?.toIntOrNull()?.coerceIn(1, 100) ?: 20))
+            val gradeSubjects = LocalStore.parseGradeSubjects(store.config().optJSONObject("gradeSubjects"))
+            json(ctx, 200, store.coverage(ctx.query["sample"]?.toIntOrNull()?.coerceIn(1, 100) ?: 20, gradeSubjects = gradeSubjects))
+        }
+        router.get("/api/wrong-questions") { ctx ->
+            val q = ctx.query
+            json(ctx, 200, store.listWrongQuestions(
+                subject = q["subject"],
+                level = q["level"],
+                bank = q["bank"],
+                q = q["q"]
+            ))
+        }
+        router.post("/api/wrong-questions/master") { ctx ->
+            val input = JSONObject(ctx.body.ifEmpty { "{}" })
+            val all = input.optBoolean("all", false)
+            val idsArr = input.optJSONArray("ids")
+            val ids = if (idsArr != null) (0 until idsArr.length()).map { idsArr.optString(it) }.filter { it.isNotBlank() } else emptyList()
+            val updated = store.markWrongMastered(ids = ids, all = all)
+            json(ctx, 200, JSONObject().put("ok", true).put("updated", updated).put("study", store.studySummary()))
+        }
+        router.post("/api/wrong-questions/extra-pool") { ctx ->
+            val input = JSONObject(ctx.body.ifEmpty { "{}" })
+            val idsArr = input.optJSONArray("ids") ?: JSONArray()
+            val ids = (0 until idsArr.length()).map { idsArr.optString(it) }.filter { it.isNotBlank() }
+            val result = DeviceRuntime.learning.addWrongToExtraPool(ids)
+            GateService.refreshNow()
+            json(ctx, 200, result)
+        }
+        router.post("/api/extra-pool/clear") { ctx ->
+            val result = DeviceRuntime.learning.clearExtraPool()
+            GateService.refreshNow()
+            json(ctx, 200, result)
         }
         router.post("/api/questions/pause") { ctx ->
             val input = JSONObject(ctx.body)
@@ -557,7 +861,7 @@ class LanServer(
             json(ctx, 200, JSONObject().put("ok", true).put("deleted", deleted))
         }
         router.prefixDelete("/api/questions/") { ctx ->
-            val id = ctx.path.removePrefix("/api/questions/")
+            val id = decodePathSegment(ctx.path.removePrefix("/api/questions/"))
             val deleted = DeviceRuntime.learning.deleteQuestions(listOf(id))
             GateService.refreshNow()
             json(ctx, 200, JSONObject().put("ok", deleted > 0))
@@ -579,6 +883,10 @@ class LanServer(
             Updater.startCheck(context)
             json(ctx, 200, Updater.status(context))
         }
+        router.post("/api/update/install") { ctx ->
+            val (code, payload) = Updater.startRemoteInstall(context)
+            json(ctx, code, payload)
+        }
         router.post("/api/password") { ctx ->
             val input = JSONObject(ctx.body)
             if (!AdminAuth.verify(context, input.optString("current"))) {
@@ -597,11 +905,18 @@ class LanServer(
             val control = ctx.integration?.control == true
             if (!parent && !control) return@post json(ctx, 403, err("forbidden").put("message", "请先用管理密码登录"))
             val input = JSONObject(ctx.body.ifEmpty { "{}" })
-            if (input.optString("action") == "credit") {
+            val action = input.optString("action")
+            if (action == "clear_extra") {
+                val res = DeviceRuntime.learning.clearExtraPool()
+                store.logEvent("remote", JSONObject().put("action", action).put("cleared", res.optLong("cleared", 0L)).put("source", if (parent) "panel" else "integration"))
+                GateService.refreshNow()
+                return@post json(ctx, 200, JSONObject().put("learning", res.getJSONObject("learning")).put("cleared", res.getLong("cleared")))
+            }
+            if (action == "credit") {
                 val value = input.getDouble("minutes")
                 require(value.isFinite() && value == value.toInt().toDouble()) { "调整时长需要整数分钟" }
             }
-            val status = DeviceRuntime.learning.remote(input.optString("action"), input.optInt("minutes"), if (parent) "panel" else "integration")
+            val status = DeviceRuntime.learning.remote(action, input.optInt("minutes"), if (parent) "panel" else "integration")
             GateService.refreshNow()
             json(ctx, 200, JSONObject().put("learning", status))
         }
@@ -638,12 +953,16 @@ class LanServer(
             reply(ctx.out, 200, "application/zip", Diag.export(context), mapOf("Content-Disposition" to "attachment; filename=\"studyontv-logs-$stamp.zip\""), ctx.headers["origin"])
         }
         router.get("/api/device") { ctx ->
+            val clock = store.clockReading()
             json(ctx, 200, JSONObject().put("name", Prefs.deviceName(context))
-                .put("version", BuildConfig.VERSION_NAME).put("flavor", BuildConfig.FLAVOR).put("ip", localIp() ?: "").put("port", boundPort)
+                .put("version", BuildConfig.VERSION_NAME).put("flavor", BuildConfig.FLAVOR).put("localOnly", LocalOnlyGuard.enabled).put("ip", localIp() ?: "").put("port", boundPort)
                 .put("uninstallProtected", UninstallGuard.active(context)).put("deviceOwner", UninstallGuard.owner(context))
                 .put("launcherHidden", LauncherIcon.hidden(context)).put("desktop", DesktopMode.state(context)).put("autostart", Watchdog.report(context)).put("monitor", GateService.diagnostics(context))
-                .put("timezone", DeviceClock.describe(store)).put("deviceTime", DeviceClock.calendar(store).time.toString())
-                .put("keepalive", KeepAlive.report(context)).put("buglyConsent", Prefs.buglyConsent(context))
+                // 家长在别的时区时，面板要能看出「设备现在几点」到底按哪个时区算
+                .put("timezone", DeviceClock.describe(store, clock.millis))
+                .put("deviceTime", DeviceClock.calendar(store, clock.millis).time.toString())
+                .put("clockSource", clock.source.id)
+                .put("keepalive", KeepAlive.report(context)).put("buglyConsent", !LocalOnlyGuard.enabled && Prefs.buglyConsent(context))
                 .put("crashUpload", crashUploadState(context)))
         }
         router.put("/api/device/crash") { ctx ->
@@ -658,9 +977,14 @@ class LanServer(
             json(ctx, 200, JSONObject().put("ok", true).put("crashUpload", crashUploadState(context)))
         }
         router.put("/api/device/bugly") { ctx ->
-            val enabled = JSONObject(ctx.body).optBoolean("enabled")
-            if (enabled) BuglyInit.initWithConsent(context) else BuglyInit.revoke(context)
-            json(ctx, 200, JSONObject().put("ok", true).put("buglyConsent", Prefs.buglyConsent(context)))
+            if (LocalOnlyGuard.enabled) {
+                BuglyInit.revoke(context)
+                json(ctx, 200, JSONObject().put("ok", true).put("buglyConsent", false).put("localOnly", true))
+            } else {
+                val enabled = JSONObject(ctx.body).optBoolean("enabled")
+                if (enabled) BuglyInit.initWithConsent(context) else BuglyInit.revoke(context)
+                json(ctx, 200, JSONObject().put("ok", true).put("buglyConsent", Prefs.buglyConsent(context)))
+            }
         }
         router.delete("/api/device/uninstall-guard") { ctx ->
             try {
@@ -708,12 +1032,12 @@ class LanServer(
             json(ctx, 200, JSONObject().put("items", items))
         }
         router.prefixGet("/api/reviews/") { ctx ->
-            val id = ctx.path.removePrefix("/api/reviews/").substringBefore('/')
+            val id = decodePathSegment(ctx.path.removePrefix("/api/reviews/").substringBefore('/'))
             val review = store.review(id) ?: return@prefixGet json(ctx, 404, err("not_found"))
             json(ctx, 200, review)
         }
         router.prefixPost("/api/reviews/") { ctx ->
-            val id = ctx.path.removePrefix("/api/reviews/").substringBefore('/')
+            val id = decodePathSegment(ctx.path.removePrefix("/api/reviews/").substringBefore('/'))
             if (ctx.path.endsWith("/retry")) {
                 require(store.review(id) != null) { "题目不存在" }
                 GradingService.enqueue(store, DeviceRuntime.learning, id)
@@ -914,15 +1238,182 @@ class LanServer(
         }
     }
 
-    private fun readBody(input: BufferedInputStream, length: Int): String {
-        val buf = ByteArray(length)
-        var read = 0
-        while (read < length) {
-            val n = input.read(buf, read, length - read)
-            if (n <= 0) break
-            read += n
+    private fun readBody(input: BufferedInputStream, length: Int): String = readExactBody(input, length)
+
+    private fun probePeerHello(target: PeerDiscovery.ParsedLanHost): PeerDiscovery.PeerInfo? {
+        val (code, body) = lanHttpRequest(
+            target = target,
+            method = "GET",
+            path = "/api/hello",
+            connectTimeoutMs = 2500,
+            readTimeoutMs = 3000
+        ) ?: return null
+        if (code != 200) return null
+        val obj = try { JSONObject(body) } catch (_: Exception) { return null }
+        if (obj.optString("app") != "StudyOnTV") return null
+        val id = obj.optString("id").trim().take(32).ifEmpty { target.host }
+        val name = obj.optString("name").trim().take(32).ifEmpty { target.host }
+        val version = obj.optString("version").trim().take(24)
+        val isTv = obj.optBoolean("isTv", true)
+        val questions = obj.optInt("questions", 0).coerceAtLeast(0)
+        return PeerDiscovery.PeerInfo(
+            id = id,
+            name = name,
+            ip = target.ip,
+            port = target.port,
+            version = version,
+            isTv = isTv,
+            questions = questions,
+            lastSeenAt = System.currentTimeMillis()
+        )
+    }
+
+    private fun syncToPeer(
+        target: PeerDiscovery.ParsedLanHost,
+        initialName: String,
+        password: String,
+        scopedPayload: JSONObject,
+        scopes: Set<String>,
+        mode: String
+    ): JSONObject {
+        val resolvedName = try {
+            probePeerHello(target)?.name?.takeIf { it.isNotBlank() } ?: initialName
+        } catch (_: Exception) {
+            initialName
         }
-        return String(buf, 0, read, Charsets.UTF_8)
+
+        val authBody = JSONObject()
+            .put("passphrase", password)
+            .put("remember", false)
+            .toString()
+        val authResp = lanHttpRequest(
+            target = target,
+            method = "POST",
+            path = "/api/auth",
+            body = authBody,
+            connectTimeoutMs = 3000,
+            readTimeoutMs = 5000
+        ) ?: return JSONObject()
+            .put("host", target.host)
+            .put("name", resolvedName)
+            .put("ok", false)
+            .put("message", "无法连接目标设备，请确认设备已开机且在同一局域网")
+
+        if (authResp.first == 401) {
+            return JSONObject()
+                .put("host", target.host)
+                .put("name", resolvedName)
+                .put("ok", false)
+                .put("message", "管理密码错误，需要输入该台设备的管理密码")
+        }
+        if (authResp.first !in 200..299) {
+            val remoteMsg = try { JSONObject(authResp.second).optString("message") } catch (_: Exception) { "" }
+            return JSONObject()
+                .put("host", target.host)
+                .put("name", resolvedName)
+                .put("ok", false)
+                .put("message", remoteMsg.ifBlank { "目标设备鉴权失败（HTTP ${authResp.first}）" })
+        }
+        val remoteToken = try { JSONObject(authResp.second).optString("token") } catch (_: Exception) { "" }
+        if (remoteToken.isBlank()) {
+            return JSONObject()
+                .put("host", target.host)
+                .put("name", resolvedName)
+                .put("ok", false)
+                .put("message", "目标设备未返回有效会话令牌")
+        }
+
+        val restoreBody = JSONObject()
+            .put("backup", scopedPayload)
+            .put("mode", mode)
+            .put("scopes", JSONArray(scopes.sorted()))
+            .toString()
+        val restoreResp = lanHttpRequest(
+            target = target,
+            method = "POST",
+            path = "/api/backup/restore",
+            body = restoreBody,
+            bearerToken = remoteToken,
+            connectTimeoutMs = 4000,
+            readTimeoutMs = 20000
+        ) ?: return JSONObject()
+            .put("host", target.host)
+            .put("name", resolvedName)
+            .put("ok", false)
+            .put("message", "同步传输中断，请稍后重试")
+
+        if (restoreResp.first !in 200..299) {
+            val remoteMsg = try { JSONObject(restoreResp.second).optString("message") } catch (_: Exception) { "" }
+            return JSONObject()
+                .put("host", target.host)
+                .put("name", resolvedName)
+                .put("ok", false)
+                .put("message", remoteMsg.ifBlank { "目标设备同步失败（HTTP ${restoreResp.first}）" })
+        }
+        val restoredJson = try { JSONObject(restoreResp.second) } catch (_: Exception) { JSONObject() }
+        val syncedQ = restoredJson.optInt("syncedQuestions", restoredJson.optInt("questions", 0))
+        val totalQ = restoredJson.optInt("questions", syncedQ)
+        val summary = formatSyncSuccessMessage(scopes, mode, syncedQ, totalQ)
+        return JSONObject()
+            .put("host", target.host)
+            .put("name", resolvedName)
+            .put("ok", true)
+            .put("message", summary)
+    }
+
+    private fun lanHttpRequest(
+        target: PeerDiscovery.ParsedLanHost,
+        method: String,
+        path: String,
+        body: String? = null,
+        bearerToken: String? = null,
+        connectTimeoutMs: Int = 3000,
+        readTimeoutMs: Int = 5000
+    ): Pair<Int, String>? {
+        if (!PeerDiscovery.isPrivateLanIp(target.ip) || target.port !in 1024..65535) return null
+        var conn: HttpURLConnection? = null
+        return try {
+            val url = URL("http", target.ip, target.port, path)
+            conn = (url.openConnection(Proxy.NO_PROXY) as HttpURLConnection).apply {
+                requestMethod = method
+                instanceFollowRedirects = false
+                connectTimeout = connectTimeoutMs
+                readTimeout = readTimeoutMs
+                setRequestProperty("Accept", "application/json")
+                if (!bearerToken.isNullOrEmpty()) {
+                    setRequestProperty("Authorization", "Bearer $bearerToken")
+                }
+                if (body != null) {
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                    val bytes = body.toByteArray(Charsets.UTF_8)
+                    setFixedLengthStreamingMode(bytes.size)
+                    outputStream.use { it.write(bytes) }
+                }
+            }
+            val code = conn.responseCode
+            val stream = if (code in 200..399) conn.inputStream else conn.errorStream
+            val text = if (stream != null) {
+                stream.use { ins ->
+                    val buf = ByteArrayOutputStream()
+                    val chunk = ByteArray(4096)
+                    var total = 0
+                    while (total < 65_536) {
+                        val n = ins.read(chunk)
+                        if (n <= 0) break
+                        val take = minOf(n, 65_536 - total)
+                        buf.write(chunk, 0, take)
+                        total += take
+                    }
+                    buf.toString("UTF-8")
+                }
+            } else ""
+            code to text
+        } catch (_: Exception) {
+            null
+        } finally {
+            try { conn?.disconnect() } catch (_: Exception) { }
+        }
     }
 
     fun localIp(): String? = try {

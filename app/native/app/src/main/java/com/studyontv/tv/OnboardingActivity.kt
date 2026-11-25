@@ -63,12 +63,12 @@ class OnboardingActivity : Activity() {
         status.addView(statusCopy, LinearLayout.LayoutParams(0, -2, 1f))
         intro.addView(status, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(24) })
         val actions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val manage = TvUi.button(this, "完成，进入家长设置", true) { complete(true) }
-        val learn = TvUi.button(this, "先开始学习") { complete(false) }
-        val studyOnly = TvUi.button(this, "仅用作刷题背诵（免权限，直接进入）") { completeStudyOnly() }
-        actions.addView(manage, LinearLayout.LayoutParams(-1, dp(52)))
-        actions.addView(learn, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(if (tv) 12 else 10) })
-        actions.addView(studyOnly, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(if (tv) 12 else 10) })
+        val manage = TvUi.button(this, "完成，进入家长设置", true) { complete(true) }.apply { minHeight = dp(52); minimumHeight = dp(52) }
+        val learn = TvUi.button(this, "先开始学习") { complete(false) }.apply { minHeight = dp(52); minimumHeight = dp(52) }
+        val studyOnly = TvUi.button(this, "仅用作刷题背诵（免权限，直接进入）") { completeStudyOnly() }.apply { minHeight = dp(52); minimumHeight = dp(52) }
+        actions.addView(manage, LinearLayout.LayoutParams(-1, -2))
+        actions.addView(learn, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(if (tv) 12 else 10) })
+        actions.addView(studyOnly, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(if (tv) 12 else 10) })
 
         // 右侧：权限列表
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -100,12 +100,6 @@ class OnboardingActivity : Activity() {
                 Toast.makeText(this, "这台设备不支持设备管理应用，无法开启防卸载", Toast.LENGTH_LONG).show()
             }
         }
-        add(android.R.drawable.ic_menu_preferences, "开发者选项", "系统调试开关；USB 调试需要在其中开启", true, { KeepAlive.developerOptions(this) }) {
-            openDeveloperOptions()
-        }
-        add(android.R.drawable.ic_menu_compass, "USB 调试", "用电脑通过 ADB 管理设备；应用无法代开", true, { KeepAlive.usbDebugging(this) }) {
-            openDeveloperOptions()
-        }
         // 电视一般不显示通知，只在手机 / 平板上提示
         if (!tv && Build.VERSION.SDK_INT >= 33) add(android.R.drawable.ic_dialog_info, "通知", "显示“使用时间管理中”的常驻通知", true,
             { checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED }) {
@@ -128,8 +122,9 @@ class OnboardingActivity : Activity() {
             LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(64), dp(24), dp(64), dp(24))
-                val left = LinearLayout(this@OnboardingActivity).apply { orientation = LinearLayout.VERTICAL; addView(intro); addView(actions, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(28) }) }
-                addView(left, LinearLayout.LayoutParams(0, -2, 0.42f))
+                val left = LinearLayout(this@OnboardingActivity).apply { orientation = LinearLayout.VERTICAL; addView(intro); addView(actions, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(24) }) }
+                addView(ScrollView(this@OnboardingActivity).apply { isVerticalScrollBarEnabled = false; clipToPadding = false; setPadding(dp(4), dp(8), dp(4), dp(8)); addView(left) },
+                    LinearLayout.LayoutParams(0, -2, 0.42f))
                 addView(ScrollView(this@OnboardingActivity).apply { isVerticalScrollBarEnabled = false; clipToPadding = false; setPadding(dp(12), dp(12), dp(12), dp(12)); addView(list) },
                     LinearLayout.LayoutParams(0, -2, 0.58f).apply { leftMargin = dp(48) })
             }
@@ -173,19 +168,6 @@ class OnboardingActivity : Activity() {
         Toast.makeText(this, "这台设备没有“通知使用权”设置页。可用 ADB 开启：\n${RevivalListener.adbCommand(this)}", Toast.LENGTH_LONG).show()
     }
 
-    /** 开发者选项在部分电视上不存在，逐级回退到设备信息 / 应用详情 / 系统设置。 */
-    private fun openDeveloperOptions() {
-        GateService.openingSystemPage(parentAuthorized = true)
-        val options = listOf(
-            Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS),
-            Intent(Settings.ACTION_DEVICE_INFO_SETTINGS),
-            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")),
-            Intent(Settings.ACTION_SETTINGS)
-        )
-        for (intent in options) try { startActivity(intent); return } catch (_: Exception) { }
-        Toast.makeText(this, "这台设备没有开发者选项页面，请在系统设置中查找", Toast.LENGTH_SHORT).show()
-    }
-
     private fun maybeRequestNotifications() {
         if (tv || Build.VERSION.SDK_INT < 33 || notificationRequested || Prefs.notificationAsked(this)) return
         if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
@@ -196,10 +178,13 @@ class OnboardingActivity : Activity() {
     }
 
     private fun complete(manage: Boolean) {
+        DeviceRuntime.store.saveConfig(org.json.JSONObject().put("supervisionEnabled", true))
+        DeviceRuntime.learning.status()
         Prefs.setOnboarded(this, true)
         try { GateService.start(this) } catch (_: RuntimeException) {
             Toast.makeText(this, "后台管理暂未启动，您仍可继续学习", Toast.LENGTH_SHORT).show()
         }
+        GateService.refreshNow()
         startActivity(Intent(this, if (manage) ParentActivity::class.java else MainActivity::class.java))
         finish()
     }
@@ -221,7 +206,9 @@ class OnboardingActivity : Activity() {
         items.forEach { val on = it.enabled(); it.row.setStatus(if (on) "已开启" else if (it.optional) "未开启" else "去开启", on) }
         val overlay = GateOverlay.canDraw(this)
         val usage = Foreground.hasUsageAccess(this)
+        val supervisionEnabled = try { DeviceRuntime.store.config().optBoolean("supervisionEnabled", true) } catch (_: Throwable) { true }
         val (title, description, ready) = when {
+            !supervisionEnabled -> Triple("当前为纯学习模式", "点「完成」或「先开始学习」可恢复时间管理", false)
             overlay && (WatchAccessibilityService.connected || usage) -> Triple("已就绪", "到时间会自动显示学习页，计时准确", true)
             overlay -> Triple("基本可用", "离开学习页后按亮屏时间计时", true)
             usage -> Triple("可以记录使用时间", "开启悬浮窗后，才能在到时间时显示学习页", false)

@@ -62,10 +62,11 @@ export const labels:{[key:string]:string}={single:'单选',multiple:'多选',boo
 export const dot:{[key:string]:string}={single:'bg-teal-600 dark:bg-teal-400',multiple:'bg-blue-600 dark:bg-blue-400',boolean:'bg-amber-600 dark:bg-amber-400',text:'bg-violet-600 dark:bg-violet-400',subjective:'bg-rose-600 dark:bg-rose-400'};
 
 /** 新增题目的空表单（编辑时用题目字段覆盖） */
-export const blank={id:'',type:'single',q:'',opts:['','','',''],optionImages:['','','',''],correct:[0],accepted:'',difficulty:2,tip:'',modelAnswer:'',rubric:'',subject:'',level:'',bank:'默认题库',image:'',images:[] as string[],audio:'',language:'zh-CN'};
+export const blank={id:'',type:'single',q:'',opts:['','','',''],optionImages:['','','',''],correct:[0],accepted:'',difficulty:2,tip:'',modelAnswer:'',rubric:'',subject:'',level:'',bank:'默认题库',image:'',images:[] as string[],audio:'',listen:'',listenTimes:'5',listenRequired:false,listenRate:'',language:'zh-CN'};
 
 export function Stars({n}:{n:number}){
- return <span className="whitespace-nowrap text-xs tracking-wide" title={n+' 星'}><span className="text-amber-600 dark:text-amber-400">{'★'.repeat(n)}</span><span className="text-muted-foreground/40">{'☆'.repeat(5-n)}</span></span>;
+ const level=Math.min(5,Math.max(0,Math.round(Number(n)||0)));
+ return <span className="whitespace-nowrap text-xs tracking-wide" title={level+' 星'}><span className="text-amber-600 dark:text-amber-400">{'★'.repeat(level)}</span><span className="text-muted-foreground/40">{'☆'.repeat(5-level)}</span></span>;
 }
 
 export function Count({value,suffix,className=''}:{value:number|string,suffix:string,className?:string}){

@@ -19,8 +19,16 @@ import android.os.SystemClock
  * 并加 3 秒滞回，避免切视频、翻页时计时抖动。
  */
 object Playback {
-    private var lastActiveAt = 0L
-    private const val HYSTERESIS_MS = 3000L
+    @Volatile private var lastActiveAt = -1L
+    internal const val HYSTERESIS_MS = 3000L
+
+    /** 媒体播放状态滞回判定：未记录过播放（lastActiveAt < 0）时冷启动不误判为播放中（ST-111） */
+    internal fun isActiveWithHysteresis(
+        playing: Boolean,
+        now: Long,
+        lastActiveAt: Long,
+        hysteresisMs: Long = HYSTERESIS_MS
+    ): Boolean = playing || (lastActiveAt >= 0L && now - lastActiveAt < hysteresisMs)
 
     fun hasActive(context: Context): Boolean {
         val audio = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
@@ -31,7 +39,7 @@ object Playback {
         val playing = music || players
         val now = SystemClock.elapsedRealtime()
         if (playing) lastActiveAt = now
-        return playing || now - lastActiveAt < HYSTERESIS_MS
+        return isActiveWithHysteresis(playing, now, lastActiveAt)
     }
 
     @Suppress("DEPRECATION")

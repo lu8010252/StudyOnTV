@@ -41,23 +41,24 @@ export default function WatchWhitelistField({
   const apps: AppItem[] = (appsQuery.data?.items || []) as AppItem[];
   const nameOf = (pkg: string) => apps.find(app => app.package === pkg)?.name || pkg;
 
-  const add = (raw: string) => {
+  const add = (raw: string): boolean => {
     const pkg = raw.trim();
-    if (!pkg) return;
+    if (!pkg) return false;
     if (!PACKAGE.test(pkg) || pkg.length > 200) {
       setError('包名格式不正确，例如 com.example.app');
-      return;
+      return false;
     }
     if (value.includes(pkg)) {
       setError('这个应用已经在名单里了');
-      return;
+      return false;
     }
     if (value.length >= 100) {
       setError('最多添加 100 个应用');
-      return;
+      return false;
     }
     setError('');
     onChange([...value, pkg]);
+    return true;
   };
 
   const choices = useMemo(
@@ -111,8 +112,7 @@ export default function WatchWhitelistField({
           onKeyDown={event => {
             if (event.key === 'Enter') {
               event.preventDefault();
-              add(text);
-              setText('');
+              if (add(text)) setText('');
             }
           }}
         />
@@ -121,8 +121,7 @@ export default function WatchWhitelistField({
           size="sm"
           variant="outline"
           onClick={() => {
-            add(text);
-            setText('');
+            if (add(text)) setText('');
           }}
         >
           <Plus />
@@ -170,8 +169,7 @@ export default function WatchWhitelistField({
                 type="button"
                 className="flex w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-muted/50"
                 onClick={() => {
-                  add(app.package);
-                  setOpen(false);
+                  if (add(app.package)) setOpen(false);
                 }}
               >
                 <AppWindow className="size-4 shrink-0 text-muted-foreground" />

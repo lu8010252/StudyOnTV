@@ -30,6 +30,21 @@ export default function RichStemEditor({
 }: Props) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const [preview, setPreview] = useState(false);
+  const [showLatexBar, setShowLatexBar] = useState(false);
+  const hasLatex = /\$|\\[\[(]|\\begin\{/.test(value);
+
+  const latexSnippets: Array<{ label: string; before: string; after: string; fallback: string; title: string }> = [
+    { label: '行内 $…$', before: '$', after: '$', fallback: 'x^2 + y^2 = z^2', title: '行内 LaTeX 公式' },
+    { label: '块级 $$…$$', before: '\n$$\n', after: '\n$$\n', fallback: '\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}', title: '独立居中公式块' },
+    { label: '分数', before: '$\\frac{', after: '}{2}$', fallback: '1', title: '分数 \\frac{a}{b}' },
+    { label: '根号', before: '$\\sqrt{', after: '}$', fallback: 'x', title: '根号 \\sqrt{x}' },
+    { label: '上标', before: '$x^{', after: '}$', fallback: '2', title: '幂/上标' },
+    { label: '下标', before: '$a_{', after: '}$', fallback: 'n', title: '下标' },
+    { label: '×', before: '$\\times$', after: '', fallback: '', title: '乘号 \\times' },
+    { label: '÷', before: '$\\div$', after: '', fallback: '', title: '除号 \\div' },
+    { label: '°', before: '$90^{\\circ}$', after: '', fallback: '', title: '角度符号' },
+    { label: '方程组', before: '$$\n\\begin{cases}\n', after: '\n\\end{cases}\n$$', fallback: 'x + y = 5 \\\\\nx - y = 1', title: '联立方程组' },
+  ];
 
   function replaceRange(
     el: HTMLTextAreaElement,
@@ -144,8 +159,17 @@ export default function RichStemEditor({
             <Button type="button" size="icon" variant="ghost" className="size-7" title="无序列表" aria-label="无序列表" onClick={() => insertLinePrefix('- ')}>
               <List className="size-3.5" />
             </Button>
-            <Button type="button" size="icon" variant="ghost" className="size-7" title="插入数学公式 $...$" aria-label="数学公式" onClick={() => wrap('$', '$', 'x^2 + y^2 = z^2')}>
+            <Button
+              type="button"
+              size="sm"
+              variant={showLatexBar ? 'secondary' : 'ghost'}
+              className="h-7 gap-1 px-2 text-xs"
+              title="LaTeX 数学公式模板（支持 $...$ / $$...$$）"
+              aria-label="数学公式"
+              onClick={() => setShowLatexBar(v => !v)}
+            >
               <Sigma className="size-3.5" />
+              LaTeX
             </Button>
             {onPickImages && (
               <Button
@@ -173,6 +197,23 @@ export default function RichStemEditor({
           {preview ? <><Pencil className="size-3.5" />编辑</> : <><Eye className="size-3.5" />预览</>}
         </Button>
       </div>
+      {!preview && showLatexBar && (
+        <div className="flex flex-wrap items-center gap-1 border-b bg-muted/20 px-2 py-1.5">
+          {latexSnippets.map(s => (
+            <Button
+              key={s.label}
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-6 px-2 text-[11px]"
+              title={s.title}
+              onClick={() => wrap(s.before, s.after, s.fallback)}
+            >
+              {s.label}
+            </Button>
+          ))}
+        </div>
+      )}
       {preview ? (
         <div className="min-h-24 space-y-3 p-3 text-sm leading-6">
           {value.trim() ? (
@@ -189,16 +230,24 @@ export default function RichStemEditor({
           )}
         </div>
       ) : (
-        <Textarea
-          ref={ref}
-          rows={rows}
-          value={value}
-          placeholder={placeholder}
-          onChange={e => onChange(e.target.value)}
-          onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
-          className="resize-y rounded-none border-0 shadow-none focus-visible:ring-0"
-        />
+        <>
+          <Textarea
+            ref={ref}
+            rows={rows}
+            value={value}
+            placeholder={placeholder}
+            onChange={e => onChange(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            className="resize-y rounded-none border-0 shadow-none focus-visible:ring-0"
+          />
+          {hasLatex && (
+            <div className="border-t bg-muted/20 px-3 py-2 text-xs">
+              <div className="mb-1 text-[11px] font-medium text-muted-foreground">LaTeX 实时预览</div>
+              <MathText text={value} className="whitespace-pre-wrap text-sm leading-6 text-foreground" />
+            </div>
+          )}
+        </>
       )}
     </div>
   );

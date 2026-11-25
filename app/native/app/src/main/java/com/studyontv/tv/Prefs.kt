@@ -25,6 +25,16 @@ object Prefs {
         sp(c).getString("device_name", android.os.Build.MODEL ?: "客厅电视") ?: "客厅电视"
     fun setDeviceName(c: Context, v: String) = sp(c).edit().putString("device_name", v).apply()
 
+    @Synchronized
+    fun deviceId(c: Context): String {
+        val p = sp(c)
+        val existing = p.getString("device_id", null)?.trim().orEmpty()
+        if (existing.isNotEmpty()) return existing
+        val generated = java.util.UUID.randomUUID().toString().replace("-", "").take(16)
+        p.edit().putString("device_id", generated).apply()
+        return generated
+    }
+
     
     fun updateInfo(c: Context): String = sp(c).getString("update_info", "") ?: ""
     fun setUpdateInfo(c: Context, v: String) = sp(c).edit().putString("update_info", v).apply()
@@ -43,6 +53,16 @@ object Prefs {
     /** 最近一次安装失败的原因（系统 PackageInstaller 返回的原文），装成功后会清空 */
     fun updateInstallError(c: Context): String = sp(c).getString("update_install_error", "") ?: ""
     fun setUpdateInstallError(c: Context, v: String) = sp(c).edit().putString("update_install_error", v).apply()
+
+    /** 是否在发现新版本时后台自动静默预下载更新包（默认关闭，EU Local-Only 恒为 false） */
+    fun autoDownloadUpdate(c: Context): Boolean = sp(c).getBoolean("auto_download_update", false)
+    fun setAutoDownloadUpdate(c: Context, v: Boolean) = sp(c).edit().putBoolean("auto_download_update", v).apply()
+
+    /** 已在本地完成校验就绪的预下载 APK 版本号与 SHA-256 */
+    fun readyApkVersion(c: Context): String = sp(c).getString("ready_apk_version", "") ?: ""
+    fun setReadyApkVersion(c: Context, v: String) = sp(c).edit().putString("ready_apk_version", v).apply()
+    fun readyApkSha256(c: Context): String = sp(c).getString("ready_apk_sha256", "") ?: ""
+    fun setReadyApkSha256(c: Context, v: String) = sp(c).edit().putString("ready_apk_sha256", v).apply()
 
     
     fun updateInProgress(c: Context): Boolean = sp(c).getLong("update_started_at", 0L).let { it > 0 && System.currentTimeMillis() - it < 10 * 60 * 1000 }
@@ -73,13 +93,17 @@ object Prefs {
     fun buglyConsentAsked(c: Context): Boolean = sp(c).getBoolean("bugly_consent_asked", false)
     fun setBuglyConsentAsked(c: Context, v: Boolean) = sp(c).edit().putBoolean("bugly_consent_asked", v).apply()
 
-    // --- 崩溃日志上传（Cloudflare Worker）---
+    // --- 软件体验提升计划（运行与崩溃日志上传，兼容阿里云 OSS 与自建 Worker）---
 
-    /** 用户是否同意上传崩溃日志（同意后替代 Bugly，上传到自建 Worker） */
-    fun crashUploadConsent(c: Context): Boolean = sp(c).getBoolean("crash_upload_consent", false)
+    /** 是否参与软件体验提升计划（默认开启，家长可在登录页或设置页随时关闭） */
+    fun crashUploadConsent(c: Context): Boolean = sp(c).getBoolean("crash_upload_consent", true)
     fun setCrashUploadConsent(c: Context, v: Boolean) = sp(c).edit().putBoolean("crash_upload_consent", v).apply()
     fun crashUploadConsentAsked(c: Context): Boolean = sp(c).getBoolean("crash_upload_consent_asked", false)
     fun setCrashUploadConsentAsked(c: Context, v: Boolean) = sp(c).edit().putBoolean("crash_upload_consent_asked", v).apply()
+
+    /** 上次自动上报运行诊断日志的时间戳（用于按固定间隔节流） */
+    fun lastTelemetryUploadAt(c: Context): Long = sp(c).getLong("last_telemetry_upload_at", 0L)
+    fun setLastTelemetryUploadAt(c: Context, ts: Long) = sp(c).edit().putLong("last_telemetry_upload_at", ts).apply()
 
     /**
      * Cloudflare Worker 接收端 URL。面板里填了就优先用面板的，

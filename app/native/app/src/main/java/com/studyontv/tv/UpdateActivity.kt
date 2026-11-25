@@ -20,11 +20,18 @@ import org.json.JSONObject
 class UpdateActivity : Activity() {
     private var force = false
     private var sha256 = ""
+    private var targetVersion = ""
+    private var preDownloadedApkPath = ""
     private lateinit var status: TextView
     private var goButton: TextView? = null
+    @Volatile private var installHandedOff = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (LocalOnlyGuard.enabled) {
+            finish()
+            return
+        }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         immersive()
 
@@ -34,6 +41,7 @@ class UpdateActivity : Activity() {
             JSONObject()
         }
         val latest = data.optString("latest", "")
+        targetVersion = latest
         val current = data.optString("current", Updater.currentVersion(this))
         val notes = data.optString("notes", "")
             .lineSequence()
@@ -42,6 +50,7 @@ class UpdateActivity : Activity() {
         val url = data.optString("url", "")
         force = data.optBoolean("force", false)
         sha256 = data.optString("sha256", "")
+        preDownloadedApkPath = intent.getStringExtra("apkPath").orEmpty().trim()
 
         val palette = TvUi.palette(this)
         val tv = DeviceBridge.isTv(this)
@@ -88,11 +97,12 @@ class UpdateActivity : Activity() {
 
         val buttons = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         lateinit var go: android.widget.Button
-        go = TvUi.button(this, if (ApkInstaller.alreadyDownloaded(this, 0)) "开始安装" else "立即更新", true) {
+        go = TvUi.button(this, "立即更新", true) {
             startUpdate(url, go, progress)
         }
         go.textSize = if (tv) 21f else 18f
         goButton = go
+        refreshPrimaryButtonLabel(go)
         buttons.addView(go, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(if (tv) 62 else 54)))
 
         val secondary = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -125,9 +135,9 @@ class UpdateActivity : Activity() {
             android.widget.FrameLayout.LayoutParams.WRAP_CONTENT
         ).apply { gravity = Gravity.CENTER_HORIZONTAL })
         setContentView(scroll)
-        if (url.isEmpty()) go.isEnabled = false
+        if (url.isEmpty() && preDownloadedApkPath.isEmpty()) go.isEnabled = false
         go.requestFocus()
-        if (intent.getBooleanExtra("auto", false) && url.isNotEmpty()) {
+        if (intent.getBooleanExtra("auto", false) && (url.isNotEmpty() || preDownloadedApkPath.isNotEmpty())) {
             go.post { startUpdate(url, go, progress) }
         }
     }
@@ -137,6 +147,9 @@ class UpdateActivity : Activity() {
         if (!::status.isInitialized) return
         val error = Prefs.updateInstallError(this)
         if (error.isNotEmpty()) {
+            installHandedOff = false
+            Prefs.setUpdateInProgress(this, false)
+            Updater.updateInstallState("error", 100, error, targetVersion)
             status.text = "$error。可以点「立即更新」再试一次，或用「手动下载」装。"
             goButton?.isEnabled = true
             goButton?.text = "重试安装"
@@ -144,9 +157,46 @@ class UpdateActivity : Activity() {
             goButton?.text = "去允许安装应用"
             status.text = "这套电视系统默认禁止应用自己安装更新，需要先允许「题了个题」安装应用"
         } else if (goButton?.text?.toString() == "去允许安装应用") {
-            goButton?.text = if (ApkInstaller.alreadyDownloaded(this, 0)) "开始安装" else "立即更新"
+            goButton?.let { refreshPrimaryButtonLabel(it) }
             status.text = "下载后覆盖安装，题库和设置不会丢"
         }
+    }
+
+    override fun onDestroy() {
+        if (!installHandedOff) {
+            Prefs.setUpdateInProgress(this, false)
+            if (Updater.currentInstallSnapshot().state == "installing") {
+                Updater.resetInstallState()
+            }
+        }
+        super.onDestroy()
+    }
+
+    @Synchronized
+    private fun resolvePreDownloadedApk(): java.io.File? {
+        val path = preDownloadedApkPath
+        if (path.isEmpty()) return null
+        val file = java.io.File(path)
+        return if (file.exists() && file.isFile && isCachedApkMatching(file, sha256, deleteOnMismatch = false)) file else null
+    }
+
+    @Synchronized
+    private fun hasValidCachedApk(): Boolean {
+        if (resolvePreDownloadedApk() != null) return true
+        val ready = ApkInstaller.apkFile(this)
+        if (!ApkInstaller.alreadyDownloaded(this, 0)) return false
+        return isCachedApkMatching(ready, sha256, deleteOnMismatch = true)
+    }
+
+    private fun refreshPrimaryButtonLabel(button: TextView) {
+        Thread {
+            val downloaded = try { hasValidCachedApk() } catch (_: Exception) { false }
+            runOnUiThread {
+                if (!isFinishing && button.isEnabled && (button.text == "立即更新" || button.text == "去允许安装应用")) {
+                    button.text = if (downloaded) "开始安装" else "立即更新"
+                }
+            }
+        }.apply { isDaemon = true }.start()
     }
 
     private fun label(text: String, size: Float, color: Int, bottomMarginDp: Int,
@@ -166,12 +216,15 @@ class UpdateActivity : Activity() {
     
     private fun startUpdate(url: String, button: TextView, progress: android.widget.ProgressBar? = null) {
         if (!button.isEnabled) return
-        if (url.isEmpty()) { button.text = "没有下载地址"; return }
+        val preDownloaded = resolvePreDownloadedApk()
+        if (url.isEmpty() && preDownloaded == null) { button.text = "没有下载地址"; return }
 
         if (!ApkInstaller.canInstall(this)) {
             // Android 8+ 是按应用授权的：没开之前调起安装器只会失败，先去设置里打开
+            Updater.updateInstallState("error", 100, "系统尚未允许「题了个题」安装未知应用，请在设备上授权后重试", targetVersion)
             status.text = "先允许「题了个题」安装应用，允许后返回这里再点一次"
             try {
+                GateService.openingSystemPage(parentAuthorized = true)
                 startActivity(ApkInstaller.permissionIntent(this))
             } catch (e: Exception) {
                 status.text = "这台电视找不到「安装未知应用」设置页，请到 设置 → 应用 里允许「题了个题」安装应用"
@@ -180,36 +233,73 @@ class UpdateActivity : Activity() {
             return
         }
 
-        val ready = ApkInstaller.apkFile(this)
-        if (ApkInstaller.alreadyDownloaded(this, 0)) {
-            Prefs.setUpdateInProgress(this, true)
-            if (ApkInstaller.install(this, ready)) return
-            button.text = "安装失败，重试"
-            status.text = ApkInstaller.lastError.ifEmpty { "系统没有接受这次安装" }
-            return
-        }
-
+        installHandedOff = false
         Prefs.setUpdateInProgress(this, true)
         button.isEnabled = false
-        button.text = "下载中 0%"
-        progress?.visibility = View.VISIBLE
+        button.text = "准备安装…"
         Thread {
-            val file = ApkInstaller.download(this, url, sha256, { source -> runOnUiThread { status.text = "下载线路：$source" } }) { percent ->
+            try {
+                val ready = resolvePreDownloadedApk() ?: if (hasValidCachedApk()) ApkInstaller.apkFile(this) else null
+                if (ready != null) {
+                    val installed = ApkInstaller.install(this, ready)
+                    if (installed) {
+                        installHandedOff = true
+                    } else {
+                        Prefs.setUpdateInProgress(this, false)
+                        Updater.updateInstallState("error", 100, ApkInstaller.lastError.ifEmpty { "系统没有接受这次安装" }, targetVersion)
+                    }
+                    runOnUiThread {
+                        if (installed) {
+                            button.text = "正在安装…"
+                        } else {
+                            button.isEnabled = true
+                            button.text = "安装失败，重试"
+                            status.text = ApkInstaller.lastError.ifEmpty { "系统没有接受这次安装" }
+                            button.requestFocus()
+                        }
+                    }
+                    return@Thread
+                }
+
                 runOnUiThread {
-                    button.text = if (percent < 0) "下载中…" else if (percent < 100) "下载中 $percent%" else "正在安装…"
-                    if (percent >= 0) progress?.progress = percent.coerceIn(0, 100)
+                    button.text = "下载中 0%"
+                    progress?.visibility = View.VISIBLE
                 }
-            }
-            runOnUiThread {
-                if (file != null && ApkInstaller.install(this, file)) {
-                    button.text = "正在安装…"
+                val file = ApkInstaller.download(this, url, sha256, { source -> runOnUiThread { status.text = "下载线路：$source" } }) { percent ->
+                    runOnUiThread {
+                        button.text = if (percent < 0) "下载中…" else if (percent < 100) "下载中 $percent%" else "正在准备安装…"
+                        if (percent >= 0) progress?.progress = percent.coerceIn(0, 100)
+                    }
+                }
+                val installed = if (file != null) ApkInstaller.install(this, file) else false
+                if (installed) {
+                    installHandedOff = true
                 } else {
-                    button.isEnabled = true
-                    button.text = "下载失败，重试"
-                    status.text = (ApkInstaller.lastError.ifEmpty { "下载失败，请检查网络" }) + "。也可以点「手动下载」到 GitHub Release 页面安装。"
-                    progress?.visibility = View.GONE
+                    Prefs.setUpdateInProgress(this, false)
                 }
-                button.requestFocus()
+                runOnUiThread {
+                    if (installed) {
+                        button.text = "正在安装…"
+                    } else {
+                        button.isEnabled = true
+                        button.text = if (file == null) "下载失败，重试" else "安装失败，重试"
+                        status.text = (ApkInstaller.lastError.ifEmpty { if (file == null) "下载失败，请检查网络" else "系统没有接受这次安装" }) +
+                            "。也可以点「手动下载」到 GitHub Release 页面安装。"
+                        progress?.visibility = View.GONE
+                    }
+                    button.requestFocus()
+                }
+            } catch (e: Exception) {
+                Prefs.setUpdateInProgress(this, false)
+                Updater.updateInstallState("error", 0, "更新准备失败：${e.message ?: e.javaClass.simpleName}", targetVersion)
+                Diag.error("Update", "update task failed", e)
+                runOnUiThread {
+                    button.isEnabled = true
+                    button.text = "安装失败，重试"
+                    status.text = "更新准备失败：${e.message ?: e.javaClass.simpleName}"
+                    progress?.visibility = View.GONE
+                    button.requestFocus()
+                }
             }
         }.apply { isDaemon = true }.start()
     }
@@ -240,4 +330,36 @@ class UpdateActivity : Activity() {
             android.graphics.drawable.GradientDrawable.Orientation.LEFT_RIGHT,
             intArrayOf(from, to)
         ).apply { cornerRadius = dp(radiusDp).toFloat() }
+
+    companion object {
+        /**
+         * 校验缓存 APK 文件是否与目标版本 SHA-256 摘要一致。
+         * - expectedSha256 为空时不强制比对；
+         * - 非空时计算文件 SHA-256 忽略大小写比对，不匹配或不可读时清理过期缓存并返回 false。
+         */
+        fun isCachedApkMatching(file: java.io.File, expectedSha256: String, deleteOnMismatch: Boolean = true): Boolean {
+            if (!file.exists() || !file.isFile) return false
+            val expected = expectedSha256.trim()
+            if (expected.isEmpty()) return true
+            val actual = try {
+                val digest = java.security.MessageDigest.getInstance("SHA-256")
+                file.inputStream().use { input ->
+                    val buf = ByteArray(8192)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n <= 0) break
+                        digest.update(buf, 0, n)
+                    }
+                }
+                digest.digest().joinToString("") { "%02x".format(it) }
+            } catch (_: Exception) {
+                ""
+            }
+            val matched = actual.isNotEmpty() && actual.equals(expected, ignoreCase = true)
+            if (!matched && deleteOnMismatch) {
+                try { file.delete() } catch (_: Exception) { }
+            }
+            return matched
+        }
+    }
 }

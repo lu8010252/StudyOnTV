@@ -7,10 +7,13 @@ import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.security.MessageDigest
+import java.security.SecureRandom
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -69,7 +72,12 @@ object SpacedRepetition {
     }
 }
 
-class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLiteOpenHelper(context, databaseName, null, 12) {
+class LocalStore(
+    context: Context,
+    databaseName: String = "studyontv.db",
+    private val readClock: () -> DeviceClock.Reading = DeviceClock::read
+) : SQLiteOpenHelper(context, databaseName, null, 13) {
+    internal fun clockReading(): DeviceClock.Reading = readClock()
     companion object {
         val DEFAULT_PRAISE = listOf("太棒了！", "答对啦！", "完全正确！", "真厉害！", "好样的，继续保持！", "漂亮！你越来越熟练了")
         val DEFAULT_ENCOURAGE = listOf("没关系，记住正确答案就好", "差一点点，下一题加油！", "错误也是学习的一部分", "别灰心，再接再厉！")
@@ -84,7 +92,366 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         private val SECRET_KV_KEYS = setOf(
             "admin_token", "speech_settings", "grading_settings", "parent_access"
         )
+        /** 绑定本机单调时钟、重启计数或半途会话的瞬态存储键：导出与恢复一律跳过，避免换机污染 */
+        private val EPHEMERAL_KV_KEYS = setOf(
+            "active_round", "last_answer", "feedback_result", "feedback_deadline",
+            "review_feedback", "remote_override", "rest_deadline", "rest_watched_ms",
+            "boot_quota_ms", "video_lesson"
+        )
+        private val CHILD_ID_PATTERN = Regex("^[A-Za-z0-9_-]{1,32}$")
+        private val pinRandom = SecureRandom()
         const val MAX_CHILDREN = 8
+
+        internal fun isValidChildId(id: String): Boolean =
+            id == DEFAULT_CHILD || CHILD_ID_PATTERN.matches(id)
+
+        /**
+         * 归一化孩子切换密码输入：
+         * - `null`：保持原密码不变
+         * - `""`（或全空白）：清空密码
+         * - 非空：校验长度为 1..16 位后返回去首尾空白的值
+         */
+        internal fun normalizeChildPin(raw: String?): String? {
+            if (raw == null) return null
+            val trimmed = raw.trim()
+            if (trimmed.isEmpty()) return ""
+            require(trimmed.length in 1..16) { "切换密码需要 1–16 位" }
+            return trimmed
+        }
+
+        internal fun generatePinSalt(): String =
+            ByteArray(16).also { pinRandom.nextBytes(it) }
+                .joinToString("") { "%02x".format(it) }
+
+        internal fun hashChildPin(pin: String, salt: String): String =
+            MessageDigest.getInstance("SHA-256")
+                .digest("$salt:$pin".toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
+
+        internal fun verifyPinHash(pin: String, salt: String, expectedHash: String): Boolean {
+            val candidate = pin.trim()
+            if (candidate.isEmpty() || salt.isEmpty() || expectedHash.isEmpty()) return false
+            val actual = hashChildPin(candidate, salt)
+            return MessageDigest.isEqual(
+                actual.toByteArray(Charsets.UTF_8),
+                expectedHash.toByteArray(Charsets.UTF_8)
+            )
+        }
+
+        /** 对外序列化孩子档案：绝不下发 pin_hash / pin_salt / 原文，仅下发 hasPin。 */
+        internal fun childSummaryJson(
+            id: String,
+            name: String,
+            createdAt: Long,
+            active: Boolean,
+            hasPin: Boolean
+        ): JSONObject = JSONObject()
+            .put("id", id)
+            .put("name", name)
+            .put("createdAt", createdAt)
+            .put("active", active)
+            .put("hasPin", hasPin)
+
+        internal fun isEphemeralKvKey(key: String): Boolean {
+            val base = if (key.startsWith("child:")) key.substringAfterLast(':') else key
+            return base in EPHEMERAL_KV_KEYS
+        }
+
+        /** 多设备裁剪式同步允许的范围白名单 */
+        val SYNC_SCOPES = setOf("config", "questions", "speech", "grading")
+
+        internal fun normalizeSyncScopes(scopes: Collection<String>): Set<String> =
+            scopes.mapTo(LinkedHashSet()) { it.trim().lowercase(Locale.US) }.filterTo(LinkedHashSet()) { it in SYNC_SCOPES }
+
+        /** 仅允许同步学习计划规则（`config` 与 `child:<id>:config`），严禁同步单机运行态计时、密码或设备名。 */
+        internal fun isConfigSyncKvKey(key: String): Boolean {
+            if (key == "config") return true
+            if (key.startsWith("child:") && key.endsWith(":config")) {
+                val childId = key.removePrefix("child:").removeSuffix(":config")
+                return childId.isNotEmpty() && isValidChildId(childId)
+            }
+            return false
+        }
+
+        /**
+         * 纯函数：从备份/源对象按 `scopes` 白名单精准裁剪同步载荷。
+         * 严禁携带 `deviceName`、`activeChild`、`events`、`reviews`、`questionStats`、`questionProgress`
+         * 及任何单机运行态 kv（如 `used_ms` / `free_used_ms` / `credit_ms` / `active_round` / `admin_token`）。
+         */
+        internal fun buildScopedSyncPayload(source: JSONObject, scopes: Set<String>): JSONObject {
+            val validScopes = normalizeSyncScopes(scopes)
+            require(validScopes.isNotEmpty()) { "请至少选择一项需要同步的内容" }
+            val out = JSONObject()
+                .put("format", "studyontv-backup")
+                .put("version", source.optInt("version", 1))
+                .put("exportedAt", source.optLong("exportedAt", System.currentTimeMillis()))
+                .put("appVersion", source.optString("appVersion", BuildConfig.VERSION_NAME))
+                .put("scopes", JSONArray(validScopes.sorted()))
+                .put("includeQuestions", "questions" in validScopes)
+            if ("config" in validScopes) {
+                source.optJSONArray("children")?.let { out.put("children", it) }
+                val filteredKv = JSONObject()
+                source.optJSONObject("kv")?.let { kv ->
+                    val keys = kv.keys()
+                    while (keys.hasNext()) {
+                        val k = keys.next()
+                        if (isConfigSyncKvKey(k)) {
+                            filteredKv.put(k, kv.optString(k, ""))
+                        }
+                    }
+                }
+                out.put("kv", filteredKv)
+            }
+            if ("questions" in validScopes) {
+                out.put("questions", source.optJSONArray("questions") ?: JSONArray())
+            }
+            if ("speech" in validScopes) {
+                source.optJSONObject("speech")?.let { out.put("speech", it) }
+            }
+            if ("grading" in validScopes) {
+                source.optJSONObject("grading")?.let { out.put("grading", it) }
+            }
+            return out
+        }
+
+        /** EU Local-Only 模式下清洗单个备份 kv 项（剥离 config 中的公网公益视频与 bank_market_sources 中的公网源）。 */
+        internal fun sanitizeKvValueForLocalOnly(key: String, value: String, localOnly: Boolean = LocalOnlyGuard.enabled): String {
+            if (!localOnly) return value
+            val base = if (key.startsWith("child:")) key.substringAfterLast(':') else key
+            return when (base) {
+                "config" -> try {
+                    val cfg = JSONObject(value)
+                    val videos = cfg.optJSONArray("educationalVideos")
+                    if (videos != null) {
+                        val kept = JSONArray()
+                        for (i in 0 until videos.length()) {
+                            val raw = videos.optString(i).trim()
+                            if (raw.isNotEmpty() && LocalOnlyGuard.isLocalUrl(raw)) kept.put(raw)
+                        }
+                        cfg.put("educationalVideos", kept)
+                        if (kept.length() == 0 && cfg.optString("learningContent", "quiz") != "quiz") {
+                            cfg.put("learningContent", "quiz")
+                        }
+                    }
+                    cfg.toString()
+                } catch (_: Exception) { value }
+                "bank_market_sources" -> try {
+                    val arr = JSONArray(value)
+                    val kept = JSONArray()
+                    for (i in 0 until arr.length()) {
+                        val item = arr.optJSONObject(i) ?: continue
+                        val url = item.optString("url").trim()
+                        if (url.isNotEmpty() && LocalOnlyGuard.isLocalUrl(url)) kept.put(item)
+                    }
+                    kept.toString()
+                } catch (_: Exception) { value }
+                "bank_automation" -> try {
+                    sanitizeBankAutomationForLocalOnly(JSONObject(value), localOnly).toString()
+                } catch (_: Exception) { value }
+                else -> value
+            }
+        }
+
+        /** EU Local-Only 模式下清洗备份中的 bankAutomation.sources 公网远程题库源。 */
+        internal fun sanitizeBankAutomationForLocalOnly(raw: JSONObject, localOnly: Boolean = LocalOnlyGuard.enabled): JSONObject {
+            val next = JSONObject(raw.toString())
+            next.remove("running")
+            next.remove("status")
+            if (!localOnly) return next
+            val sources = next.optJSONArray("sources")
+            if (sources != null) {
+                val kept = JSONArray()
+                for (i in 0 until sources.length()) {
+                    val item = sources.optJSONObject(i) ?: continue
+                    val url = item.optString("url").trim()
+                    if (url.isNotEmpty() && LocalOnlyGuard.isLocalUrl(url)) kept.put(item)
+                }
+                next.put("sources", kept)
+            }
+            return next
+        }
+
+        /** 间隔复习纳入范围判断（repetitionStats / studySummary / learningAnalytics 唯一真理源）。 */
+        internal fun inSpacedScope(wrongOnly: Boolean, lastCorrect: Int, answered: Int, correct: Int): Boolean =
+            !wrongOnly || lastCorrect == 0 || answered > correct
+
+        /** 按 IANA 时区 ID 解析时区；留空或非法值回退设备默认时区。 */
+        internal fun resolveTimeZone(rawZoneId: String): TimeZone {
+            val id = rawZoneId.trim()
+            if (id.isEmpty()) return TimeZone.getDefault()
+            val zone = TimeZone.getTimeZone(id)
+            return if (zone.id == "GMT" && id != "GMT" && id != "UTC") TimeZone.getDefault() else zone
+        }
+
+        /** 计算指定时区在给定时刻所在自然日的 00:00:00.000 毫秒时间戳。 */
+        internal fun startOfDayMillis(nowMs: Long, zone: TimeZone): Long = Calendar.getInstance(zone).apply {
+            timeInMillis = nowMs
+            set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+
+        /** 统一 SQL 范围过滤结果：全部值通过参数化占位符绑定，杜绝 SQL 注入。 */
+        internal data class SqlFilter(val clause: String, val args: List<String>)
+
+        /** 解析加练队列 JSON 数组，过滤空值并保序去重。 */
+        internal fun parseExtraQueue(raw: String): List<String> {
+            if (raw.isBlank()) return emptyList()
+            val arr = try { JSONArray(raw) } catch (_: Exception) { return emptyList() }
+            val out = LinkedHashSet<String>()
+            for (i in 0 until arr.length()) {
+                val id = arr.optString(i).trim()
+                if (id.isNotEmpty()) out.add(id)
+            }
+            return out.toList()
+        }
+
+        /** 将新增题号合并进加练队列（保序去重），返回合并后的队列与实际新增数。 */
+        internal fun mergeExtraQueue(existing: List<String>, additions: List<String>): Pair<List<String>, Int> {
+            val merged = LinkedHashSet<String>()
+            existing.forEach { id -> id.trim().takeIf { it.isNotEmpty() }?.let { merged.add(it) } }
+            val before = merged.size
+            additions.forEach { id -> id.trim().takeIf { it.isNotEmpty() }?.let { merged.add(it) } }
+            return merged.toList() to (merged.size - before)
+        }
+
+        /** 规范化 config.gradeSubjects：自动过滤空年级/超长键、科目去重，保留空数组（表示该年级全部科目）。 */
+        internal fun normalizeGradeSubjects(raw: JSONObject?): JSONObject {
+            val clean = JSONObject()
+            if (raw == null) return clean
+            val keys = raw.keys()
+            var gradeCount = 0
+            while (keys.hasNext() && gradeCount < 50) {
+                val rawKey = keys.next()
+                val grade = rawKey.trim()
+                if (grade.isEmpty() || grade.length > 32) continue
+                val arr = raw.optJSONArray(rawKey)
+                val cleanSubjects = JSONArray()
+                val seen = LinkedHashSet<String>()
+                if (arr != null) {
+                    for (i in 0 until minOf(arr.length(), 50)) {
+                        val sub = arr.optString(i).trim()
+                        if (sub.isNotEmpty() && sub.length <= 32 && seen.add(sub)) {
+                            cleanSubjects.put(sub)
+                        }
+                    }
+                }
+                clean.put(grade, cleanSubjects)
+                gradeCount++
+            }
+            return clean
+        }
+
+        /** 将 config.gradeSubjects 解析为保序 Map<年级, 科目列表>（空列表表示该年级不限科目）。 */
+        internal fun parseGradeSubjects(raw: JSONObject?): Map<String, List<String>> {
+            val normalized = normalizeGradeSubjects(raw)
+            val out = LinkedHashMap<String, List<String>>()
+            val keys = normalized.keys()
+            while (keys.hasNext()) {
+                val grade = keys.next()
+                val arr = normalized.optJSONArray(grade)
+                val subjects = ArrayList<String>()
+                if (arr != null) {
+                    for (i in 0 until arr.length()) {
+                        val sub = arr.optString(i).trim()
+                        if (sub.isNotEmpty()) subjects.add(sub)
+                    }
+                }
+                out[grade] = subjects
+            }
+            return out
+        }
+
+        /** 内存态主从范围匹配判断（与 buildScopeFilter SQL 语义严格一致）。 */
+        internal fun matchesGradeSubjects(
+            level: String,
+            subject: String,
+            gradeSubjects: Map<String, List<String>>,
+            selectedLevel: String = ""
+        ): Boolean {
+            if (gradeSubjects.isEmpty()) return true
+            if (selectedLevel.isNotEmpty()) {
+                if (level != selectedLevel) return false
+                val allowed = gradeSubjects[selectedLevel] ?: return false
+                return allowed.isEmpty() || subject in allowed
+            }
+            val allowed = gradeSubjects[level] ?: return false
+            return allowed.isEmpty() || subject in allowed
+        }
+
+        /**
+         * 构建题目范围 SQL 过滤片段（pickQuestion / pickDeck / distinctLevels / coverage 单一真理源）。
+         * - gradeSubjects 为空时 100% 沿用旧的 levels × subjects 笛卡尔积语义；
+         * - gradeSubjects 非空时按每个年级各自允许的科目精确匹配；若指定 selectedLevel 则只对该年级生效。
+         */
+        internal fun buildScopeFilter(
+            subjects: List<String> = emptyList(),
+            levels: List<String> = emptyList(),
+            selectedLevel: String = "",
+            banks: List<String> = emptyList(),
+            gradeSubjects: Map<String, List<String>> = emptyMap(),
+            explicitSubjectFilter: Boolean = false
+        ): SqlFilter {
+            fun ph(count: Int) = List(count) { "?" }.joinToString(",")
+            val where = StringBuilder()
+            val args = mutableListOf<String>()
+
+            if (gradeSubjects.isNotEmpty()) {
+                if (selectedLevel.isNotEmpty()) {
+                    val allowedSubjects = gradeSubjects[selectedLevel]
+                    if (allowedSubjects == null) {
+                        where.append(" AND 1=0")
+                    } else if (allowedSubjects.isEmpty()) {
+                        where.append(" AND questions.level=?")
+                        args.add(selectedLevel)
+                    } else {
+                        where.append(" AND (questions.level=? AND questions.subject IN (${ph(allowedSubjects.size)}))")
+                        args.add(selectedLevel)
+                        args.addAll(allowedSubjects)
+                    }
+                } else {
+                    val branches = mutableListOf<String>()
+                    for ((grade, allowedSubjects) in gradeSubjects) {
+                        if (allowedSubjects.isEmpty()) {
+                            branches.add("questions.level=?")
+                            args.add(grade)
+                        } else {
+                            branches.add("(questions.level=? AND questions.subject IN (${ph(allowedSubjects.size)}))")
+                            args.add(grade)
+                            args.addAll(allowedSubjects)
+                        }
+                    }
+                    if (branches.isNotEmpty()) {
+                        where.append(" AND (${branches.joinToString(" OR ")})")
+                    }
+                }
+                if (explicitSubjectFilter && subjects.isNotEmpty()) {
+                    where.append(" AND questions.subject IN (${ph(subjects.size)})")
+                    args.addAll(subjects)
+                }
+            } else {
+                if (subjects.isNotEmpty()) {
+                    where.append(" AND questions.subject IN (${ph(subjects.size)})")
+                    args.addAll(subjects)
+                }
+                if (levels.isNotEmpty()) {
+                    where.append(" AND questions.level IN (${ph(levels.size)})")
+                    args.addAll(levels)
+                }
+                if (selectedLevel.isNotEmpty()) {
+                    where.append(" AND questions.level=?")
+                    args.add(selectedLevel)
+                }
+            }
+
+            if (banks.isNotEmpty()) {
+                if ("默认题库" in banks) {
+                    where.append(" AND (questions.bank IN (${ph(banks.size)}) OR questions.bank='')")
+                } else {
+                    where.append(" AND questions.bank IN (${ph(banks.size)})")
+                }
+                args.addAll(banks)
+            }
+            return SqlFilter(where.toString(), args)
+        }
     }
 
     private val appContext: Context = context.applicationContext ?: context
@@ -146,6 +513,11 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
             migrateQuestionStatsForChildren(db)
             migrateInlineMedia(db)
         }
+        if (oldVersion < 13) {
+            // 上游第 11 版（我们顺延到 13）：多孩子独立切换密码（加盐 SHA-256 哈希，默认空串表示未设密码）
+            addColumn(db, "children", "pin_hash", "TEXT NOT NULL DEFAULT ''")
+            addColumn(db, "children", "pin_salt", "TEXT NOT NULL DEFAULT ''")
+        }
     }
 
     override fun close() {
@@ -195,7 +567,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
     }
 
     private fun createChildren(db: SQLiteDatabase) {
-        db.execSQL("CREATE TABLE IF NOT EXISTS children(id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS children(id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL, pin_hash TEXT NOT NULL DEFAULT '', pin_salt TEXT NOT NULL DEFAULT '')")
     }
 
     /** 旧的 question_progress 以 qid 为主键，多孩子后必须变成 (qid, child) 复合主键 */
@@ -243,7 +615,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
                 var id = ""
                 var raw = ""
                 db.rawQuery(
-                    "SELECT rowid,id,details FROM questions WHERE rowid>? AND details LIKE '%data:image/%' ORDER BY rowid LIMIT 1",
+                    "SELECT rowid,id,details FROM questions WHERE rowid>? AND details LIKE '%data:image%' ORDER BY rowid LIMIT 1",
                     arrayOf(lastRow.toString())
                 ).use { c ->
                     if (c.moveToFirst()) {
@@ -274,7 +646,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
                 var id = ""
                 var raw = ""
                 db.rawQuery(
-                    "SELECT rowid,id,payload FROM reviews WHERE rowid>? AND payload LIKE '%data:image/%' ORDER BY rowid LIMIT 1",
+                    "SELECT rowid,id,payload FROM reviews WHERE rowid>? AND payload LIKE '%data:image%' ORDER BY rowid LIMIT 1",
                     arrayOf(lastRow.toString())
                 ).use { c ->
                     if (c.moveToFirst()) {
@@ -414,7 +786,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         writableDatabase.execSQL("INSERT OR IGNORE INTO question_stats(qid,child) VALUES(?,?)", arrayOf(id, child))
         writableDatabase.execSQL(
             "UPDATE question_stats SET presented=presented+1,last_at=? WHERE qid=? AND child=?",
-            arrayOf<Any>(System.currentTimeMillis(), id, child)
+            arrayOf<Any>(clockReading().millis, id, child)
         )
     }
 
@@ -423,7 +795,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         writableDatabase.execSQL("INSERT OR IGNORE INTO question_stats(qid,child) VALUES(?,?)", arrayOf(id, child))
         writableDatabase.execSQL(
             "UPDATE question_stats SET answered=answered+1,correct=correct+?,last_correct=?,last_at=? WHERE qid=? AND child=?",
-            arrayOf<Any>(flag, flag, System.currentTimeMillis(), id, child)
+            arrayOf<Any>(flag, flag, clockReading().millis, id, child)
         )
     }
 
@@ -521,7 +893,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
     fun recordProgress(id: String, quality: Int) {
         val child = activeChild()
         val current = progressState(id, child)
-        val now = System.currentTimeMillis()
+        val now = clockReading().millis
         val step = SpacedRepetition.next(current, quality, now)
         writableDatabase.insertWithOnConflict("question_progress", null, ContentValues().apply {
             put("qid", id); put("child", child); put("repetitions", step.repetitions)
@@ -530,10 +902,10 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         }, SQLiteDatabase.CONFLICT_REPLACE)
     }
 
-    fun repetitionStats(): JSONObject {
-        val child = activeChild()
-        val wrongOnly = config().optString("spacedScope") == "wrong_only"
-        val nowStr = System.currentTimeMillis().toString()
+    @JvmOverloads
+    fun repetitionStats(child: String = activeChild()): JSONObject {
+        val wrongOnly = config(child).optString("spacedScope") == "wrong_only"
+        val nowStr = clockReading().millis.toString()
         val sql = if (wrongOnly) {
             "SELECT COUNT(*),COALESCE(SUM(CASE WHEN question_progress.due_at<=? AND (stats.last_correct=0 OR COALESCE(stats.answered,0)>COALESCE(stats.correct,0)) THEN 1 ELSE 0 END),0) " +
                 "FROM question_progress JOIN questions ON questions.id=question_progress.qid " +
@@ -618,9 +990,8 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
     }
 
     /** 学习相关的键按孩子隔离；朗读 / 批改 / 远程题库这类设备设置仍共用一份 */
-    private fun scoped(key: String): String {
+    private fun scoped(key: String, child: String = activeChild()): String {
         if (key in SHARED_KEYS) return key
-        val child = activeChild()
         return if (child == DEFAULT_CHILD) key else "child:$child:$key"
     }
 
@@ -648,9 +1019,12 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         ensureDefaultChild()
         val active = activeChild()
         val out = JSONArray()
-        readableDatabase.rawQuery("SELECT id,name,created_at FROM children ORDER BY created_at,id", null).use {
-            while (it.moveToNext()) out.put(JSONObject().put("id", it.getString(0)).put("name", it.getString(1))
-                .put("createdAt", it.getLong(2)).put("active", it.getString(0) == active))
+        readableDatabase.rawQuery("SELECT id,name,created_at,pin_hash FROM children ORDER BY created_at,id", null).use {
+            while (it.moveToNext()) {
+                val id = it.getString(0)
+                val hasPin = !(it.getString(3).isNullOrEmpty())
+                out.put(childSummaryJson(id, it.getString(1), it.getLong(2), id == active, hasPin))
+            }
         }
         return out
     }
@@ -670,55 +1044,98 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         return name
     }
 
-    fun createChild(raw: String): JSONObject {
+    fun createChild(raw: String, pin: String? = null): JSONObject {
         ensureDefaultChild()
         val name = validName(raw)
+        val normalizedPin = normalizeChildPin(pin)
         val count = readableDatabase.rawQuery("SELECT COUNT(*) FROM children", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
         require(count < MAX_CHILDREN) { "最多只能添加 $MAX_CHILDREN 个孩子" }
         val id = "c" + UUID.randomUUID().toString().replace("-", "").take(8)
+        val salt = if (!normalizedPin.isNullOrEmpty()) generatePinSalt() else ""
+        val hash = if (!normalizedPin.isNullOrEmpty()) hashChildPin(normalizedPin, salt) else ""
         // 新孩子沿用当前的规则（时长、时段、奖励…），不需要家长再配一遍；学习进度从零开始
         val inherited = rawGet(scoped("config"))
         writableDatabase.insertWithOnConflict("children", null, ContentValues().apply {
             put("id", id); put("name", name); put("created_at", System.currentTimeMillis())
+            put("pin_hash", hash); put("pin_salt", salt)
         }, SQLiteDatabase.CONFLICT_REPLACE)
         if (inherited.isNotEmpty()) rawSet("child:$id:config", inherited)
-        return JSONObject().put("id", id).put("name", name)
+        return JSONObject().put("id", id).put("name", name).put("hasPin", hash.isNotEmpty())
     }
 
-    fun renameChild(id: String, raw: String): JSONObject {
+    fun updateChild(id: String, raw: String, pin: String? = null): JSONObject {
+        ensureDefaultChild()
         val name = validName(raw, id)
-        val updated = writableDatabase.update("children", ContentValues().apply { put("name", name) }, "id=?", arrayOf(id))
+        val normalizedPin = normalizeChildPin(pin)
+        val cv = ContentValues().apply {
+            put("name", name)
+            when {
+                normalizedPin == null -> Unit // 不改动现有密码
+                normalizedPin.isEmpty() -> {
+                    put("pin_hash", "")
+                    put("pin_salt", "")
+                }
+                else -> {
+                    val salt = generatePinSalt()
+                    put("pin_hash", hashChildPin(normalizedPin, salt))
+                    put("pin_salt", salt)
+                }
+            }
+        }
+        val updated = writableDatabase.update("children", cv, "id=?", arrayOf(id))
         require(updated > 0) { "孩子档案不存在" }
-        return JSONObject().put("id", id).put("name", name)
+        return JSONObject().put("id", id).put("name", name).put("hasPin", childHasPin(id))
+    }
+
+    fun renameChild(id: String, raw: String): JSONObject = updateChild(id, raw, null)
+
+    fun childHasPin(childId: String): Boolean {
+        ensureDefaultChild()
+        return readableDatabase.rawQuery("SELECT pin_hash FROM children WHERE id=? LIMIT 1", arrayOf(childId)).use {
+            it.moveToFirst() && !(it.getString(0).isNullOrEmpty())
+        }
+    }
+
+    fun verifyChildPin(childId: String, pin: String): Boolean {
+        ensureDefaultChild()
+        val candidate = pin.trim()
+        if (candidate.isEmpty()) return false
+        return readableDatabase.rawQuery("SELECT pin_hash,pin_salt FROM children WHERE id=? LIMIT 1", arrayOf(childId)).use {
+            if (!it.moveToFirst()) return false
+            verifyPinHash(candidate, it.getString(1).orEmpty(), it.getString(0).orEmpty())
+        }
     }
 
     /** 删除孩子档案：连同他的学习记录、错题统计、复习进度、主观题批改和孤儿手写图一起清掉，题目本身保留 */
     fun deleteChild(id: String): Boolean {
         require(id != DEFAULT_CHILD) { "第一个孩子不能删除，可以改名" }
         val db = writableDatabase
-        db.beginTransaction()
-        try {
-            db.delete("children", "id=?", arrayOf(id))
-            db.delete("kv", "k LIKE ?", arrayOf("child:$id:%"))
-            db.delete("events", "child=?", arrayOf(id))
-            db.delete("question_progress", "child=?", arrayOf(id))
-            db.delete("question_stats", "child=?", arrayOf(id))
-            // Android 5+ 自带 SQLite 不支持 JSON_EXTRACT，在 Kotlin 层过滤属于该孩子的批改记录
-            val reviewIds = ArrayList<String>()
-            db.rawQuery("SELECT id,payload FROM reviews", null).use { c ->
-                while (c.moveToNext()) {
-                    val rid = c.getString(0) ?: continue
-                    val payload = c.getString(1) ?: continue
-                    val owner = try { JSONObject(payload).optString("child", DEFAULT_CHILD) } catch (_: Exception) { DEFAULT_CHILD }
-                    if (owner == id) reviewIds.add(rid)
+        // 统一锁顺序：永远先 childLock、再 SQLite 写事务，避免与 switchChild()/activeChild() 产生 AB-BA 死锁
+        synchronized(childLock) {
+            db.beginTransaction()
+            try {
+                db.delete("children", "id=?", arrayOf(id))
+                db.delete("kv", "k LIKE ?", arrayOf("child:$id:%"))
+                db.delete("events", "child=?", arrayOf(id))
+                db.delete("question_progress", "child=?", arrayOf(id))
+                db.delete("question_stats", "child=?", arrayOf(id))
+                // Android 5+ 自带 SQLite 不支持 JSON_EXTRACT，在 Kotlin 层过滤属于该孩子的批改记录
+                val reviewIds = ArrayList<String>()
+                db.rawQuery("SELECT id,payload FROM reviews", null).use { c ->
+                    while (c.moveToNext()) {
+                        val rid = c.getString(0) ?: continue
+                        val payload = c.getString(1) ?: continue
+                        val owner = try { JSONObject(payload).optString("child", DEFAULT_CHILD) } catch (_: Exception) { DEFAULT_CHILD }
+                        if (owner == id) reviewIds.add(rid)
+                    }
                 }
+                for (rid in reviewIds) db.delete("reviews", "id=?", arrayOf(rid))
+                configCache.remove(id)
+                if (activeChild() == id) switchChild(DEFAULT_CHILD)
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
             }
-            for (rid in reviewIds) db.delete("reviews", "id=?", arrayOf(rid))
-            configCache.remove(id)
-            if (activeChild() == id) switchChild(DEFAULT_CHILD)
-            db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
         }
         if (!db.inTransaction()) pruneMedia()
         return true
@@ -738,8 +1155,8 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         UUID.randomUUID().toString().also { set("admin_token", it) }
     }
 
-    fun config(): JSONObject {
-        val child = activeChild()
+    @JvmOverloads
+    fun config(child: String = activeChild()): JSONObject {
         // 每次返回全新 JSONObject 副本，防止调用方原地修改返回对象污染缓存
         configCache[child]?.let { return JSONObject(it) }
         val defaults = JSONObject().put("dailyMinutes", 40).put("dailyFreeMinutes", 0).put("sessionMinutes", 10)
@@ -758,7 +1175,8 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
             .put("praisePhrases", JSONArray(DEFAULT_PRAISE)).put("encouragePhrases", JSONArray(DEFAULT_ENCOURAGE))
             .put("autoNextSeconds", 0).put("scheduleMode", "allow").put("blockSettingsDuringControl", true).put("theme", if (BuildConfig.FLAVOR == "tv") "dark" else "system")
             .put("holidayMode", "sunday")
-            .put("bootFreeMinutes", 0).put("dailyLimitEnabled", true).put("roundsLimitEnabled", true)
+            .put("bootFreeMinutes", 0).put("bootFreeIntervalMinutes", 0)
+            .put("dailyLimitEnabled", true).put("roundsLimitEnabled", true)
             .put("restEnabled", false).put("restWatchMinutes", 40).put("restMinutes", 10)
             .put("wrongReviewSeconds", 0).put("fontScale", 100).put("childSelectLevel", false)
             .put("trafficAssistEnabled", false)
@@ -769,10 +1187,11 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
             .put("learningContent", "quiz").put("educationalVideos", JSONArray()).put("videoMinutes", 1)
             .put("quizBanks", JSONArray())
             .put("quizSubjects", JSONArray()).put("quizLevels", JSONArray())
+            .put("gradeSubjects", JSONObject())
             .put("timePoints", JSONArray()).put("exemptWindows", JSONArray())
             .put("timezone", "")
             .put("version", 1)
-        val saved = try { JSONObject(get("config", "{}")) } catch (_: Exception) { JSONObject() }
+        val saved = try { JSONObject(rawGet(scoped("config", child), "{}")) } catch (_: Exception) { JSONObject() }
         saved.keys().forEach { defaults.put(it, saved.get(it)) }
         defaults.put("theme", when (defaults.optString("theme")) { "light", "daylight" -> "light"; "system" -> "system"; "dark", "midnight", "nord", "amber" -> "dark"; else -> if (BuildConfig.FLAVOR == "tv") "dark" else "system" })
         val timePattern = Regex("([01][0-9]|2[0-3]):[0-5][0-9]")
@@ -795,6 +1214,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         if (defaults.optString("spacedScope") !in listOf("all", "wrong_only")) {
             defaults.put("spacedScope", "all")
         }
+        defaults.put("gradeSubjects", normalizeGradeSubjects(defaults.optJSONObject("gradeSubjects")))
         val snapshot = defaults.toString()
         configCache[child] = snapshot
         return JSONObject(snapshot)
@@ -876,7 +1296,8 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         val ranges = mapOf("dailyMinutes" to 1..480, "dailyFreeMinutes" to 0..120, "sessionMinutes" to 1..120,
             "questionsPerRound" to 1..100, "roundsPerDay" to 1..100,
             "wrongThreshold" to 1..100, "extraQuestions" to 1..100,
-            "bootFreeMinutes" to 0..120, "restWatchMinutes" to 1..480, "restMinutes" to 1..120,
+            "bootFreeMinutes" to 0..120, "bootFreeIntervalMinutes" to 0..1440,
+            "restWatchMinutes" to 1..480, "restMinutes" to 1..120,
             "wrongReviewSeconds" to 0..300, "fontScale" to 75..200, "videoMinutes" to 1..30)
         ranges.forEach { (key, range) ->
             if (input.has(key)) {
@@ -913,6 +1334,9 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
             for (i in 0 until urls.length()) {
                 val url = urls.getString(i)
                 require(url.length <= 2048 && (url.startsWith("https://") || url.startsWith("http://"))) { "请使用 HTTP/HTTPS 视频直链" }
+                if (LocalOnlyGuard.enabled) {
+                    require(LocalOnlyGuard.isLocalUrl(url)) { "仅本地隐私版（EU Local-Only）仅允许配置本机或局域网内的公益视频" }
+                }
             }
             next.put("educationalVideos", urls)
         }
@@ -963,6 +1387,9 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
             }
             next.put(key, clean)
         }
+        if (input.has("gradeSubjects")) {
+            next.put("gradeSubjects", normalizeGradeSubjects(input.optJSONObject("gradeSubjects")))
+        }
         if (input.has("weekSlots")) {
             val clean = normalizeWeek(input.optJSONArray("weekSlots")) ?: throw IllegalArgumentException("可用时段格式不正确")
             next.put("weekSlots", clean)
@@ -1005,28 +1432,20 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         subjects: List<String>,
         levels: List<String>,
         selectedLevel: String,
-        banks: List<String>
+        banks: List<String>,
+        gradeSubjects: Map<String, List<String>> = emptyMap(),
+        explicitSubjectFilter: Boolean = false
     ) {
-        if (subjects.isNotEmpty()) {
-            where.append(" AND questions.subject IN (${placeholders(subjects.size)})")
-            args.addAll(subjects)
-        }
-        if (levels.isNotEmpty()) {
-            where.append(" AND questions.level IN (${placeholders(levels.size)})")
-            args.addAll(levels)
-        }
-        if (selectedLevel.isNotEmpty()) {
-            where.append(" AND questions.level=?")
-            args.add(selectedLevel)
-        }
-        if (banks.isNotEmpty()) {
-            if ("默认题库" in banks) {
-                where.append(" AND (questions.bank IN (${placeholders(banks.size)}) OR questions.bank='')")
-            } else {
-                where.append(" AND questions.bank IN (${placeholders(banks.size)})")
-            }
-            args.addAll(banks)
-        }
+        val filter = buildScopeFilter(
+            subjects = subjects,
+            levels = levels,
+            selectedLevel = selectedLevel,
+            banks = banks,
+            gradeSubjects = gradeSubjects,
+            explicitSubjectFilter = explicitSubjectFilter
+        )
+        where.append(filter.clause)
+        args.addAll(filter.args)
     }
 
     private fun buildQuestionOrder(
@@ -1037,7 +1456,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         newFirst: Boolean
     ): String {
         val base = if (spaced) {
-            "CASE WHEN progress.due_at<=${System.currentTimeMillis()} THEN 0 WHEN progress.qid IS NULL THEN 1 ELSE 2 END, progress.due_at ASC, RANDOM()"
+            "CASE WHEN progress.due_at<=${clockReading().millis} THEN 0 WHEN progress.qid IS NULL THEN 1 ELSE 2 END, progress.due_at ASC, RANDOM()"
         } else when (sortBy) {
             "newest" -> "questions.created_at DESC, questions.rowid DESC"
             "oldest" -> "questions.created_at ASC, questions.rowid ASC"
@@ -1068,13 +1487,16 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         missedOnly: Boolean = false,
         minStar: Int = 1,
         excludeIds: Collection<String> = emptyList(),
-        child: String = activeChild()
+        child: String = activeChild(),
+        gradeSubjects: Map<String, List<String>> = emptyMap(),
+        explicitSubjectFilter: Boolean = false
     ): JSONObject? {
         val items = pickDeck(
             count = 1, subjects = subjects, levels = levels, selectedLevel = selectedLevel,
             banks = banks, spaced = spaced, wrongFirst = wrongFirst, coverageFirst = coverageFirst,
             newFirst = newFirst, excludeId = excludeId, onlyWrong = onlyWrong, missedOnly = missedOnly,
-            minStar = minStar, excludeIds = excludeIds, child = child
+            minStar = minStar, excludeIds = excludeIds, child = child,
+            gradeSubjects = gradeSubjects, explicitSubjectFilter = explicitSubjectFilter
         )
         return if (items.length() > 0) items.getJSONObject(0) else null
     }
@@ -1097,11 +1519,13 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         missedOnly: Boolean = false,
         minStar: Int = 1,
         excludeIds: Collection<String> = emptyList(),
-        child: String = activeChild()
+        child: String = activeChild(),
+        gradeSubjects: Map<String, List<String>> = emptyMap(),
+        explicitSubjectFilter: Boolean = false
     ): JSONArray {
         val where = StringBuilder("questions.enabled=1")
         val args = mutableListOf<String>()
-        appendScopeFilters(where, args, subjects, levels, selectedLevel, banks)
+        appendScopeFilters(where, args, subjects, levels, selectedLevel, banks, gradeSubjects, explicitSubjectFilter)
         // (二改) 最低星级 / 本轮已出过的题不再重复（调用方在挑不出题时会放宽）
         if (minStar > 1) { where.append(" AND questions.difficulty>=?"); args.add(minStar.toString()) }
         if (excludeIds.isNotEmpty()) {
@@ -1137,11 +1561,13 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
     fun distinctLevels(
         allowedLevels: List<String> = emptyList(),
         subjects: List<String> = emptyList(),
-        banks: List<String> = emptyList()
+        banks: List<String> = emptyList(),
+        gradeSubjects: Map<String, List<String>> = emptyMap(),
+        explicitSubjectFilter: Boolean = false
     ): List<String> {
         val where = StringBuilder("questions.enabled=1 AND TRIM(COALESCE(questions.level,''))!=''")
         val args = mutableListOf<String>()
-        appendScopeFilters(where, args, subjects, allowedLevels, "", banks)
+        appendScopeFilters(where, args, subjects, allowedLevels, "", banks, gradeSubjects, explicitSubjectFilter)
         val out = ArrayList<String>()
         readableDatabase.rawQuery(
             "SELECT DISTINCT questions.level FROM questions WHERE $where",
@@ -1153,6 +1579,217 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
             }
         }
         return out.distinct().sorted()
+    }
+
+    /** 按题号读取单道题目（供精准加练队列优先出题使用）。 */
+    fun questionById(id: String, enabledOnly: Boolean = true, child: String = activeChild()): JSONObject? {
+        if (id.isBlank()) return null
+        val enabledClause = if (enabledOnly) " AND questions.enabled=1" else ""
+        val arr = readQuestions(
+            "SELECT questions.*,COALESCE(stats.presented,0) AS presented,COALESCE(stats.answered,0) AS answered_count," +
+                "COALESCE(stats.correct,0) AS correct_count,COALESCE(stats.last_correct,-1) AS last_correct " +
+                "FROM questions LEFT JOIN question_stats stats ON questions.id=stats.qid AND stats.child=? " +
+                "WHERE questions.id=?$enabledClause LIMIT 1",
+            arrayOf(child, id)
+        )
+        return if (arr.length() > 0) arr.getJSONObject(0) else null
+    }
+
+    /** 当前孩子的精准加练队列（KV JSON 数组，保序去重）。 */
+    fun extraQueue(child: String = activeChild()): List<String> =
+        parseExtraQueue(rawGet(scoped("extra_queue", child), "[]"))
+
+    /** 将有效且已启用的题号去重追加到当前孩子加练队列，返回实际新增条数。 */
+    fun addToExtraQueue(ids: List<String>, child: String = activeChild()): Int {
+        val cleaned = ids.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (cleaned.isEmpty()) return 0
+        val valid = LinkedHashSet<String>()
+        val chunkSize = 500
+        for (start in cleaned.indices step chunkSize) {
+            val chunk = cleaned.subList(start, minOf(start + chunkSize, cleaned.size))
+            readableDatabase.rawQuery(
+                "SELECT id FROM questions WHERE enabled=1 AND id IN (${placeholders(chunk.size)})",
+                chunk.toTypedArray()
+            ).use { c ->
+                while (c.moveToNext()) c.getString(0)?.let { valid.add(it) }
+            }
+        }
+        val orderedValid = cleaned.filter { it in valid }
+        if (orderedValid.isEmpty()) return 0
+        val existing = extraQueue(child)
+        val (merged, added) = mergeExtraQueue(existing, orderedValid)
+        if (added > 0) {
+            rawSet(scoped("extra_queue", child), JSONArray(merged).toString())
+        }
+        return added
+    }
+
+    /** 将指定题号移出当前孩子加练队列；若存在并移出返回 true。 */
+    fun popExtraQueue(id: String, child: String = activeChild()): Boolean {
+        val target = id.trim()
+        if (target.isEmpty()) return false
+        val existing = extraQueue(child)
+        if (target !in existing) return false
+        val remaining = existing.filter { it != target }
+        rawSet(scoped("extra_queue", child), JSONArray(remaining).toString())
+        return true
+    }
+
+    /** 清空当前孩子的精准加练队列。 */
+    fun clearExtraQueue(child: String = activeChild()) {
+        rawSet(scoped("extra_queue", child), "[]")
+    }
+
+    /**
+     * 错题库查询（ST-601 / #159）：以 question_stats.last_correct=0 为唯一真源，按孩子隔离。
+     */
+    fun listWrongQuestions(
+        subject: String? = null,
+        level: String? = null,
+        bank: String? = null,
+        q: String? = null,
+        child: String = activeChild()
+    ): JSONObject {
+        val where = StringBuilder("questions.enabled=1 AND stats.last_correct=0")
+        val args = mutableListOf(child)
+        if (!subject.isNullOrBlank()) {
+            where.append(" AND questions.subject=?")
+            args.add(subject.trim())
+        }
+        if (!level.isNullOrBlank()) {
+            where.append(" AND questions.level=?")
+            args.add(level.trim())
+        }
+        if (!bank.isNullOrBlank()) {
+            val b = bank.trim()
+            if (b == "默认题库") {
+                where.append(" AND (questions.bank=? OR questions.bank='')")
+            } else {
+                where.append(" AND questions.bank=?")
+            }
+            args.add(b)
+        }
+        val keyword = q?.trim()?.takeIf { it.isNotEmpty() }
+        if (keyword != null) {
+            val like = "%${escapeLike(keyword)}%"
+            where.append(" AND (questions.stem LIKE ? ESCAPE '\\' OR questions.tip LIKE ? ESCAPE '\\' OR questions.options LIKE ? ESCAPE '\\' OR questions.subject LIKE ? ESCAPE '\\' OR questions.level LIKE ? ESCAPE '\\')")
+            repeat(5) { args.add(like) }
+        }
+        val items = JSONArray()
+        readableDatabase.rawQuery(
+            "SELECT questions.*,COALESCE(stats.answered,0) AS answered_count," +
+                "COALESCE(stats.correct,0) AS correct_count,COALESCE(stats.last_at,0) AS last_at," +
+                "COALESCE(stats.last_correct,-1) AS last_correct " +
+                "FROM questions JOIN question_stats stats ON questions.id=stats.qid AND stats.child=? " +
+                "WHERE $where ORDER BY stats.last_at DESC, (stats.answered - stats.correct) DESC, questions.rowid DESC LIMIT 500",
+            args.toTypedArray()
+        ).use { c ->
+            while (c.moveToNext()) {
+                val details = c.getString(c.getColumnIndexOrThrow("details"))
+                val full = if (details.isNullOrEmpty()) JSONObject() else try { JSONObject(details) } catch (_: Exception) { JSONObject() }
+                val id = c.getString(c.getColumnIndexOrThrow("id"))
+                val stem = c.getString(c.getColumnIndexOrThrow("stem"))
+                val options = try { JSONArray(c.getString(c.getColumnIndexOrThrow("options"))) } catch (_: Exception) { JSONArray() }
+                val k = c.getInt(c.getColumnIndexOrThrow("answer"))
+                val tip = c.getString(c.getColumnIndexOrThrow("tip")) ?: ""
+                val subj = c.getString(c.getColumnIndexOrThrow("subject")) ?: ""
+                val lvl = c.getString(c.getColumnIndexOrThrow("level")) ?: ""
+                val bankName = (c.getString(c.getColumnIndexOrThrow("bank")) ?: "").ifBlank { full.optString("bank").ifBlank { "默认题库" } }
+                val type = (c.getString(c.getColumnIndexOrThrow("type")) ?: "").ifBlank { full.optString("type").ifBlank { "single" } }
+                full.put("a", options).put("k", k).put("type", type)
+                val answered = c.getInt(c.getColumnIndexOrThrow("answered_count"))
+                val correct = c.getInt(c.getColumnIndexOrThrow("correct_count"))
+                val lastAt = c.getLong(c.getColumnIndexOrThrow("last_at"))
+                val lastCorrect = c.getInt(c.getColumnIndexOrThrow("last_correct"))
+                val wrongCount = (answered - correct).coerceAtLeast(if (lastCorrect == 0) 1 else 0)
+                items.put(
+                    JSONObject()
+                        .put("id", id)
+                        .put("q", stem)
+                        .put("type", type)
+                        .put("subject", subj)
+                        .put("level", lvl)
+                        .put("bank", bankName)
+                        .put("options", options)
+                        .put("answer", LearningEngine.formatAnswerDisplay(full))
+                        .put("explain", tip)
+                        .put("answered", answered)
+                        .put("correct", correct)
+                        .put("wrongCount", wrongCount)
+                        .put("lastAt", lastAt)
+                        .put("lastCorrect", lastCorrect == 1)
+                )
+            }
+        }
+        val extraPool = rawGet(scoped("extra_pool", child), "0").toLongOrNull() ?: 0L
+        val extraQueueIds = extraQueue(child)
+        return JSONObject()
+            .put("items", items)
+            .put("total", items.length())
+            .put("extraPool", extraPool)
+            .put("extraQueueIds", JSONArray(extraQueueIds))
+    }
+
+    /**
+     * 非破坏性“标为已掌握”：不删除原题目，仅将 question_stats.last_correct 置为 1 并对齐 correct>=answered，
+     * 使 wrongCount 与 onlyWrong/missedOnly 查询均不再命中，同时将其移出 extra_queue。
+     */
+    fun markWrongMastered(ids: List<String> = emptyList(), all: Boolean = false, child: String = activeChild()): Int {
+        val db = writableDatabase
+        var updated = 0
+        db.beginTransaction()
+        try {
+            if (all) {
+                val masteredIds = ArrayList<String>()
+                db.rawQuery(
+                    "SELECT qid FROM question_stats WHERE child=? AND (last_correct=0 OR answered>correct)",
+                    arrayOf(child)
+                ).use { c ->
+                    while (c.moveToNext()) c.getString(0)?.let { masteredIds.add(it) }
+                }
+                val stmt = db.compileStatement(
+                    "UPDATE question_stats SET last_correct=1, correct=CASE WHEN correct<answered THEN answered ELSE correct END " +
+                        "WHERE child=? AND (last_correct=0 OR answered>correct)"
+                )
+                try {
+                    stmt.bindString(1, child)
+                    updated = stmt.executeUpdateDelete()
+                } finally {
+                    stmt.close()
+                }
+                if (masteredIds.isNotEmpty()) {
+                    val remaining = extraQueue(child).filter { it !in masteredIds.toSet() }
+                    rawSet(scoped("extra_queue", child), JSONArray(remaining).toString())
+                }
+            } else {
+                val cleaned = ids.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+                if (cleaned.isNotEmpty()) {
+                    val stmt = db.compileStatement(
+                        "UPDATE question_stats SET last_correct=1, correct=CASE WHEN correct<answered THEN answered ELSE correct END " +
+                            "WHERE qid=? AND child=? AND (last_correct=0 OR answered>correct)"
+                    )
+                    try {
+                        for (qid in cleaned) {
+                            stmt.clearBindings()
+                            stmt.bindString(1, qid)
+                            stmt.bindString(2, child)
+                            updated += stmt.executeUpdateDelete()
+                        }
+                    } finally {
+                        stmt.close()
+                    }
+                    val cleanedSet = cleaned.toSet()
+                    val existing = extraQueue(child)
+                    if (existing.any { it in cleanedSet }) {
+                        rawSet(scoped("extra_queue", child), JSONArray(existing.filter { it !in cleanedSet }).toString())
+                    }
+                }
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return updated
     }
 
     /** 供 AI 错题举一反三抽取典型薄弱题样本（优先当前错题，其次累计失误次数多的题）。 */
@@ -1338,18 +1975,27 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
     /**
      * 答题覆盖：口径是当前孩子「答对过一次」（stats.correct>0），和出题时的覆盖优先用同一套判断。
      */
-    fun coverage(sample: Int = 20, child: String = activeChild()): JSONObject {
+    fun coverage(
+        sample: Int = 20,
+        child: String = activeChild(),
+        gradeSubjects: Map<String, List<String>> = emptyMap()
+    ): JSONObject {
         val banks = LinkedHashMap<String, IntArray>()
         val pending = ArrayList<JSONObject>()
         var total = 0
         var covered = 0
         var untouched = 0
+        val where = StringBuilder("questions.enabled=1")
+        val args = mutableListOf(child)
+        val filter = buildScopeFilter(gradeSubjects = gradeSubjects)
+        where.append(filter.clause)
+        args.addAll(filter.args)
         readableDatabase.rawQuery(
             "SELECT questions.id,questions.stem,questions.subject,questions.level,questions.bank," +
                 "COALESCE(stats.presented,0) AS presented,COALESCE(stats.answered,0) AS answered_count," +
                 "COALESCE(stats.correct,0) AS correct_count " +
-                "FROM questions LEFT JOIN question_stats stats ON questions.id=stats.qid AND stats.child=? WHERE questions.enabled=1",
-            arrayOf(child)
+                "FROM questions LEFT JOIN question_stats stats ON questions.id=stats.qid AND stats.child=? WHERE $where",
+            args.toTypedArray()
         ).use { c ->
             while (c.moveToNext()) {
                 val presented = c.getInt(5)
@@ -1391,9 +2037,10 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
 
     /** 连续学习天数：截至今天（今天尚未学习时延续昨天）连续每天至少有 1 条作答或闪卡背诵记录。 */
     private fun computeStreakDays(child: String): Int {
-        val cutoff = startOfToday() - 366L * 86_400_000L
+        val todayStart = startOfToday(child)
+        val cutoff = todayStart - 366L * 86_400_000L
         val activeDays = HashSet<Int>()
-        val cal = DeviceClock.calendar(this)
+        val cal = calendarFor(child)
         readableDatabase.rawQuery(
             "SELECT ts FROM events WHERE child=? AND ts>=? AND type IN ('answer','flashcard')",
             arrayOf(child, cutoff.toString())
@@ -1405,7 +2052,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
             }
         }
         if (activeDays.isEmpty()) return 0
-        val cursor = DeviceClock.calendar(this).apply { timeInMillis = startOfToday() }
+        val cursor = calendarFor(child).apply { timeInMillis = todayStart }
         fun dayKey(c: Calendar) = c.get(Calendar.YEAR) * 10000 + (c.get(Calendar.MONTH) + 1) * 100 + c.get(Calendar.DAY_OF_MONTH)
         if (dayKey(cursor) !in activeDays) {
             cursor.add(Calendar.DAY_OF_YEAR, -1)
@@ -1421,8 +2068,8 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
 
     /** 学习主页摘要卡片（Anki / 多邻国风格：连胜天数、今日题量、待复习、错题数、已掌握题数）。 */
     fun studySummary(child: String = activeChild()): JSONObject {
-        val nowMs = System.currentTimeMillis()
-        val wrongOnly = config().optString("spacedScope") == "wrong_only"
+        val nowMs = clockReading().millis
+        val wrongOnly = config(child).optString("spacedScope") == "wrong_only"
         var totalQuestions = 0
         var dueCount = 0
         var wrongCount = 0
@@ -1446,15 +2093,14 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
                 val dueAt = c.getLong(5)
                 if (lastCorrect == 0) wrongCount++
                 if (hasProgress && intervalDays >= 21) masteredCount++
-                val inSpacedScope = !wrongOnly || lastCorrect == 0 || answered > correct
-                if (hasProgress && dueAt <= nowMs && inSpacedScope) dueCount++
+                if (hasProgress && dueAt <= nowMs && inSpacedScope(wrongOnly, lastCorrect, answered, correct)) dueCount++
             }
         }
         var todayAnswered = 0
         var todayCorrect = 0
         readableDatabase.rawQuery(
             "SELECT payload FROM events WHERE child=? AND ts>=? AND type IN ('answer','flashcard')",
-            arrayOf(child, startOfToday().toString())
+            arrayOf(child, startOfToday(child).toString())
         ).use { c ->
             while (c.moveToNext()) {
                 todayAnswered++
@@ -1475,8 +2121,10 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
     /** 家长端完整学情分析：记忆成熟度分布、学科/题库掌握率、近 N 日趋势、高频错题与未来 7 天复习预测。 */
     fun learningAnalytics(days: Int = 14, child: String = activeChild()): JSONObject {
         val windowDays = days.coerceIn(7, 60)
-        val nowMs = System.currentTimeMillis()
-        val todayStart = startOfToday()
+        val nowMs = clockReading().millis
+        val wrongOnly = config(child).optString("spacedScope") == "wrong_only"
+        val childZone = timeZoneFor(child)
+        val todayStart = startOfDayMillis(nowMs, childZone)
 
         class SubjectStat(val subject: String) {
             var total = 0; var answered = 0; var correct = 0; var wrong = 0; var mastered = 0
@@ -1491,9 +2139,9 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         val banks = LinkedHashMap<String, BankStat>()
         val hardCandidates = ArrayList<Pair<Long, JSONObject>>()
 
-        // 未来 7 天每天的起止时刻（按家长配置的时区切分日界线）
+        // 未来 7 天每天的起止时刻（按该孩子配置的时区切分日界线）
         val forecastBounds = Array(7) { offset ->
-            val dayStart = DeviceClock.calendar(this).apply {
+            val dayStart = Calendar.getInstance(childZone).apply {
                 timeInMillis = todayStart
                 add(Calendar.DAY_OF_YEAR, offset)
             }
@@ -1562,11 +2210,13 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
                         intervalDays <= 20L -> young++
                         else -> mature++
                     }
-                    if (dueAt <= nowMs) dueNow++
-                    for (d in 0 until 7) {
-                        val (fStart, fEnd, _) = forecastBounds[d]
-                        val hit = if (d == 0) dueAt < fEnd else dueAt in fStart until fEnd
-                        if (hit) { forecastCounts[d]++; break }
+                    if (inSpacedScope(wrongOnly, lastCorrect, answered, correct)) {
+                        if (dueAt <= nowMs) dueNow++
+                        for (d in 0 until 7) {
+                            val (fStart, fEnd, _) = forecastBounds[d]
+                            val hit = if (d == 0) dueAt < fEnd else dueAt in fStart until fEnd
+                            if (hit) { forecastCounts[d]++; break }
+                        }
                     }
                 }
                 if (hasProgress || answered > 0) studiedQuestions++
@@ -1608,11 +2258,11 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         }
         val dayMap = LinkedHashMap<String, DayBucket>()
         val dayFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
-            timeZone = DeviceClock.calendar(this@LocalStore).timeZone
+            timeZone = childZone
         }
         var earliestStart = todayStart
         for (ago in (querySpan - 1) downTo 0) {
-            val dCal = DeviceClock.calendar(this).apply {
+            val dCal = Calendar.getInstance(childZone).apply {
                 timeInMillis = todayStart
                 add(Calendar.DAY_OF_YEAR, -ago)
             }
@@ -1796,6 +2446,19 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         val rawAudio = item.optString("audio").trim()
         require(rawAudio.isEmpty() || ((rawAudio.startsWith("https://") || rawAudio.startsWith("http://")) && rawAudio.length <= 2048)) { "图片或音频地址无效" }
         details.put("audio", rawAudio)
+        // 听力题：listen 只交给朗读，屏幕上不显示，等于「声音和文字解耦」；与音频地址二选一
+        val listen = item.optString("listen").trim()
+        require(listen.isEmpty() || listen.length <= 1000) { "听力文本不能超过 1000 字" }
+        require(listen.isEmpty() || rawAudio.isEmpty()) { "听力文本和音频地址只能二选一" }
+        details.put("listen", listen)
+        if (listen.isEmpty()) {
+            details.remove("listenTimes"); details.remove("listenRequired"); details.remove("listenRate")
+        } else {
+            details.put("listenTimes", item.optInt("listenTimes", 5).coerceIn(1, 5))
+            details.put("listenRequired", item.optBoolean("listenRequired", false))
+            val listenRate = item.optDouble("listenRate", -1.0)
+            if (listenRate.isFinite() && listenRate in 0.7..1.5) details.put("listenRate", listenRate) else details.remove("listenRate")
+        }
         if (item.has("images")) {
             val rawImages = item.optJSONArray("images") ?: JSONArray()
             require(rawImages.length() <= 4) { "每道题最多支持 4 张配图" }
@@ -1939,7 +2602,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         readableDatabase.rawQuery("SELECT k,v FROM kv", null).use { c ->
             while (c.moveToNext()) {
                 val k = c.getString(0) ?: continue
-                if (k in SECRET_KV_KEYS) continue
+                if (k in SECRET_KV_KEYS || isEphemeralKvKey(k)) continue
                 kvObj.put(k, c.getString(1) ?: "")
             }
         }
@@ -2031,7 +2694,154 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
             .put("bankAutomation", bankAuto)
     }
 
-    fun restoreBackup(backup: JSONObject, mode: String = "replace"): JSONObject {
+    fun exportScopedSync(scopes: Set<String>): JSONObject {
+        val validScopes = normalizeSyncScopes(scopes)
+        require(validScopes.isNotEmpty()) { "请至少选择一项需要同步的内容" }
+        ensureDefaultChild()
+        val source = JSONObject()
+            .put("format", "studyontv-backup")
+            .put("version", 1)
+            .put("exportedAt", System.currentTimeMillis())
+            .put("appVersion", BuildConfig.VERSION_NAME)
+        if ("config" in validScopes) {
+            source.put("children", children())
+            val kvObj = JSONObject()
+            readableDatabase.rawQuery("SELECT k,v FROM kv", null).use { c ->
+                while (c.moveToNext()) {
+                    val k = c.getString(0) ?: continue
+                    if (!isConfigSyncKvKey(k)) continue
+                    kvObj.put(k, c.getString(1) ?: "")
+                }
+            }
+            source.put("kv", kvObj)
+        }
+        if ("questions" in validScopes) {
+            val exportedQuestions = JSONArray()
+            val all = readQuestions(
+                "SELECT questions.*,0 AS presented,0 AS answered_count,0 AS correct_count,-1 AS last_correct FROM questions ORDER BY rowid ASC",
+                emptyArray()
+            )
+            for (i in 0 until all.length()) {
+                val q = MediaStore.inlineQuestionMedia(mediaDir, all.getJSONObject(i))
+                q.remove("stats")
+                exportedQuestions.put(q)
+            }
+            source.put("questions", exportedQuestions)
+        }
+        if ("speech" in validScopes) {
+            source.put("speech", SpeechReader.settings(this))
+        }
+        if ("grading" in validScopes) {
+            source.put("grading", GradingService.settings(this, includeKey = false))
+        }
+        return buildScopedSyncPayload(source, validScopes)
+    }
+
+    fun applyScopedSync(payload: JSONObject, scopes: Set<String>, mode: String = "merge"): JSONObject {
+        require(payload.optString("format") == "studyontv-backup") { "不是有效的题了个题同步数据包" }
+        require(mode in listOf("replace", "merge")) { "同步模式仅支持 replace 或 merge" }
+        val validScopes = normalizeSyncScopes(scopes)
+        require(validScopes.isNotEmpty()) { "请至少选择一项需要同步的内容" }
+
+        val replaceQuestions = mode == "replace"
+        val db = writableDatabase
+        val existingGrading = try { JSONObject(rawGet("grading_settings", "{}")) } catch (_: Exception) { JSONObject() }
+        val existingSpeech = try { JSONObject(rawGet("speech_settings", "{}")) } catch (_: Exception) { JSONObject() }
+        var syncedQuestions = 0
+
+        synchronized(childLock) {
+            db.beginTransaction()
+            try {
+                if ("config" in validScopes) {
+                    payload.optJSONArray("children")?.let { arr ->
+                        for (i in 0 until minOf(arr.length(), MAX_CHILDREN)) {
+                            val c = arr.optJSONObject(i) ?: continue
+                            val id = c.optString("id")
+                            if (!isValidChildId(id)) continue
+                            val name = c.optString("name").trim().ifEmpty { "孩子${i + 1}" }.take(12)
+                            db.insertWithOnConflict("children", null, ContentValues().apply {
+                                put("id", id)
+                                put("name", name)
+                                put("created_at", c.optLong("createdAt", System.currentTimeMillis()))
+                            }, SQLiteDatabase.CONFLICT_IGNORE)
+                        }
+                    }
+                    ensureDefaultChild()
+
+                    payload.optJSONObject("kv")?.let { kv ->
+                        val keys = kv.keys()
+                        while (keys.hasNext()) {
+                            val k = keys.next()
+                            // 严格白名单：只允许学习规则 config / child:<id>:config，绝不写入任何单机运行态或密码键
+                            if (!isConfigSyncKvKey(k)) continue
+                            val sanitized = sanitizeKvValueForLocalOnly(k, kv.optString(k, ""))
+                            db.insertWithOnConflict("kv", null, ContentValues().apply {
+                                put("k", k); put("v", sanitized)
+                            }, SQLiteDatabase.CONFLICT_REPLACE)
+                        }
+                    }
+                }
+
+                if ("questions" in validScopes) {
+                    payload.optJSONArray("questions")?.let { arr ->
+                        if (replaceQuestions) {
+                            db.delete("questions", null, null)
+                        }
+                        for (i in 0 until minOf(arr.length(), 50000)) {
+                            val q = arr.optJSONObject(i) ?: continue
+                            val qid = q.optString("id")
+                            if (!replaceQuestions && qid.isNotEmpty() && questionExists(qid)) continue
+                            upsertQuestion(q)
+                            syncedQuestions++
+                        }
+                    }
+                }
+
+                if ("speech" in validScopes) {
+                    payload.optJSONObject("speech")?.let { s ->
+                        val next = JSONObject(s.toString())
+                        for (uiKey in listOf("deepseekInherited", "deepseekReady")) next.remove(uiKey)
+                        for (secret in listOf("azureKey", "aliyunSecret", "deepseekKey")) {
+                            next.remove(secret + "Set")
+                            if (next.optString(secret).isBlank() && existingSpeech.optString(secret).isNotBlank()) {
+                                next.put(secret, existingSpeech.getString(secret))
+                            }
+                        }
+                        rawSet("speech_settings", next.toString())
+                    }
+                }
+
+                if ("grading" in validScopes) {
+                    payload.optJSONObject("grading")?.let { g ->
+                        val next = JSONObject(g.toString())
+                        for (uiKey in listOf("hasKey", "chatUrl", "providers", "clearKey")) next.remove(uiKey)
+                        if (next.optString("apiKey").isBlank() && existingGrading.optString("apiKey").isNotBlank()) {
+                            next.put("apiKey", existingGrading.getString("apiKey"))
+                        }
+                        rawSet("grading_settings", next.toString())
+                    }
+                }
+
+                configCache.clear()
+                cachedChild = null
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
+        }
+        if ("questions" in validScopes && !db.inTransaction()) pruneMedia()
+        val totalQ = readableDatabase.rawQuery("SELECT COUNT(*) FROM questions", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+        return JSONObject()
+            .put("ok", true)
+            .put("scopes", JSONArray(validScopes.sorted()))
+            .put("mode", mode)
+            .put("children", children().length())
+            .put("questions", totalQ)
+            .put("syncedQuestions", syncedQuestions)
+    }
+
+    fun restoreBackup(backup: JSONObject, mode: String = "replace", scopes: Set<String>? = null): JSONObject {
+        if (scopes != null) return applyScopedSync(backup, scopes, mode)
         require(backup.optString("format") == "studyontv-backup") { "不是有效的题了个题备份文件" }
         require(mode in listOf("replace", "merge")) { "恢复模式仅支持 replace 或 merge" }
         val replace = mode == "replace"
@@ -2041,8 +2851,10 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         val existingGrading = try { JSONObject(rawGet("grading_settings", "{}")) } catch (_: Exception) { JSONObject() }
         val existingSpeech = try { JSONObject(rawGet("speech_settings", "{}")) } catch (_: Exception) { JSONObject() }
 
-        db.beginTransaction()
-        try {
+        // 统一锁顺序：永远先 childLock、再 SQLite 写事务，避免与 switchChild()/activeChild() 产生 AB-BA 死锁
+        synchronized(childLock) {
+            db.beginTransaction()
+            try {
             if (replace) {
                 db.delete("children", null, null)
                 db.delete("events", null, null)
@@ -2059,6 +2871,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
                 for (i in 0 until minOf(arr.length(), MAX_CHILDREN)) {
                     val c = arr.optJSONObject(i) ?: continue
                     val id = c.optString("id")
+                    if (!isValidChildId(id)) continue
                     val name = c.optString("name").trim().ifEmpty { "孩子${i + 1}" }.take(12)
                     db.insertWithOnConflict("children", null, ContentValues().apply {
                         put("id", id)
@@ -2073,9 +2886,10 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
                 val keys = kv.keys()
                 while (keys.hasNext()) {
                     val k = keys.next()
-                    if (k in SECRET_KV_KEYS) continue
+                    if (k in SECRET_KV_KEYS || isEphemeralKvKey(k)) continue
+                    val sanitized = sanitizeKvValueForLocalOnly(k, kv.optString(k, ""))
                     db.insertWithOnConflict("kv", null, ContentValues().apply {
-                        put("k", k); put("v", kv.optString(k, ""))
+                        put("k", k); put("v", sanitized)
                     }, if (replace) SQLiteDatabase.CONFLICT_REPLACE else SQLiteDatabase.CONFLICT_IGNORE)
                 }
             }
@@ -2198,9 +3012,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
 
             backup.optJSONObject("bankAutomation")?.let { ba ->
                 if (replace || rawGet("bank_automation").isEmpty()) {
-                    val next = JSONObject(ba.toString())
-                    next.remove("running")
-                    next.remove("status")
+                    val next = sanitizeBankAutomationForLocalOnly(ba)
                     rawSet("bank_automation", next.toString())
                 }
             }
@@ -2211,10 +3023,11 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
             }
 
             configCache.clear()
-            synchronized(childLock) { cachedChild = null }
+            cachedChild = null
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
+        }
         }
         if (!db.inTransaction()) pruneMedia()
         val totalQ = readableDatabase.rawQuery("SELECT COUNT(*) FROM questions", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
@@ -2230,7 +3043,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
 
     fun logEvent(type: String, payload: JSONObject) {
         writableDatabase.execSQL("INSERT INTO events(type,payload,ts,child) VALUES(?,?,?,?)",
-            arrayOf<Any>(type, payload.toString(), System.currentTimeMillis(), activeChild()))
+            arrayOf<Any>(type, payload.toString(), clockReading().millis, activeChild()))
     }
 
     fun recentEvents(limit: Int = 50): JSONArray {
@@ -2265,17 +3078,17 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
     }
 
     fun todayStats(): JSONObject = stats(startOfToday(), Long.MAX_VALUE)
-
-    fun roundsDoneToday(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM events WHERE type='quiz_pass' AND ts>=? AND child=?",
-        arrayOf(startOfToday().toString(), activeChild())).use {
+    // status() 每秒都会调用，这里直接计数，不再解析今天的全部事件
+    fun roundsDoneToday(dayStart: Long = startOfToday()): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM events WHERE type='quiz_pass' AND ts>=? AND child=?",
+        arrayOf(dayStart.toString(), activeChild())).use {
         if (it.moveToFirst()) it.getInt(0) else 0
     }
 
     fun historyDays(days: Int = 7): JSONArray {
         val out = JSONArray()
+        val today = todayStart()
         for (d in 0 until days.coerceIn(1, 90)) {
-            val cal = DeviceClock.calendar(this)
-            cal.timeInMillis = startOfToday()
+            val cal = today.clone() as Calendar
             cal.add(Calendar.DAY_OF_YEAR, -d)
             val start = cal.timeInMillis
             val label = if (d == 0) "今天" else if (d == 1) "昨天" else "${cal.get(Calendar.MONTH) + 1}/${cal.get(Calendar.DAY_OF_MONTH)}"
@@ -2285,7 +3098,17 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         return out
     }
 
-    fun startOfToday(): Long = DeviceClock.calendar(this).apply {
+    fun timeZoneFor(child: String = activeChild()): TimeZone =
+        resolveTimeZone(try { config(child).optString("timezone") } catch (_: Exception) { "" })
+
+    fun calendarFor(child: String = activeChild()): Calendar = Calendar.getInstance(timeZoneFor(child)).apply {
+        timeInMillis = clockReading().millis
+    }
+
+    private fun todayStart(child: String = activeChild()): Calendar = calendarFor(child).apply {
         set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-    }.timeInMillis
+    }
+
+    @JvmOverloads
+    fun startOfToday(child: String = activeChild()): Long = startOfDayMillis(clockReading().millis, timeZoneFor(child))
 }

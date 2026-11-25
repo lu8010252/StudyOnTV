@@ -19,6 +19,78 @@ import java.util.concurrent.TimeUnit
 
 /** Explicitly destructive test setup, restricted to a disposable debug emulator. */
 object HomeNavigationUiRegression {
+    fun freeQuotaGate(instrumentation: Instrumentation): String {
+        check(BuildConfig.DEBUG && Build.HARDWARE in listOf("ranchu", "goldfish"))
+        val context = instrumentation.targetContext
+        val activities = mutableListOf<Activity>()
+        fun openGate(reason: String): Activity {
+            val activity = instrumentation.startActivitySync(Intent(context, GateActivity::class.java)
+                .putExtra("reason", reason).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            activities.add(activity)
+            waitUntil(instrumentation) { Foreground.resumedActivity() === activity }
+            return activity
+        }
+        fun exhaustQuota() {
+            DeviceRuntime.store.set("free_quota_ms", "0")
+            DeviceRuntime.store.set("free_used_ms", "1800000")
+            DeviceRuntime.store.set("used_ms", "12000000")
+            check(DeviceRuntime.learning.status().getString("reason") == "quota")
+        }
+        try {
+            onMain(instrumentation) {
+                DeviceRuntime.ensure(context)
+                AdminAuth.setPassword(context, UUID.randomUUID().toString())
+                Prefs.setOnboarded(context, true)
+                DeviceRuntime.learning.remote("cancel", 0, "test")
+                DeviceRuntime.learning.saveConfig(JSONObject().put("allDay", true).put("dailyFreeMinutes", 30)
+                    .put("bootFreeMinutes", 0).put("dailyMinutes", 200).put("dailyLimitEnabled", true))
+                exhaustQuota()
+            }
+            val expiredGate = openGate("quota")
+            onMain(instrumentation) {
+                check(LearningNavigation.shouldBlockHome() && !expiredGate.isFinishing)
+                // Simulate clock synchronization moving the stored usage day into the past.
+                DeviceRuntime.store.set("usage_day", "0")
+                GateService.refreshNow()
+            }
+            waitUntil(instrumentation) { Foreground.resumedActivity() !== expiredGate }
+            onMain(instrumentation) {
+                check(expiredGate.isFinishing)
+                val status = DeviceRuntime.learning.status()
+                check(status.getLong("freeQuotaSeconds") == 1800L && status.getBoolean("canExit"))
+            }
+            val settingsGate = openGate("settings")
+            onMain(instrumentation) { GateService.refreshNow() }
+            instrumentation.waitForIdleSync()
+            onMain(instrumentation) {
+                check(!settingsGate.isFinishing) { "免费额度不能收起设置保护页" }
+                settingsGate.finish()
+                exhaustQuota()
+            }
+            val main = instrumentation.startActivitySync(Intent(context, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            activities.add(main)
+            lateinit var learningWeb: WebView
+            onMain(instrumentation) {
+                learningWeb = descendants(main.window.decorView).filterIsInstance<WebView>().first()
+            }
+            waitForJavascript(instrumentation, learningWeb,
+                "!!(window.TV && window.TV.state.screen === 'lock' && window.TV.state.lockReason === 'quota')",
+                "Learning page did not show the expired quota")
+            onMain(instrumentation) { DeviceRuntime.store.set("usage_day", "0") }
+            waitForJavascript(instrumentation, learningWeb,
+                "!!(window.TV && window.TV.state.learning.canExit && document.getElementById('lockDesc').textContent === '还可以使用 30 分钟')",
+                "Recovering the daily quota should show watch time without displaying a new question")
+            return "PASS: Daily free quota releases the fullscreen limit gate, restores navigation and avoids automatic quiz prompts.\n"
+        } finally {
+            onMain(instrumentation) {
+                Prefs.setOnboarded(context, false)
+                activities.asReversed().forEach { it.finish() }
+                context.stopService(Intent(context, GateService::class.java))
+            }
+        }
+    }
+
     fun run(instrumentation: Instrumentation): String {
         check(BuildConfig.DEBUG && Build.HARDWARE in listOf("ranchu", "goldfish"))
         val context = instrumentation.targetContext

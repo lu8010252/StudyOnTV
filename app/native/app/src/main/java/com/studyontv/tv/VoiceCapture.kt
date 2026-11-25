@@ -54,19 +54,20 @@ object VoiceCapture {
         private val onResult: (String) -> Unit,
         private val onError: (String) -> Unit
     ) {
-        private val main = Handler(Looper.getMainLooper())
+        private val main by lazy { Handler(Looper.getMainLooper()) }
+        private val recordLock = Any()
         @Volatile private var running = false
         @Volatile private var cancelled = false
         private var record: AudioRecord? = null
         private var thread: Thread? = null
-        var active = false
+        @Volatile var active = false
             private set
 
         /** 开始录音；没有麦克风时返回 false（调用方回落到系统识别器） */
         fun start(): Boolean {
             if (active) return true
             val rec = VoiceCapture.recorder() ?: return false
-            record = rec
+            synchronized(recordLock) { record = rec }
             running = true; cancelled = false; active = true
             thread = Thread {
                 val pcm = ByteArrayOutputStream()
@@ -75,32 +76,47 @@ object VoiceCapture {
                     if (rec.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
                         fail("麦克风没能打开"); return@Thread
                     }
-                    main.post { onState("recording") }
+                    deliver { onState("recording") }
                     val chunk = ByteArray(6400)
-                    while (running && pcm.size() < MAX_BYTES) {
+                    while (running && !cancelled && pcm.size() < MAX_BYTES) {
                         val size = rec.read(chunk, 0, chunk.size)
                         if (size > 0) pcm.write(chunk, 0, size) else if (size < 0) break
                     }
                 } catch (e: Exception) {
                     fail("录音失败：${e.javaClass.simpleName}"); return@Thread
                 } finally {
-                    try { rec.stop() } catch (_: Exception) { }
-                    try { rec.release() } catch (_: Exception) { }
-                    record = null
+                    synchronized(recordLock) {
+                        if (record === rec) {
+                            record = null
+                            try { rec.stop() } catch (_: Exception) { }
+                            try { rec.release() } catch (_: Exception) { }
+                        }
+                    }
                 }
-                if (cancelled) { active = false; return@Thread }
-                val bytes = pcm.toByteArray()
-                if (bytes.size < RATE / 2) { fail("没听到声音，请按一下再说"); return@Thread }
-                main.post { onState("checking") }
-                try {
-                    val text = SpeechReader.transcribe(key, VoiceCapture.wav(bytes))
-                    active = false
-                    main.post { onResult(text) }
-                } catch (e: Exception) {
-                    fail((e.message ?: e.javaClass.simpleName).take(120))
-                }
+                transcribeAndDeliver(pcm.toByteArray())
             }.apply { isDaemon = true; start() }
             return true
+        }
+
+        internal fun transcribeAndDeliver(
+            bytes: ByteArray,
+            transcriber: (String, ByteArray) -> String = SpeechReader::transcribe,
+            postMain: (() -> Unit) -> Unit = { main.post(it) }
+        ) {
+            if (cancelled) { active = false; return }
+            if (bytes.size < RATE / 2) {
+                fail("没听到声音，请按一下再说", postMain)
+                return
+            }
+            deliver(postMain) { onState("checking") }
+            try {
+                val text = transcriber(key, VoiceCapture.wav(bytes))
+                active = false
+                if (cancelled) return
+                deliver(postMain) { onResult(text) }
+            } catch (e: Exception) {
+                fail((e.message ?: e.javaClass.simpleName).take(120), postMain)
+            }
         }
 
         /** 停止录音并开始识别 */
@@ -108,13 +124,27 @@ object VoiceCapture {
 
         /** 放弃这次录音（退出页面 / 取消），不识别也不回调 */
         fun cancel() {
-            cancelled = true; running = false
-            try { record?.stop() } catch (_: Exception) { }
+            cancelled = true
+            running = false
+            active = false
+            synchronized(recordLock) {
+                try { record?.stop() } catch (_: Exception) { }
+            }
         }
 
-        private fun fail(message: String) {
+        private fun deliver(postMain: (() -> Unit) -> Unit = { main.post(it) }, action: () -> Unit) {
+            if (cancelled) return
+            postMain {
+                if (!cancelled) action()
+            }
+        }
+
+        private fun fail(message: String, postMain: (() -> Unit) -> Unit = { main.post(it) }) {
             active = false
-            main.post { onError(message) }
+            if (cancelled) return
+            postMain {
+                if (!cancelled) onError(message)
+            }
         }
     }
 }

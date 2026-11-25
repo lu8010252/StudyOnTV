@@ -18,7 +18,7 @@ const modeLabels:Record<string,string>={system:'本地系统语音',edge:'微软
 // 每种通路一句话说清区别和前提，家长不用猜为什么点朗读没声音（#128）
 const modeHints:Record<string,string>={
  system:'不需要网络，但电视可能没装中文语音包；读不出声音时点下面的「检测本地语音」',
- edge:'免费在线朗读（无需 API Key），电视没装系统语音时可直接使用；失败会自动回落系统语音',
+ edge:'免费在线朗读（无需 API Key），失败会自动回落系统语音；该通路依赖微软在线接口，部分网络可能 403，建议同时安装本地中文语音包或配置 DeepSeek 语音',
  auto:'有云端 Key 就用云端；没有 Key 时优先用本地语音，无本地语音则自动用免费 Edge 语音',
  deepseek:'效果最好，需要 DeepSeek Key；电视没有本地语音时选这个',
  azure:'需要 Azure 语音服务的区域和 Key',
@@ -55,20 +55,24 @@ function validate(form:any){
 export default function SpeechSettings({sessionId}:{sessionId:number}){
  const client=useQueryClient();
  const query=useQuery({queryKey:['speech',sessionId],queryFn:()=>api('/api/speech')});
- const [form,setForm]=useState<any>({mode:'system',autoRead:false}),[dirty,setDirty]=useState(false);
+ const [form,setForm]=useState<any>({mode:'auto',autoRead:false}),[dirty,setDirty]=useState(false);
  const [saved,setSaved]=useState(false),[saveError,setSaveError]=useState(''),[failedSignature,setFailedSignature]=useState('');
+ const [customDeepseekKey,setCustomDeepseekKey]=useState(false);
  // #128 本地语音自检：探测会阻塞设备端几百毫秒到 3 秒，只在点按钮时跑，不进自动保存
  const [probe,setProbe]=useState<any>(null),[probing,setProbing]=useState(false),[testing,setTesting]=useState(false);
  const errors=validate(form),validationError=Object.values(errors)[0]||'';
  const signature=JSON.stringify(form),latestSignature=useRef(signature);
  latestSignature.current=signature;
+ const dirtyRef=useRef(dirty);
+ dirtyRef.current=dirty;
  // 刷新设置时保留输入框里已经填的 Key：自动保存成功后如果把它擦空，输入慢一点就会被擦掉一半，看起来像「保存不了」
  useEffect(()=>{if(query.data&&!dirty)setForm((old:any)=>({...query.data,azureKey:old.azureKey,aliyunSecret:old.aliyunSecret,deepseekKey:old.deepseekKey}));},[query.data,dirty]);
  const change=(key:string,value:any)=>{setDirty(true);setSaved(false);setSaveError('');setForm((old:any)=>({...old,[key]:value}));};
  const checkTts=async()=>{
   setProbing(true);
   try{
-   const [result,engines]=await Promise.all([api('/api/speech/probe'),api('/api/speech/engines')]);
+   const probeUrl=`/api/speech/probe?language=${encodeURIComponent(form.readLanguage||'')}`;
+   const [result,engines]=await Promise.all([api(probeUrl),api('/api/speech/engines')]);
    setProbe({...result,engines:engines?.engines||[]});
   }catch(e:any){setProbe({ok:false,hint:'检测失败：'+(e?.message||'请重试')});}
   finally{setProbing(false);}
@@ -89,7 +93,7 @@ export default function SpeechSettings({sessionId}:{sessionId:number}){
   }catch(e:any){setProbe((old:any)=>({...old,hint:'打开安装页面失败：'+(e?.message||'请到系统设置里安装')}));}
  };
  const save=useMutation({
-  mutationFn:(body:any)=>api('/api/speech','PUT',body),
+  mutationFn:(body:any)=>{const {clearKeys:_c,...payload}=body||{};return api('/api/speech','PUT',payload);},
   onMutate:()=>setSaveError(''),
   onSuccess:(r,body)=>{
    client.setQueryData(['speech',sessionId],r);
@@ -97,15 +101,33 @@ export default function SpeechSettings({sessionId}:{sessionId:number}){
   },
   onError:(e:any,body)=>{setSaveError(e.message||'自动保存失败，请重试');setFailedSignature(JSON.stringify(body));}
  });
+ const clearKeys=useMutation({
+  mutationFn:()=>api('/api/speech','PUT',{clearKeys:true}),
+  onMutate:()=>{
+   setSaveError('');setSaved(false);setFailedSignature('');setDirty(false);
+   setForm((old:any)=>{const {clearKeys:_c,...rest}=old||{};return {...rest,azureKey:'',aliyunSecret:'',deepseekKey:''};});
+  },
+  onSuccess:r=>{
+   client.setQueryData(['speech',sessionId],r);
+   if(!dirtyRef.current){
+    setForm((old:any)=>({...r,azureKey:old.azureKey,aliyunSecret:old.aliyunSecret,deepseekKey:old.deepseekKey}));
+    setSaved(true);
+   }else{
+    setForm((old:any)=>({...old,azureKeySet:r.azureKeySet,aliyunSecretSet:r.aliyunSecretSet,deepseekKeySet:r.deepseekKeySet,deepseekInherited:r.deepseekInherited}));
+   }
+  },
+  onError:(e:any)=>setSaveError(e?.message||'清除密钥失败，请重试'),
+ });
+ const busy=save.isPending||clearKeys.isPending;
  useEffect(()=>{
   // 只有「从没读到过设置」时才禁止保存：读到过之后哪怕某次刷新失败，也已经有可信的表单值
-  if(!dirty||validationError||!query.data||save.isPending||failedSignature===signature)return;
+  if(!dirty||validationError||!query.data||busy||failedSignature===signature)return;
   const timer=window.setTimeout(()=>save.mutate(form),700);
   return()=>window.clearTimeout(timer);
- },[dirty,validationError,query.data,save.isPending,failedSignature,signature]);
- const saveState:SaveState=save.isPending?'saving':saveError?'error':dirty?(validationError?'error':'pending'):saved?'saved':'idle';
- const edgeVisible=form.mode==='edge',azureVisible=form.mode==='auto'||form.mode==='azure',aliyunVisible=form.mode==='auto'||form.mode==='aliyun';
- const deepseekVisible=form.mode==='auto'||form.mode==='deepseek';
+ },[dirty,validationError,query.data,busy,failedSignature,signature]);
+ const saveState:SaveState=busy?'saving':saveError?'error':dirty?(validationError?'error':'pending'):saved?'saved':'idle';
+ const edgeVisible=form.mode==='edge',azureVisible=form.mode==='azure',aliyunVisible=form.mode==='aliyun';
+ const deepseekVisible=form.mode==='deepseek';
  const hiddenErrors=Object.entries(errors).filter(([key])=>!((azureFields.includes(key)&&azureVisible)||(aliyunFields.includes(key)&&aliyunVisible)||(deepseekFields.includes(key)&&deepseekVisible)||key==='mode'||key==='recognizeMode'));
  const input=(key:string,label:string,password=false)=>{
   const error=errors[key],id=`speech-${key}`;
@@ -118,7 +140,7 @@ export default function SpeechSettings({sessionId}:{sessionId:number}){
  };
 
  return <section className="space-y-2">
-  <SectionHeading icon={Volume2} title="题目朗读" description="华为、TCL 等电视没有内置朗读，选「DeepSeek 语音」才有声音" action={<SaveStatus state={saveState}/>}/>
+  <SectionHeading icon={Volume2} title="题目朗读" description="支持本地系统语音、免费 Edge 语音与云端语音；无内置语音的电视选「自动」或「DeepSeek 语音」即可" action={<SaveStatus state={saveState}/>}/>
   <Card className="gap-0 overflow-hidden py-0 shadow-xs">
   <CardContent className="px-4 sm:px-5">
    <ItemGroup className="divide-y divide-border/60">
@@ -190,6 +212,9 @@ export default function SpeechSettings({sessionId}:{sessionId:number}){
      </Select>
      </ItemActions>
     </Item>
+    {form.mode==='auto'&&<div className="py-3 text-xs leading-5 text-muted-foreground">
+     自动模式：已配置 DeepSeek Key 时自动使用 DeepSeek 语音，否则优先本地系统语音，无本地语音时自动回落免费 Edge 语音。如需单独配置云端密钥，请切换上方朗读通路。
+    </div>}
     {edgeVisible&&<div className="py-4">
      <Field>
       <FieldLabel htmlFor="speech-edgeVoice">Edge 音色</FieldLabel>
@@ -200,14 +225,24 @@ export default function SpeechSettings({sessionId}:{sessionId:number}){
       <FieldDescription className="text-xs">直接连接微软 Edge 免费朗读服务，无需配置密钥；网络异常时自动回落本地语音。</FieldDescription>
      </Field>
     </div>}
-    {deepseekVisible&&<div className="grid gap-4 py-4 sm:grid-cols-2">{input('deepseekKey','DeepSeek API Key（platform.deepseek.com）',true)}
+    {deepseekVisible&&<div className="grid gap-4 py-4 sm:grid-cols-2">
+     {form.deepseekInherited&&!customDeepseekKey?(
+      <Field>
+       <FieldLabel>DeepSeek API Key</FieldLabel>
+       <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-400">
+        <span>✓ 已自动共用「模型 API」中的 DeepSeek Key，无需重复填写</span>
+        <button type="button" className="underline underline-offset-2 opacity-80 hover:opacity-100" onClick={()=>setCustomDeepseekKey(true)}>单独覆盖</button>
+       </div>
+       <FieldDescription className="text-xs">需使用 DeepSeek 官方 Key（platform.deepseek.com）且账户有余额；第三方中转站不支持语音接口。</FieldDescription>
+      </Field>
+     ):input('deepseekKey','DeepSeek API Key（与「模型 API」共用）',true)}
      <Field data-invalid={!!errors.deepseekVoice}>
       <FieldLabel htmlFor="speech-deepseekVoice">DeepSeek 音色</FieldLabel>
       <Select value={form.deepseekVoice||'stella'} onValueChange={value=>change('deepseekVoice',value)}>
        <SelectTrigger id="speech-deepseekVoice" aria-label="DeepSeek 音色" className="w-full"><SelectValue>{deepseekVoices.find(([value])=>value===(form.deepseekVoice||'stella'))?.[1]}</SelectValue></SelectTrigger>
        <SelectContent>{deepseekVoices.map(([value,label])=><SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent>
       </Select>
-      <FieldDescription className="text-xs">不填 Key 时会借用「AI 批改」里同一个 DeepSeek Key；按字符计费，1 万字约 1.5 元。</FieldDescription>
+      <FieldDescription className="text-xs">已与「模型 API」统一共用同一份 DeepSeek Key（只填一次即可）；按字符计费，1 万字约 1.5 元。</FieldDescription>
       <FieldError>{errors.deepseekVoice}</FieldError>
      </Field>
     </div>}
@@ -217,11 +252,11 @@ export default function SpeechSettings({sessionId}:{sessionId:number}){
     {((!query.data&&query.isError)||saveError)&&<div className="flex flex-wrap items-center justify-between gap-2 py-3">
      <FieldError>{!query.data?'无法读取朗读设置，暂时不能修改。':saveError}</FieldError>
      {/* 读不到设置时不能拿默认值去覆盖设备，只能重新拉；存失败则原样重试一次 */}
-     <Button type="button" variant="outline" size="sm" onClick={()=>{setSaveError('');setFailedSignature('');if(!query.data)query.refetch();else save.mutate(form);}}>重试</Button>
+     <Button type="button" variant="outline" size="sm" disabled={busy} onClick={()=>{setSaveError('');setFailedSignature('');if(!query.data)query.refetch();else if(clearKeys.isError&&!dirty)clearKeys.mutate();else save.mutate(form);}}>重试</Button>
     </div>}
    </ItemGroup>
    <div className="flex justify-end gap-2 border-t py-3">
-    <Button type="button" variant="outline" size="sm" disabled={save.isPending} onClick={()=>{if(confirm('清除已保存的朗读服务密钥？')){setDirty(true);setSaved(false);setSaveError('');setFailedSignature('');setForm((old:any)=>({...old,clearKeys:true,azureKey:'',aliyunSecret:'',deepseekKey:''}));}}}>清除密钥</Button>
+    <Button type="button" variant="outline" size="sm" disabled={busy||!query.data} onClick={()=>{if(confirm('清除已保存的朗读服务密钥？'))clearKeys.mutate();}}>{clearKeys.isPending?'清除中…':'清除密钥'}</Button>
    </div>
   </CardContent>
  </Card>

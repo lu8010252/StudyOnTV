@@ -33,12 +33,43 @@ object GatePresentationRegression {
      * 识别口径、家长验证后的放行窗口、服务重建后的静音计时都必须和原来一致。
      */
     private fun systemSettingsGuard(context: Context) {
-        check(SystemSettingsGuard.isSettings(context, "com.android.settings")) { "系统设置包名必须能识别" }
+        for (pkg in listOf(
+            "com.android.settings",
+            "com.miui.securitycenter",
+            "com.oplus.safecenter",
+            "com.vivo.permissionmanager",
+            "com.huawei.systemmanager",
+            "com.zui.safecenter"
+        )) {
+            check(SystemSettingsGuard.isSettings(context, pkg)) { "系统设置与厂商应用管理包名必须能识别: $pkg" }
+        }
         check(!SystemSettingsGuard.isSettings(context, "com.example.player")) { "普通播放器不能算系统设置" }
         SystemSettingsGuard.revoke()
         check(!SystemSettingsGuard.active()) { "没有放行时设置页要被拦截" }
+        // 自由时段 / 临时解锁（unlimited=false）同样拦截系统设置与应用管理；仅无限时关闭管控（unlimited=true）放行
+        check(SystemSettingsGuard.blocked(context, awake = true, monitoring = true, unlimited = false,
+            pkg = "com.miui.securitycenter", blockSettings = true, recentlyVerified = false)) {
+            "自由时段或临时解锁期间也必须拦截厂商应用管理"
+        }
+        check(!SystemSettingsGuard.blocked(context, awake = true, monitoring = true, unlimited = true,
+            pkg = "com.android.settings", blockSettings = true, recentlyVerified = false)) {
+            "家长无限时关闭管控后不应再拦截系统设置"
+        }
+        // 设备管理员收到取消激活请求时（哪怕 pkg==null 未开无障碍/使用情况）也要立即触发拦截
+        SystemSettingsGuard.flagTamperAttempt(now = 10_000L)
+        check(SystemSettingsGuard.blocked(context, awake = true, monitoring = true, unlimited = false,
+            pkg = null, blockSettings = true, recentlyVerified = false, now = 10_500L)) {
+            "尝试取消激活设备管理员时即使 pkg==null 也必须触发拦截"
+        }
+        SystemSettingsGuard.onExternalWindowChanged(context, "com.android.launcher3", now = 12_500L)
+        check(!SystemSettingsGuard.tamperActive()) { "切回桌面超过保护窗口后应清除临时防篡改标记" }
+
         SystemSettingsGuard.grant()
         check(SystemSettingsGuard.active()) { "家长验证后要放行设置页" }
+        check(!SystemSettingsGuard.blocked(context, awake = true, monitoring = true, unlimited = false,
+            pkg = "com.android.settings", blockSettings = true, recentlyVerified = false)) {
+            "家长验证密码放行窗口内不应拦截设置页"
+        }
         SystemSettingsGuard.revoke()
         check(!SystemSettingsGuard.active()) { "回到自家页面要立刻收回放行" }
         AudioController.reset()

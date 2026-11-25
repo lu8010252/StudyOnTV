@@ -62,6 +62,8 @@ object DeviceRuntime {
             val pending = store.reviews("pending")
             for (i in 0 until pending.length()) GradingService.enqueue(store, learning, pending.getJSONObject(i).getString("id"))
         }
+        // 体验提升计划：按间隔自动在后台上报运行诊断日志
+        Diag.uploadRuntimeLogsIfDue(app)
     }
 
     fun connection(context: Context): org.json.JSONObject {

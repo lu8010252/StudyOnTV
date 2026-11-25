@@ -1677,6 +1677,9 @@ paths:
                 level:
                   type: string
                   description: 孩子选择年级模式下选定的年级
+                fromGate:
+                  type: boolean
+                  description: 拦截页自动发起请求时，可用免费时长已恢复则返回 watching。
       responses:
         '200':
           description: 本轮题目或状态分支
@@ -2313,7 +2316,7 @@ components:
           description: 下次可用的时间戳（毫秒），0 表示无
         nextAtText:
           type: string
-          description: nextAvailableAt 的本地化显示，如「11 月 15 日 18:30」
+          description: nextAvailableAt 的本地化显示，如「今天 18:30」「明天 09:00」或「11 月 18 日 18:30」
         free:
           type: boolean
           description: 当前是否处于自由使用（临时解锁 / 豁免 / 网课自由时段）
@@ -2523,6 +2526,12 @@ components:
           minimum: 0
           maximum: 120
           default: 0
+        bootFreeIntervalMinutes:
+          type: integer
+          minimum: 0
+          maximum: 1440
+          default: 0
+          description: 两次发放开机或唤醒免费时长的最短间隔（分钟）。0 为不限。
         dailyLimitEnabled:
           type: boolean
           default: true
@@ -3790,6 +3799,10 @@ components:
         deviceTime:
           type: string
           description: 设备当前时间（Java Date.toString() 格式）
+        clockSource:
+          type: string
+          enum: [network, system]
+          description: 业务时间来源。Android 13 及以上优先使用可用的网络时钟，其余情况使用系统时间。
         keepalive:
           $ref: '#/components/schemas/KeepAliveInfo'
         buglyConsent:

@@ -70,15 +70,18 @@ object DesktopMode {
         }
     }
 
+    internal fun shouldOpenChooserAfterToggle(on: Boolean, wasDefault: Boolean): Boolean = on || wasDefault
+
     fun setEnabled(context: Context, on: Boolean): JSONObject {
+        val wasDefault = isDefault(context)
         val pm = context.packageManager
         pm.setComponentEnabledSetting(alias(context),
             if (on) PackageManager.COMPONENT_ENABLED_STATE_ENABLED else PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
             PackageManager.DONT_KILL_APP)
         if (enabled(context) != on) throw IllegalStateException(if (on) "开启电视桌面失败" else "关闭电视桌面失败")
         Diag.info("Desktop", "desktop ${if (on) "enabled" else "disabled"} by parent")
-        // 开启后立刻把用户送到选择桌面；关闭时如果自己正占着 Home，也要发一次让系统接手
-        if (on || isDefault(context)) openChooser(context)
+        // 开启后立刻把用户送到选择桌面；关闭时如果禁用前自己正占着 Home，也要发一次让系统接手
+        if (shouldOpenChooserAfterToggle(on, wasDefault)) openChooser(context)
         return state(context)
     }
 

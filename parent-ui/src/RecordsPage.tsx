@@ -309,7 +309,7 @@ function CoverageCard({ sessionId }: { sessionId: number }) {
                         {index + 1}
                       </span>
                       <div className="min-w-0 flex-1">
-                        <MathText text={item.q || '（无题干）'} plain className="truncate text-sm" />
+                        <MathText text={item.q || '（无题干）'} className="truncate text-sm" />
                         <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
                           {item.bank || '默认题库'}
                           {item.level ? ` · ${item.level}` : ''}

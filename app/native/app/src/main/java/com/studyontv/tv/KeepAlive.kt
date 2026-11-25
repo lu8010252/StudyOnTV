@@ -73,7 +73,7 @@ object KeepAlive {
             name.contains("xiaomi") || name.contains("redmi") || name.contains("poco") ->
                 "小米 / Redmi / POCO 手机：设置 → 应用设置 → 应用管理 → 题了个题 → 自启动；省电策略 → 无限制"
             name.contains("huawei") || name.contains("honor") ->
-                "华为 / 荣耀手机：设置 → 应用 → 应用启动管理 → 题了个题 → 手动管理，全部允许"
+                "华为 / 荣耀手机：① 设置 → 应用 → 应用启动管理 → 题了个题 → 手动管理，全部允许；② 设置 → 电池 → 更多电池设置 → 休眠时始终保持网络连接（避免灭屏后连不上）；③ 最近任务卡片下拉加锁"
             name.contains("oppo") || name.contains("realme") || name.contains("oneplus") ->
                 "OPPO / realme / 一加：设置 → 应用 → 自启动管理 → 题了个题；电池 → 允许后台活动"
             name.contains("vivo") || name.contains("iqoo") ->

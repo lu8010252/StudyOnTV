@@ -40,11 +40,18 @@ mockWindow.SOTV_RICH(listEl, '步骤：\n- 第一步\n- 第二步');
 assert.ok(listEl.innerHTML.includes('<span class="sotv-li">• 第一步</span>'));
 assert.ok(listEl.innerHTML.includes('<span class="sotv-li">• 第二步</span>'));
 
-// 4. Plain text stripping for TTS and table truncation
+// 4. Plain text stripping & LaTeX-to-speech conversion for TTS
 assert.equal(
   mockWindow.SOTV_PLAIN('**重点**：求 $x^2$ 的==最小值==\n- 提示 `ok`'),
-  '重点：求 x^2 的最小值\n提示 ok',
+  '重点：求 x的平方 的最小值\n提示 ok',
 );
+assert.equal(
+  mockWindow.SOTV_PLAIN('计算 $\\frac{1}{2} \\times \\sqrt{4} + 90^\\circ$'),
+  '计算 2分之1 乘 根号4 + 90度',
+);
+const envEl = { innerHTML: '', textContent: '' };
+mockWindow.SOTV_RICH(envEl, '解方程组：\\begin{cases}x+y=5\\\\x-y=1\\end{cases}');
+assert.ok(envEl.innerHTML.includes('\\begin{cases}x+y=5\\\\x-y=1\\end{cases}'), 'LaTeX environment must stay intact');
 
 // 5. Single-character spans & multiple spans on one line without swallowing text between them
 const singleCharEl = { innerHTML: '', textContent: '' };

@@ -101,11 +101,15 @@ class EducationalVideoActivity : Activity() {
             setMediaController(MediaController(this@EducationalVideoActivity))
             setOnPreparedListener { preparedAt = SystemClock.elapsedRealtime();renderStarted = false;if (resumed) start() }
             setOnInfoListener { _, what, _ ->
-                if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START && !renderStarted) {
-                    renderStarted = true
-                    Diag.info("Video", "render start duration=${video.duration}ms url=${intent.getStringExtra("url")}")
+                if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) {
+                    if (!renderStarted) {
+                        renderStarted = true
+                        Diag.info("Video", "render start duration=${video.duration}ms url=${intent.getStringExtra("url")}")
+                    }
+                    true
+                } else {
+                    false
                 }
-                true
             }
             setOnCompletionListener {
                 when {
@@ -118,7 +122,6 @@ class EducationalVideoActivity : Activity() {
                 fail("视频无法播放（错误码 $what/$extra）：请检查公益视频直链能否直接播放，或请家长切换为答题模式")
                 true
             }
-            setVideoPath(intent.getStringExtra("url"))
         }
         root.addView(video, LinearLayout.LayoutParams(-1,0,1f))
         val buttons = LinearLayout(this).apply { gravity=Gravity.CENTER }
@@ -130,8 +133,28 @@ class EducationalVideoActivity : Activity() {
         buttons.addView(TvUi.button(this, "返回") { finish() })
         root.addView(buttons)
         setContentView(root)
+        val videoUrl = intent.getStringExtra("url").orEmpty()
+        if (LocalOnlyGuard.enabled && !LocalOnlyGuard.isLocalUrl(videoUrl)) {
+            fail("仅本地隐私版（EU Local-Only）仅允许播放本机或局域网内的公益视频")
+        } else {
+            video.setVideoPath(videoUrl)
+        }
     }
-    override fun onResume() { super.onResume();resumed = true;handler.removeCallbacks(tick);handler.post(tick) }
+    override fun onResume() {
+        super.onResume()
+        resumed = true
+        val now = SystemClock.elapsedRealtime()
+        if (::video.isInitialized && failure.isEmpty() && !complete.isEnabled) {
+            if (!renderStarted) {
+                if (preparedAt > 0L) preparedAt = now else openedAt = now
+            }
+            if (preparedAt > 0L && !video.isPlaying) {
+                video.start()
+            }
+        }
+        handler.removeCallbacks(tick)
+        handler.post(tick)
+    }
     override fun onPause() {
         resumed = false
         handler.removeCallbacks(tick)

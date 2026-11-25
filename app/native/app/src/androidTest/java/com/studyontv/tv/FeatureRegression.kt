@@ -1,11 +1,13 @@
 package com.studyontv.tv
 
 import android.content.Context
+import android.os.Build
 import android.os.SystemClock
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Calendar
 import java.util.TimeZone
+import java.util.concurrent.TimeUnit
 
 object FeatureRegression {
     /** 单独跑隐藏桌面图标（-e launcher 1），改这块时不用等整套回归 */
@@ -15,6 +17,10 @@ object FeatureRegression {
         migration(context)
         childMigration(context)
         levelSelection(context)
+        bootFreeInterval(context)
+        businessClock(context)
+        dailyQuotaSurvivesClockRollback(context)
+        videoSettlementAcrossMidnight(context)
         val name = "feature-regression.db"
         context.deleteDatabase(name)
         val store = LocalStore(context, name)
@@ -605,10 +611,10 @@ object FeatureRegression {
             // 引擎和「今天」的起点都跟着配置的时区走
             val newYork = TimeZone.getTimeZone("America/New_York")
             val offset = (engine.now().get(Calendar.ZONE_OFFSET) + engine.now().get(Calendar.DST_OFFSET)) / 3600000
-            check(offset == newYork.getOffset(System.currentTimeMillis()) / 3600000) { "引擎应使用配置的时区" }
+            check(offset == newYork.getOffset(store.clockReading().millis) / 3600000) { "引擎应使用配置的时区" }
             val day = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").apply { timeZone = newYork }
             val start = day.format(java.util.Date(store.startOfToday()))
-            check(start.endsWith("00:00") && start == day.format(java.util.Date(System.currentTimeMillis())).take(10) + " 00:00") { "「今天」的起点按配置时区算: $start" }
+            check(start.endsWith("00:00") && start == day.format(java.util.Date(store.clockReading().millis)).take(10) + " 00:00") { "「今天」的起点按配置时区算: $start" }
 
             // 同一个时刻：上海 09:10、纽约前一天 20:10，窗口只开 09:00–10:00
             val instant = Calendar.getInstance(TimeZone.getTimeZone("Asia/Shanghai")).apply {
@@ -641,6 +647,11 @@ object FeatureRegression {
                 set(2026, Calendar.JANUARY, 5, 4, 0, 0);set(Calendar.MILLISECOND, 0)
             }.timeInMillis
             check(DeviceClock.format(fourAm, store) == "1 月 5 日 12:00") { "UTC 04:00 在上海应是 12:00" }
+            // 今明两天说「今天 / 明天」（Issue #147），再远仍显示日期
+            val realNow = System.currentTimeMillis()
+            check(DeviceClock.format(realNow, store).startsWith("今天 ")) { "当天应显示今天: ${DeviceClock.format(realNow, store)}" }
+            check(DeviceClock.format(realNow + 86400000L, store).startsWith("明天 ")) { "次日应显示明天: ${DeviceClock.format(realNow + 86400000L, store)}" }
+            check(DeviceClock.format(realNow + 3 * 86400000L, store).contains("月")) { "更远仍显示日期: ${DeviceClock.format(realNow + 3 * 86400000L, store)}" }
         } finally {
             engine.now = { DeviceClock.calendar(store) }
             store.saveConfig(JSONObject().put("timezone", before))
@@ -648,6 +659,255 @@ object FeatureRegression {
     }
     private fun answer(round: JSONObject, selection: Int) = JSONObject().put("roundId", round.getString("id"))
         .put("nonce", round.getString("nonce")).put("selections", JSONArray().put(selection))
+    private fun bootFreeInterval(context: Context) {
+        val name = "boot-free-interval-regression.db"
+        context.deleteDatabase(name)
+        var store = LocalStore(context, name)
+        try {
+            val minute = 60_000L
+            var bootId = 1
+            var elapsed = 20 * minute
+            val firstGrantAt = System.currentTimeMillis()
+            var wall = firstGrantAt
+            fun policy() = TimePolicy(store, { elapsed }, { wall }) { bootId }
+
+            var engine = LearningEngine(store)
+            check(store.config().getInt("bootFreeIntervalMinutes") == 0)
+            engine.saveConfig(JSONObject().put("bootFreeMinutes", 30).put("bootFreeIntervalMinutes", 120)
+                .put("dailyMinutes", 90))
+            check(runCatching {
+                engine.saveConfig(JSONObject().put("bootFreeIntervalMinutes", 1441))
+            }.exceptionOrNull() is IllegalArgumentException)
+            var time = policy()
+            time.awake(store.config(), true)
+            check(engine.status().getLong("bootFreeSeconds") == 1800L)
+            engine.consume(5000)
+
+            elapsed += minute
+            wall += 180 * minute
+            time.awake(store.config(), false)
+            time.awake(store.config(), true)
+            check(engine.status().getLong("bootFreeSeconds") == 1795L) { "同次开机改系统时间不能提前发放" }
+
+            store.close()
+            store = LocalStore(context, name)
+            engine = LearningEngine(store)
+            time = policy()
+            bootId++
+            elapsed = 5000
+            wall = firstGrantAt + 30 * minute
+            time.awake(store.config(), true)
+            check(engine.status().getLong("bootFreeSeconds") == 1795L) { "冷启动后必须保留原余额" }
+            repeat(359) { engine.consume(5000) }
+            check(engine.status().getString("reason") == "timeup")
+            check(engine.status().getDouble("usedMinutes") == 30.0)
+
+            bootId++
+            wall = firstGrantAt - minute
+            time.awake(store.config(), true)
+            check(engine.status().getString("reason") == "timeup") { "重启后日期回拨不能重新发放" }
+            wall = firstGrantAt + 120 * minute - 1
+            time.awake(store.config(), false)
+            time.awake(store.config(), true)
+            check(engine.status().getString("reason") == "timeup") { "间隔到期前不能发放" }
+
+            wall++
+            policy().awake(store.config(), true)
+            check(engine.status().getString("reason") == "timeup") { "间隔到期后重开服务不能自动发放" }
+            time.awake(store.config(), false)
+            time.awake(store.config(), true)
+            check(engine.status().getLong("bootFreeSeconds") == 1800L) { "间隔到期后下次唤醒才发放" }
+            check(engine.status().getDouble("usedMinutes") == 30.0)
+
+            engine.saveConfig(JSONObject().put("bootFreeIntervalMinutes", 0))
+            engine.consume(5000)
+            time.awake(store.config(), false)
+            time.awake(store.config(), true)
+            check(engine.status().getLong("bootFreeSeconds") == 1800L) { "间隔为 0 时保持每次唤醒发放" }
+        } finally {
+            store.close()
+            context.deleteDatabase(name)
+        }
+    }
+
+    private fun businessClock(context: Context) {
+        fun at(day: Int, hour: Int, minute: Int = 0): Long =
+            Calendar.getInstance(TimeZone.getTimeZone("Asia/Shanghai")).apply {
+                clear()
+                set(2030, Calendar.JANUARY, day, hour, minute)
+            }.timeInMillis
+
+        val wall = at(6, 20)
+        val networkTime = at(7, 9, 10)
+        val legacy = DeviceClock.read(Build.VERSION_CODES.S_V2, { error("旧系统不能调用网络时钟") }, { wall })
+        check(legacy == DeviceClock.Reading(wall, DeviceClock.Source.SYSTEM))
+        val preferred = DeviceClock.read(Build.VERSION_CODES.TIRAMISU, { networkTime }, { error("有网络时间时不能回退") })
+        check(preferred == DeviceClock.Reading(networkTime, DeviceClock.Source.NETWORK))
+
+        var network: Long? = null
+        val name = "business-clock-regression.db"
+        context.deleteDatabase(name)
+        val store = LocalStore(context, name) {
+            DeviceClock.read(Build.VERSION_CODES.TIRAMISU, { network }, { wall })
+        }
+        try {
+            val engine = LearningEngine(store)
+            val slots = JSONArray(List(7) { "0".repeat(18) + "11" + "0".repeat(28) })
+            engine.saveConfig(JSONObject().put("timezone", "Asia/Shanghai").put("holidayMode", "normal")
+                .put("dailyFreeMinutes", 30).put("allDay", false).put("weekSlots", slots))
+            check(store.clockReading() == legacy && store.startOfToday() == at(6, 0))
+            check(engine.status().getString("reason") == "schedule")
+            store.set("used_ms", "1800000")
+            store.set("free_quota_ms", "0")
+            store.set("free_used_ms", "1800000")
+
+            network = at(7, 11)
+            val rollover = engine.status()
+            check(store.startOfToday() == at(7, 0) && store.get("usage_day") == at(7, 0).toString())
+            check(rollover.getLong("freeQuotaSeconds") == 1800L && rollover.getDouble("usedMinutes") == 0.0)
+            check(rollover.getString("reason") == "schedule" && rollover.getLong("nextAvailableAt") == at(8, 9))
+
+            network = networkTime
+            check(engine.status().getBoolean("canExit"))
+            store.logEvent("quiz_pass", JSONObject())
+            check(store.recentEvents(1).getJSONObject(0).getLong("ts") == networkTime)
+            check(store.roundsDoneToday() == 1 && store.todayStats().getInt("rounds") == 1)
+            val history = store.historyDays(2)
+            check(history.getJSONObject(0).getInt("rounds") == 1)
+            check(history.getJSONObject(1).getInt("rounds") == 0)
+            engine.consume(5000)
+
+            network = null
+            engine.status()
+            check(store.get("usage_day") == at(7, 0).toString()) { "回退到旧的系统日期时要保留已记账日期" }
+            network = networkTime
+            check(engine.status().getLong("freeQuotaSeconds") == 1795L)
+        } finally {
+            store.close()
+            context.deleteDatabase(name)
+        }
+    }
+
+    private fun dailyQuotaSurvivesClockRollback(context: Context) {
+        val name = "daily-quota-clock-regression.db"
+        context.deleteDatabase(name)
+        var store = LocalStore(context, name)
+        try {
+            val today = store.startOfToday()
+            val rollbackDay = today - TimeUnit.DAYS.toMillis(3650)
+            val tomorrow = today + TimeUnit.DAYS.toMillis(1)
+            var day = today
+            fun usageEvents(): List<Long> {
+                return store.readableDatabase.rawQuery("SELECT payload FROM events WHERE type='usage' ORDER BY id", null).use { cursor ->
+                    buildList {
+                        while (cursor.moveToNext()) add(JSONObject(cursor.getString(0)).getLong("milliseconds"))
+                    }
+                }
+            }
+            var engine = LearningEngine(store) { day }
+            engine.saveConfig(JSONObject().put("dailyFreeMinutes", 30).put("bootFreeMinutes", 0)
+                .put("dailyMinutes", 120))
+            val used = (30 * 60_000L - 5000).toString()
+            store.set("free_quota_ms", "5000")
+            store.set("free_used_ms", used)
+            store.set("used_ms", used)
+            engine.consume(5000)
+            check(engine.status().getString("reason") == "timeup")
+
+            store.close()
+            store = LocalStore(context, name)
+            day = rollbackDay
+            engine = LearningEngine(store) { day }
+            engine.awake(true)
+            val beforeSync = engine.status()
+            check(beforeSync.getString("reason") == "timeup")
+            check(beforeSync.getLong("freeQuotaSeconds") == 0L)
+            check(beforeSync.getDouble("usedMinutes") == 30.0)
+            check(store.get("usage_day") == today.toString())
+
+            day = today
+            val afterSync = engine.status()
+            check(afterSync.getString("reason") == "timeup")
+            check(afterSync.getLong("freeQuotaSeconds") == 0L)
+            check(afterSync.getDouble("usedMinutes") == 30.0)
+            check(!afterSync.getBoolean("canExit"))
+
+            engine.remote("credit", 5, "test")
+            day = rollbackDay
+            val adjusted = engine.status()
+            check(adjusted.getLong("remainingSeconds") == 300L)
+            check(adjusted.getDouble("todayLimitMinutes") == 125.0)
+            check(store.get("credit_ms") == "300000" && store.get("cap_adjust_ms") == "300000")
+            day = today
+            engine.consume(5000)
+            val recorded = usageEvents()
+            check(recorded == listOf(5000L)) { "不足 30 秒的尾段应仍在内存中" }
+
+            day = tomorrow
+            val db = store.writableDatabase
+            db.beginTransaction()
+            try {
+                val activeDay = engine.status()
+                check(activeDay.getLong("remainingSeconds") == 295L)
+                check(store.get("usage_day") == today.toString())
+                check(usageEvents() == recorded) { "事务中查询状态不能写出尾段用量" }
+            } finally {
+                db.endTransaction()
+            }
+
+            val nextDay = engine.status()
+            check(nextDay.getLong("freeQuotaSeconds") == 1800L)
+            check(nextDay.getDouble("usedMinutes") == 0.0)
+            check(nextDay.getBoolean("canExit") && engine.exitSnapshot.canExit)
+            check(engine.start(fromGate = true).getBoolean("watching")) { "免费额度到账后，仍打开的拦截页不能重新出题" }
+            check(store.get("credit_ms") == "0" && store.get("cap_adjust_ms") == "0")
+            engine.consume(5000)
+            check(engine.status().getLong("freeQuotaSeconds") == 1795L)
+            check(usageEvents() == recorded + 5000L) { "日切时尾段用量应写入且只写入一次" }
+        } finally {
+            store.close()
+            context.deleteDatabase(name)
+        }
+    }
+
+    private fun videoSettlementAcrossMidnight(context: Context) {
+        val name = "midnight-video-settlement.db"
+        context.deleteDatabase(name)
+        val store = LocalStore(context, name)
+        try {
+            val today = store.startOfToday()
+            val tomorrow = today + TimeUnit.DAYS.toMillis(1)
+            var day = today
+            var advanceAfterSample = false
+            val engine = LearningEngine(store) {
+                val sampled = day
+                if (advanceAfterSample) {
+                    day = tomorrow
+                    advanceAfterSample = false
+                }
+                sampled
+            }
+            engine.saveConfig(JSONObject().put("learningContent", "video").put("videoMinutes", 1)
+                .put("sessionMinutes", 10).put("educationalVideos", JSONArray().put("https://example.test/video.mp4")))
+            val lessonId = engine.start().getJSONObject("videoLesson").getString("id")
+            val lesson = JSONObject(store.get("video_lesson"))
+            store.set("video_lesson", lesson.put("watchedMs", lesson.getLong("requiredMs")).toString())
+
+            advanceAfterSample = true
+            val settled = engine.completeVideo(lessonId)
+            check(settled.getDouble("rewardMinutes") == 10.0)
+            check(settled.getJSONObject("status").getLong("remainingSeconds") == 600L) { "结算响应沿用事务开始时的记账日" }
+            check(store.roundsDoneToday(today) == 1)
+            check(engine.status().getLong("remainingSeconds") == 0L)
+            check(store.get("usage_day") == tomorrow.toString())
+            check(runCatching { engine.completeVideo(lessonId) }.exceptionOrNull() is IllegalArgumentException)
+            check(store.roundsDoneToday(today) == 1) { "跨午夜结算只能发放一次" }
+        } finally {
+            store.close()
+            context.deleteDatabase(name)
+        }
+    }
+
     private fun expire(store: LocalStore, key: String) {
         store.set(key, JSONObject().put("boot", -1).put("atElapsed", 0).put("untilElapsed", SystemClock.elapsedRealtime() - 1).put("until", 0).toString())
     }

@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
 import android.text.InputType
+import android.view.KeyEvent
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
@@ -18,6 +19,8 @@ class ParentActivity : Activity() {
     /** Read by the key filter: no password/preferences lookup may happen in that callback. */
     val requiresParentVerification: Boolean get() = !initialSetup && !verified
     private var web: WebView? = null
+    private var showingWeb = false
+    private val remote = RemoteKeys { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -31,7 +34,16 @@ class ParentActivity : Activity() {
 
     fun changePassword() = form(true, true)
 
+    private fun releaseWeb() {
+        showingWeb = false
+        val old = web ?: return
+        web = null
+        (old.parent as? android.view.ViewGroup)?.removeView(old)
+        old.destroy()
+    }
+
     private fun form(setup: Boolean, changing: Boolean = false) {
+        releaseWeb()
         val tv = DeviceBridge.isTv(this)
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -53,7 +65,7 @@ class ParentActivity : Activity() {
             isSingleLine = true
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             transformationMethod = android.text.method.PasswordTransformationMethod.getInstance()
-            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_NEXT or android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI
+            imeOptions = passwordImeOptions(setup)
             TvUi.field(this)
         }
         column.addView(secret, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
@@ -76,6 +88,7 @@ class ParentActivity : Activity() {
                 if (value.length !in 6..64 || value != confirm.text.toString()) {
                     error.text = "密码需要 6–64 位，两次输入须一致"; return
                 }
+                submit.isEnabled = false
                 AdminAuth.setPassword(this, value)
                 initialSetup = false
                 AdminAuth.markVerified()
@@ -102,7 +115,14 @@ class ParentActivity : Activity() {
         }
         submit = TvUi.button(this, if (setup) "保存密码" else "验证并打开连接页", true) { go() }
         column.addView(submit, LinearLayout.LayoutParams(-1, dp(56)).apply { topMargin = dp(4) })
-        (if (setup) confirm else secret).setOnEditorActionListener { _, _, _ -> go(); true }
+        (if (setup) confirm else secret).setOnEditorActionListener { _, actionId, event ->
+            if (shouldSubmitOnEditorAction(actionId, event?.keyCode, event?.action)) {
+                go()
+                true
+            } else {
+                false
+            }
+        }
         if (!setup || changing) column.addView(TvUi.button(this, if (changing) "取消" else "返回答题") {
             if (changing) connection() else { startActivity(Intent(this, MainActivity::class.java)); finish() }
         }, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(12) })
@@ -114,12 +134,32 @@ class ParentActivity : Activity() {
     private fun connection() {
         // 权限设置 / 修改密码 / 返回答题都放在网页里，方便遥控器在同一个页面里移动焦点
         currentFocus?.let { (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(it.windowToken, 0) }
-        web?.destroy()
+        releaseWeb()
         web = WebShell(this).create(Prefs.localBase(this) + "#/pair").also {
             it.addJavascriptInterface(DeviceBridge(this, true, it), "SOTVNative")
         }
+        showingWeb = true
         setContentView(web)
         web?.requestFocus()
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (MainActivity.isPowerKey(event.keyCode)) return super.dispatchKeyEvent(event)
+        val view = web
+        if (showingWeb && view != null) {
+            val url = view.url.orEmpty()
+            if (url.contains("/admin")) {
+                if (event.keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_DOWN && view.canGoBack()) {
+                    view.goBack()
+                    return true
+                }
+                return super.dispatchKeyEvent(event)
+            }
+            if (DeviceBridge.isTv(this)) {
+                return remote.handle(view, event) || super.dispatchKeyEvent(event)
+            }
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     private var stoppedAt = 0L
@@ -134,13 +174,27 @@ class ParentActivity : Activity() {
         // 去系统权限页转一圈回来不用重新输密码；离开超过 1 分钟才重新验证
         if (verified && stoppedAt > 0 && android.os.SystemClock.elapsedRealtime() - stoppedAt > 60000) {
             verified = false
-            web?.destroy(); web = null
+            releaseWeb()
             form(false)
         }
     }
 
     override fun onDestroy() {
-        web?.destroy(); web = null
+        releaseWeb()
         super.onDestroy()
+    }
+
+    companion object {
+        internal fun passwordImeOptions(setup: Boolean): Int =
+            (if (setup) android.view.inputmethod.EditorInfo.IME_ACTION_NEXT else android.view.inputmethod.EditorInfo.IME_ACTION_DONE) or
+                android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI
+
+        internal fun shouldSubmitOnEditorAction(actionId: Int, keyCode: Int?, keyAction: Int?): Boolean {
+            if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
+                return keyAction == null || keyAction == KeyEvent.ACTION_DOWN
+            }
+            return (keyCode == KeyEvent.KEYCODE_ENTER || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER) &&
+                keyAction == KeyEvent.ACTION_DOWN
+        }
     }
 }

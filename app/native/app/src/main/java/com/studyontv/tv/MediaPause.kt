@@ -82,9 +82,10 @@ object MediaPause {
             lastKey = SystemClock.elapsedRealtime()
             lastPauseAt = lastKey
             owners.add(context)
-            lastPauseHadAudio = audio.isMusicActive
-            Diag.info("Audio", "pause start volume=$originalVolume muted=$originalMuted canMute=$canMute api=${Build.VERSION.SDK_INT} music=${audio.isMusicActive} owners=${owners.size}")
-            if (audio.isMusicActive) { sendPause(audio); attempts = 1 }
+            val ownSpeech = SpeechReader.speakingRecently()
+            lastPauseHadAudio = audio.isMusicActive && !ownSpeech
+            Diag.info("Audio", "pause start volume=$originalVolume muted=$originalMuted canMute=$canMute api=${Build.VERSION.SDK_INT} music=${audio.isMusicActive} ownSpeech=$ownSpeech owners=${owners.size}")
+            if (audio.isMusicActive && !ownSpeech) { sendPause(audio); attempts = 1 }
             holding = audio.requestAudioFocus(listener, AudioManager.STREAM_MUSIC,
                 AudioManager.AUDIOFOCUS_GAIN) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         } catch (e: Exception) { android.util.Log.w("StudyOnTV", "Pause media failed", e) }
@@ -93,6 +94,8 @@ object MediaPause {
     @Synchronized
     fun enforce(context: Context) {
         if (!active) return
+        // 题目朗读 / 题目音频走的是 STREAM_MUSIC，朗读期间及结束后短暂缓冲期内不能误判成「后台播放器无视暂停」而静音（#168）
+        if (SpeechReader.speakingRecently()) return
         val audio = audio(context) ?: return
         try {
             if (!audio.isMusicActive) return

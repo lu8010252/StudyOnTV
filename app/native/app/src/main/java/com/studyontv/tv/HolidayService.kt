@@ -41,6 +41,10 @@ object HolidayService {
     /** 同步某一年；先试国内可访问的接口和 CDN，全部失败时用内置数据。 */
     fun fetch(context: Context, year: Int): JSONObject {
         require(year in 2000..2100) { "年份不正确" }
+        if (LocalOnlyGuard.enabled) {
+            val text = context.assets.open("holidays/$year.json").use { it.readBytes().toString(Charsets.UTF_8) }
+            return save(context, year, parse(JSONObject(text)), "内置数据")
+        }
         val sources = listOf(
             "jiejiari" to "https://api.jiejiariapi.com/v1/holidays/$year",
             "jsDelivr" to "https://fastly.jsdelivr.net/gh/NateScarlet/holiday-cn@master/$year.json",

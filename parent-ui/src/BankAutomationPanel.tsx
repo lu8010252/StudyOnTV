@@ -1,4 +1,4 @@
-import {useEffect,useState} from 'react';
+import {useEffect,useRef,useState} from 'react';
 import {useMutation,useQuery,useQueryClient} from '@tanstack/react-query';
 import {toast} from 'sonner';
 import {api} from './api';
@@ -14,17 +14,38 @@ import {Textarea} from '@/components/ui/textarea';
 import {Switch} from '@/components/ui/switch';
 
 const typeOptions:[string,string][]=[['single','单选'],['multiple','多选'],['boolean','判断'],['text','填空'],['subjective','主观题']];
+const inIntRange=(v:unknown,min:number,max:number)=>{const n=Number(v);return v!==''&&v!==null&&v!==undefined&&Number.isInteger(n)&&n>=min&&n<=max;};
 
 export default function BankAutomationPanel({sessionId}:{sessionId:number}){
  const client=useQueryClient();
  const query=useQuery({queryKey:['bankAutomation',sessionId],queryFn:()=>api('/api/bank-automation'),refetchInterval:5000});
  const [dirty,setDirty]=useState(false),[form,setForm]=useState<any>({sources:[],autoAi:false,minimum:30,batch:10,masteryAttempts:5,masteryAccuracy:90,topic:'',types:['single','text']});
- useEffect(()=>{if(query.data&&!dirty)setForm({...form,...query.data});},[query.data,dirty]);
- const field=(key:string,value:any)=>{setDirty(true);setForm((f:any)=>({...f,[key]:value}));};
- const save=useMutation({mutationFn:()=>api('/api/bank-automation','PUT',form),onSuccess:r=>{client.setQueryData(['bankAutomation',sessionId],r);setDirty(false);},onError:(e:any)=>toast.error(e.message)});
+ const [saveError,setSaveError]=useState(''),[failedSignature,setFailedSignature]=useState('');
+ const signature=JSON.stringify(form);
+ const latestSignature=useRef(signature);
+ latestSignature.current=signature;
+ useEffect(()=>{if(query.data&&!dirty)setForm((old:any)=>({...old,...query.data}));},[query.data,dirty]);
+ const field=(key:string,value:any)=>{setDirty(true);setSaveError('');setForm((f:any)=>({...f,[key]:value}));};
+ const save=useMutation({
+  mutationFn:(body:any)=>api('/api/bank-automation','PUT',body),
+  onMutate:()=>setSaveError(''),
+  onSuccess:(r,body)=>{
+   client.setQueryData(['bankAutomation',sessionId],r);
+   if(latestSignature.current===JSON.stringify(body)){
+    setForm((old:any)=>({...old,...r}));
+    setDirty(false);
+    setFailedSignature('');
+   }
+  },
+  onError:(e:any,body)=>{
+   setSaveError(e?.message||'自动保存失败，请重试');
+   setFailedSignature(JSON.stringify(body));
+   toast.error(e.message);
+  },
+ });
  const types:string[]=form.types||[];
- const valid=form.sources.every((source:any)=>(!source.name.trim()&&!source.url.trim())||(!!source.name.trim()&&/^https?:\/\//.test(source.url.trim())))&&Number(form.minimum)>=1&&Number(form.batch)>=1&&Number(form.masteryAttempts)>=1&&Number(form.masteryAccuracy)>=50&&(!form.autoAi||types.length>0);
- useEffect(()=>{if(!dirty||!valid)return;const timer=window.setTimeout(()=>save.mutate(),800);return()=>window.clearTimeout(timer);},[form,dirty,valid]);
+ const valid=form.sources.every((source:any)=>(!source.name.trim()&&!source.url.trim())||(!!source.name.trim()&&/^https?:\/\//.test(source.url.trim())))&&inIntRange(form.minimum,1,500)&&inIntRange(form.batch,1,20)&&inIntRange(form.masteryAttempts,1,100)&&inIntRange(form.masteryAccuracy,50,100)&&(!form.autoAi||types.length>0);
+ useEffect(()=>{if(!dirty||!valid||save.isPending||failedSignature===signature)return;const timer=window.setTimeout(()=>save.mutate(form),800);return()=>window.clearTimeout(timer);},[signature,dirty,valid,save.isPending,failedSignature]);
  const sync=useMutation({
   mutationFn:()=>api('/api/bank-automation/sync','POST',{}),
   onSuccess:()=>{
@@ -36,7 +57,7 @@ export default function BankAutomationPanel({sessionId}:{sessionId:number}){
   onError:(e:any)=>toast.error(e.message),
  });
  const status=query.data?.status;
- const saveState:SaveState=save.isPending?'saving':!valid?'error':dirty?'pending':'saved';
+ const saveState:SaveState=save.isPending?'saving':(saveError||!valid)?'error':dirty?'pending':'saved';
  return <Card className="mt-5 gap-0 overflow-hidden py-0 shadow-xs">
   <Accordion type="single" collapsible>
    <AccordionItem value="automation" className="border-0">

@@ -22,6 +22,7 @@ object Pgyer {
     private const val SDK_API_KEY = "305092bc73c180b55c26012a94809131"
 
     fun info(context: Context, current: String, currentCode: Int): Updater.Info? {
+        if (LocalOnlyGuard.enabled) return null
         val form = listOf(
             "_api_key" to SDK_API_KEY,
             "agKey" to appKey,

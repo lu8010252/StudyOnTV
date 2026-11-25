@@ -21,6 +21,22 @@ object BankAutomation {
     /** 老版本写死的题型，配置里没有 types 时沿用，避免升级后出题行为突然变化 */
     private val LEGACY_TYPES = listOf("single", "text")
 
+    /** 题目禁用/删除的统一协调入口（默认走 LearningEngine 原子修复活跃轮次并刷新门卫；单测可注入替代）。 */
+    internal var pauseQuestionsHandler: (LocalStore, List<String>) -> Int = { _, ids ->
+        DeviceRuntime.learning.setQuestionsEnabled(ids, false).also { GateService.refreshNow() }
+    }
+    internal var externalRemovedHandler: (Set<String>) -> Unit = { ids ->
+        if (ids.isNotEmpty()) {
+            DeviceRuntime.learning.onExternalQuestionsRemoved(ids)
+            GateService.refreshNow()
+        }
+    }
+
+    internal fun formatFailureMessage(prefix: String, fallback: String, e: Throwable): String {
+        val detail = e.message?.trim()?.take(160).orEmpty()
+        return if (detail.isNotEmpty()) "$prefix：$detail；$fallback" else "$prefix，$fallback"
+    }
+
     /** 与 BankMarket / GradingService 一致：公网远程题库必须走 HTTPS 防篡改，明文 HTTP 只允许局域网或本机地址。 */
     internal fun validateUrl(raw: String): URL {
         val url = try { URL(raw.trim()) } catch (_: Exception) {
@@ -29,6 +45,7 @@ object BankAutomation {
         require(url.protocol in listOf("http", "https") && url.userInfo == null && url.ref == null && url.host.isNotEmpty() && url.toString().length <= 2048) {
             "请使用不含用户名密码的 HTTP/HTTPS 地址"
         }
+        LocalOnlyGuard.requireLocalUrl(url.toString(), "远程题库")
         val ok = url.protocol == "https" || (url.protocol == "http" && isPrivateHost(url.host))
         require(ok) { "公网远程题库必须使用 HTTPS；HTTP 只允许局域网或本机地址" }
         return url
@@ -101,9 +118,13 @@ object BankAutomation {
                 for (i in 0 until sources.length()) {
                     val source = sources.getJSONObject(i)
                     if (!source.optBoolean("enabled", true)) continue
+                    if (LocalOnlyGuard.enabled && !LocalOnlyGuard.isLocalUrl(source.optString("url"))) continue
                     val entry = JSONObject().put("name", source.getString("name"))
                     try { entry.put("imported", syncSource(store, source)).put("ok", true) }
-                    catch (_: Exception) { entry.put("ok", false).put("message", "同步失败，请检查远程 JSON、地址和网络；本地题库已保留") }
+                    catch (e: Exception) {
+                        Diag.warn("BankAuto", "syncSource failed name=${source.optString("name")}: ${e.javaClass.simpleName}: ${e.message}")
+                        entry.put("ok", false).put("message", formatFailureMessage("同步失败", "本地题库已保留", e))
+                    }
                     results.put(entry)
                 }
                 report.put("sources", results)
@@ -115,7 +136,7 @@ object BankAutomation {
                         val answered = stats.optInt("answered")
                         if (answered >= config.optInt("masteryAttempts", 5) && stats.optInt("correct") * 100 >= answered * config.optInt("masteryAccuracy", 90)) mastered.add(q.getString("id"))
                     }
-                    if (mastered.isNotEmpty()) store.setEnabled(mastered, false)
+                    if (mastered.isNotEmpty()) pauseQuestionsHandler(store, mastered)
                     report.put("pausedMastered", mastered.size)
                     if (store.countQuestions() < config.optInt("minimum", 30)) {
                         val result = GradingService.generateQuestions(store, JSONObject().put("topic", config.getString("topic"))
@@ -129,7 +150,10 @@ object BankAutomation {
                     }
                 }
                 report.put("ok", true)
-            } catch (_: Exception) { report.put("ok", false).put("message", "自动补题失败，请检查 AI 配置和网络；已有题目保留") }
+            } catch (e: Exception) {
+                Diag.warn("BankAuto", "autoAi failed: ${e.javaClass.simpleName}: ${e.message}")
+                report.put("ok", false).put("message", formatFailureMessage("自动补题失败", "已有题目保留", e))
+            }
             finally { store.set("bank_automation_status", report.toString()); running.set(false) }
         }
     }
@@ -165,6 +189,7 @@ object BankAutomation {
         val sourceId = hash(source.getString("url"))
         val db = store.writableDatabase
         var committed = false
+        var removedIds: Set<String> = emptySet()
         db.beginTransaction()
         try {
             val old = mutableListOf<String>()
@@ -183,13 +208,20 @@ object BankAutomation {
                 q.put("id", id).put("bank", "远程·" + source.getString("name")).put("remoteSource", sourceId)
                 store.upsertQuestion(q)
             }
-            store.deleteQuestions(old.filter { it !in keep })
+            val removed = old.filter { it !in keep }
+            if (removed.isNotEmpty()) {
+                store.deleteQuestions(removed)
+                removedIds = removed.toSet()
+            }
             db.setTransactionSuccessful()
             committed = true
             return items.length()
         } finally {
             db.endTransaction()
-            if (committed) store.pruneMedia()
+            if (committed) {
+                if (removedIds.isNotEmpty()) externalRemovedHandler(removedIds)
+                store.pruneMedia()
+            }
         }
     }
 }

@@ -141,4 +141,15 @@ assert.equal(rt1.modelAnswer,'第一步：构造正方形\n第二步：面积恒
 assert.equal(rt1.rubric,'图形正确 40 分\n推导严密 60 分');
 assert.equal(rt1.enabled,undefined);
 
+// 12. 听力文本（TTS）：中文键名也认；和音频地址同时出现时保留听力文本，设备端不接受两者并存
+const listenItem=normalizeBank([{题目:'听录音，选出正确的答语。',选项:['It is next to the bank.','By bus.'],答案:'A',
+ 听力文本:'Where is the bookstore?',音频地址:'https://example.com/a.mp3',播放次数:3,必须播放:true}]).items[0];
+assert.equal(listenItem.listen,'Where is the bookstore?');
+assert.equal(listenItem.audio,undefined);
+assert.equal(listenItem.listenTimes,3);
+assert.equal(listenItem.listenRequired,true);
+// 语速在 0.7–1.5 之外不带走，免得设备端校验整批失败
+assert.equal(normalizeBank([{题目:'听音选词',选项:['x','y'],答案:'B',listen:'sheep',listenRate:1.1}]).items[0].listenRate,1.1);
+assert.equal(normalizeBank([{题目:'听音选词',选项:['x','y'],答案:'B',listen:'sheep',listenRate:3}]).items[0].listenRate,undefined);
+
 console.log('question-import tests passed');

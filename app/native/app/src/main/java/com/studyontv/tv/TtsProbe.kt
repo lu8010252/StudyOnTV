@@ -61,6 +61,173 @@ object TtsProbe {
         return out
     }
 
+    internal data class ProbeOutcome(val langStatus: Int, val ok: Boolean, val hint: String)
+
+    internal fun evaluateInitStatus(
+        initStatus: Int,
+        engine: String,
+        tag: String,
+        checkLanguage: () -> Int
+    ): ProbeOutcome {
+        if (initStatus != TextToSpeech.SUCCESS) {
+            return ProbeOutcome(
+                STATUS_INIT_FAILED,
+                false,
+                "系统语音引擎没启动起来（status=$initStatus）。到电视的 设置 → 无障碍 → 文字转语音 里检查一下引擎，或改用 DeepSeek 语音"
+            )
+        }
+        val langStatus = try { checkLanguage() } catch (_: Exception) { STATUS_INIT_FAILED }
+        return when {
+            langStatus >= TextToSpeech.LANG_AVAILABLE -> ProbeOutcome(
+                langStatus,
+                true,
+                if (engine.isEmpty()) "本地语音可用" else "本地语音可用（$engine）"
+            )
+            langStatus == TextToSpeech.LANG_MISSING_DATA -> ProbeOutcome(
+                langStatus,
+                false,
+                "引擎已安装（$engine），但缺少 $tag 语言包。可以点「去安装语言包」，或改用 DeepSeek 语音"
+            )
+            langStatus == TextToSpeech.LANG_NOT_SUPPORTED -> ProbeOutcome(
+                langStatus,
+                false,
+                "引擎（$engine）不支持 $tag。可以换一个语音引擎，或改用 DeepSeek 语音"
+            )
+            else -> ProbeOutcome(
+                langStatus,
+                false,
+                "本地语音不可用（langStatus=$langStatus），可以改用 DeepSeek 语音"
+            )
+        }
+    }
+
+    /**
+     * 单次探测的线程安全状态机：
+     * - 结果通过锁内一次性提交（先到者胜出），每次构造独立 JSONObject，杜绝跨线程并发修改；
+     * - 兼容构造期间同步触发 onInit 的 ROM（先记 earlyInitStatus，attachEngine 后立即求值并释放）；
+     * - 保证任意时序（正常/同步回调/超时/超时后迟到回调）下引擎最多且必然 shutdown 一次。
+     */
+    internal class ProbeCoordinator<E : Any>(
+        private val engineName: String,
+        private val languageTag: String,
+        private val checkLanguage: (E) -> Int,
+        private val shutdown: (E) -> Unit
+    ) {
+        private val lock = Any()
+        private val latch = CountDownLatch(1)
+        private var engine: E? = null
+        private var earlyInitStatus: Int? = null
+        private var settled: JSONObject? = null
+        private var shutdownDone = false
+
+        fun isSettled(): Boolean = synchronized(lock) { settled != null }
+
+        private fun buildResult(status: Int, ok: Boolean, hint: String): JSONObject =
+            JSONObject()
+                .put("engine", engineName)
+                .put("language", languageTag)
+                .put("ok", ok)
+                .put("langStatus", status)
+                .put("hint", hint)
+
+        private fun complete(status: Int, ok: Boolean, hint: String): Boolean {
+            val won = synchronized(lock) {
+                if (settled != null) false
+                else {
+                    settled = buildResult(status, ok, hint)
+                    true
+                }
+            }
+            if (won) latch.countDown()
+            return won
+        }
+
+        private fun takeEngineForShutdown(): E? = synchronized(lock) {
+            if (shutdownDone) return null
+            val target = engine ?: return null
+            engine = null
+            shutdownDone = true
+            target
+        }
+
+        private fun shutdownIfPresent() {
+            val target = takeEngineForShutdown() ?: return
+            try { shutdown(target) } catch (_: Exception) { }
+        }
+
+        private fun evaluateAndFinish(target: E, status: Int) {
+            try {
+                val outcome = evaluateInitStatus(status, engineName, languageTag) { checkLanguage(target) }
+                complete(outcome.langStatus, outcome.ok, outcome.hint)
+            } finally {
+                shutdownIfPresent()
+            }
+        }
+
+        fun attachEngine(created: E) {
+            var pendingStatus: Int? = null
+            var shouldShutdown = false
+            synchronized(lock) {
+                engine = created
+                if (settled != null) {
+                    shouldShutdown = true
+                } else if (earlyInitStatus != null) {
+                    pendingStatus = earlyInitStatus
+                    earlyInitStatus = null
+                }
+            }
+            when {
+                shouldShutdown -> shutdownIfPresent()
+                pendingStatus != null -> evaluateAndFinish(created, pendingStatus!!)
+            }
+        }
+
+        fun onInit(status: Int) {
+            var attached: E? = null
+            var alreadySettled = false
+            synchronized(lock) {
+                if (settled != null) {
+                    alreadySettled = true
+                } else if (engine == null) {
+                    earlyInitStatus = status
+                    return
+                } else {
+                    attached = engine
+                }
+            }
+            if (alreadySettled) {
+                shutdownIfPresent()
+                return
+            }
+            evaluateAndFinish(attached!!, status)
+        }
+
+        fun onCreateFailed() {
+            complete(STATUS_INIT_FAILED, false, "这台设备没有可用的系统语音引擎，可以改用 DeepSeek 语音")
+            shutdownIfPresent()
+        }
+
+        fun awaitResult(timeoutMs: Long, postCleanup: (() -> Unit) -> Unit): Pair<JSONObject, Boolean> {
+            val finished = try {
+                latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                false
+            }
+            val timedOut = if (!finished) {
+                val wonTimeout = complete(STATUS_INIT_FAILED, false, "检测超时：语音引擎没有响应，可以改用 DeepSeek 语音")
+                if (wonTimeout) {
+                    postCleanup { shutdownIfPresent() }
+                }
+                wonTimeout
+            } else {
+                false
+            }
+            val snapshot = synchronized(lock) { settled!! }
+            return JSONObject(snapshot.toString()) to timedOut
+        }
+    }
+
     /**
      * 探测默认引擎能不能朗读 `language`。会阻塞最多 `timeoutMs`，只能在后台线程调用。
      * 返回 {ok, engine, language, langStatus, hint}，hint 直接给家长看。
@@ -69,50 +236,25 @@ object TtsProbe {
         val app = context.applicationContext
         val engine = defaultEngine(app)
         val tag = SpeechReader.normalizeLanguageTag(language)
-        val result = JSONObject().put("engine", engine).put("language", tag).put("ok", false)
-            .put("langStatus", STATUS_INIT_FAILED)
-        val latch = CountDownLatch(1)
-        fun finish(status: Int, ok: Boolean, hint: String) {
-            result.put("ok", ok).put("langStatus", status).put("hint", hint)
-            latch.countDown()
-        }
-        Handler(Looper.getMainLooper()).post {
-            var tts: TextToSpeech? = null
+        val main = Handler(Looper.getMainLooper())
+        val coordinator = ProbeCoordinator<TextToSpeech>(
+            engineName = engine,
+            languageTag = tag,
+            checkLanguage = { tts -> tts.setLanguage(Locale.forLanguageTag(tag)) },
+            shutdown = { tts -> tts.shutdown() }
+        )
+        main.post {
+            if (coordinator.isSettled()) return@post
             try {
-                tts = TextToSpeech(app) { status ->
-                    val engineRef = tts
-                    try {
-                        if (status != TextToSpeech.SUCCESS || engineRef == null) {
-                            finish(STATUS_INIT_FAILED, false,
-                                "系统语音引擎没启动起来（status=$status）。到电视的 设置 → 无障碍 → 文字转语音 里检查一下引擎，或改用 DeepSeek 语音")
-                        } else {
-                            val langStatus = try { engineRef.setLanguage(Locale.forLanguageTag(tag)) }
-                            catch (_: Exception) { STATUS_INIT_FAILED }
-                            when {
-                                langStatus >= TextToSpeech.LANG_AVAILABLE -> finish(langStatus, true,
-                                    if (engine.isEmpty()) "本地语音可用" else "本地语音可用（$engine）")
-                                langStatus == TextToSpeech.LANG_MISSING_DATA -> finish(langStatus, false,
-                                    "引擎已安装（$engine），但缺少 $tag 语言包。可以点「去安装语言包」，或改用 DeepSeek 语音")
-                                langStatus == TextToSpeech.LANG_NOT_SUPPORTED -> finish(langStatus, false,
-                                    "引擎（$engine）不支持 $tag。可以换一个语音引擎，或改用 DeepSeek 语音")
-                                else -> finish(langStatus, false,
-                                    "本地语音不可用（langStatus=$langStatus），可以改用 DeepSeek 语音")
-                            }
-                        }
-                    } finally {
-                        try { engineRef?.shutdown() } catch (_: Exception) { }
-                        tts = null
-                    }
-                }
+                val created = TextToSpeech(app) { status -> coordinator.onInit(status) }
+                coordinator.attachEngine(created)
             } catch (e: Exception) {
                 Diag.warn("Speech", "tts probe create failed ${e.javaClass.simpleName}: ${e.message.orEmpty().take(80)}")
-                try { tts?.shutdown() } catch (_: Exception) { }
-                finish(STATUS_INIT_FAILED, false, "这台设备没有可用的系统语音引擎，可以改用 DeepSeek 语音")
+                coordinator.onCreateFailed()
             }
         }
-        val done = try { latch.await(timeoutMs, TimeUnit.MILLISECONDS) } catch (_: InterruptedException) { false }
-        if (!done) finish(STATUS_INIT_FAILED, false, "检测超时：语音引擎没有响应，可以改用 DeepSeek 语音")
-        Diag.info("Speech", "tts probe engine=${result.optString("engine")} lang=$tag ok=${result.optBoolean("ok")} status=${result.optInt("langStatus")} timeout=${!done}")
+        val (result, timedOut) = coordinator.awaitResult(timeoutMs) { cleanup -> main.post(cleanup) }
+        Diag.info("Speech", "tts probe engine=${result.optString("engine")} lang=$tag ok=${result.optBoolean("ok")} status=${result.optInt("langStatus")} timeout=$timedOut")
         return result
     }
 

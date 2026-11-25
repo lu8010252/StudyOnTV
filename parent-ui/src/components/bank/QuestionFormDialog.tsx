@@ -159,10 +159,19 @@ export default function QuestionFormDialog({ initial, meta, onClose, onSaved }: 
       image: images[0] || '',
       images,
       audio: f.audio.trim(),
+      listen: String(f.listen || '').trim(),
       language: f.language,
     };
     if (f.enabled === false) q.enabled = false;
     if (!q.q) return toast.error('请填写题干');
+    if (q.listen && q.audio) return toast.error('听力文本和音频地址只能二选一');
+    if (q.listen.length > 1000) return toast.error('听力文本不能超过 1000 字');
+    if (q.listen) {
+      q.listenTimes = Math.min(5, Math.max(1, Number(f.listenTimes) || 5));
+      q.listenRequired = !!f.listenRequired;
+      const listenRate = Number(f.listenRate);
+      if (listenRate >= 0.7 && listenRate <= 1.5) q.listenRate = listenRate;
+    }
     if (f.id) q.id = f.id;
     if (f.type === 'subjective') {
       q.modelAnswer = f.modelAnswer;
@@ -445,6 +454,49 @@ export default function QuestionFormDialog({ initial, meta, onClose, onSaved }: 
               <Field label="音频地址（可选）">
                 <Input value={form.audio} onChange={e => field('audio', e.target.value)} placeholder="https://" />
               </Field>
+            </FieldGroup>
+
+            {/* 听力题：这段文字只交给朗读，屏幕上不显示，所以听力和文字可以脱钩，不需要音频文件 */}
+            <FieldGroup className="gap-4 rounded-lg border p-4">
+              <Field label="听力文本（可选，只朗读不显示）">
+                <Textarea
+                  rows={2}
+                  value={form.listen || ''}
+                  onChange={e => field('listen', e.target.value)}
+                  placeholder="例如 The school bus leaves at a quarter past seven."
+                />
+              </Field>
+              <FieldDescription>
+                填了听力文本就不要再填音频地址（两者只能二选一）。播放时用设备朗读这段文字，屏幕上看不到它——题干照常写「听录音，选出正确答案。」，选项照常写答案候选。英语听力题记得把上面的「朗读 / 语音作答语言」选成英语。
+              </FieldDescription>
+              {form.listen ? (
+                <FieldGroup className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                  <Field label="允许播放次数">
+                    <ChoiceSelect
+                      label="允许播放次数"
+                      value={String(form.listenTimes || '5')}
+                      onChange={v => field('listenTimes', v)}
+                      options={[['1', '1 次'], ['2', '2 次'], ['3', '3 次'], ['4', '4 次'], ['5', '5 次（默认）']]}
+                    />
+                  </Field>
+                  <Field label="作答前必须播放">
+                    <ChoiceSelect
+                      label="作答前必须播放"
+                      value={form.listenRequired ? 'yes' : 'no'}
+                      onChange={v => field('listenRequired', v === 'yes')}
+                      options={[['no', '不限制'], ['yes', '必须听过才能提交']]}
+                    />
+                  </Field>
+                  <Field label="单题语速">
+                    <ChoiceSelect
+                      label="单题语速"
+                      value={String(form.listenRate ?? '')}
+                      onChange={v => field('listenRate', v)}
+                      options={[['', '跟随朗读设置'], ['0.8', '0.8× 慢'], ['0.9', '0.9×'], ['1', '1× 正常'], ['1.1', '1.1×'], ['1.2', '1.2× 快']]}
+                    />
+                  </Field>
+                </FieldGroup>
+              ) : null}
             </FieldGroup>
 
             <FieldGroup className="grid grid-cols-1 gap-4 sm:grid-cols-2">

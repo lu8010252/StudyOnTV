@@ -28,7 +28,8 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent } from '@/components/ui/card';
 import { api } from './api';
-import { defaults, ruleSchema, zoneOptions, type Rules } from './schema';
+import { ClearExtraPoolButton } from './components/ClearExtraPoolButton';
+import { normalizeRules, ruleSchema, zoneOptions, type Rules } from './schema';
 import TimePoints from './TimePoints';
 import WatchWhitelistField from './WatchWhitelistField';
 import WeekSchedule from './WeekSchedule';
@@ -124,6 +125,7 @@ const fieldLabels: Record<string, string> = {
   videoMinutes: '每次视频学习分钟',
   dailyFreeMinutes: '每日免费时长',
   bootFreeMinutes: '每次开机或唤醒免费时长',
+  bootFreeIntervalMinutes: '开机间隔',
   dailyMinutes: '每日使用上限',
   questionsPerRound: '题量',
   roundsPerDay: '每天最多解锁组数',
@@ -140,7 +142,8 @@ const fieldLabels: Record<string, string> = {
   roundsLimitEnabled: '启用每日组数上限',
   restEnabled: '强制休息',
   trafficAssistEnabled: '按流量判断是否在播放',
-  blockSettingsDuringControl: '锁定时不允许进系统设置',
+  backgroundAnchorEnabled: '保留后台空窗口',
+  blockSettingsDuringControl: '管控期间不允许进系统设置与应用管理',
   allDay: '全天管控',
   childSelectLevel: '孩子选择年级',
   difficultyRewardEnabled: '按题目星级奖励',
@@ -283,12 +286,27 @@ export function Panel({
   );
 }
 
+const parseVideoLines = (text: string) =>
+  text
+    .split('\n')
+    .map(s => s.trim())
+    .filter(Boolean);
+
 export default function RulesPage({ state, sessionId }: { state: any; sessionId: number }) {
-  const initial = { ...defaults, ...(state?.config || {}) };
+  const initial = normalizeRules(state?.config);
   const form = useForm<Rules>({ resolver: zodResolver(ruleSchema), defaultValues: initial });
   const c = form.watch();
+  const [videoText, setVideoText] = useState(() => (initial.educationalVideos || []).join('\n'));
+  const [videoFocused, setVideoFocused] = useState(false);
+  const videosKey = (c.educationalVideos || []).join('\n');
+  useEffect(() => {
+    if (!videoFocused) setVideoText(videosKey);
+  }, [videosKey, videoFocused]);
   const client = useQueryClient();
   const [tab, setTab] = useState<'task' | 'time' | 'scope' | 'more'>('task');
+  const [gradeSubjectMode, setGradeSubjectMode] = useState(
+    () => Object.keys(initial.gradeSubjects || {}).length > 0,
+  );
   const bankMeta = useQuery({
     queryKey: ['bank-meta', sessionId],
     queryFn: () => api('/api/questions/meta'),
@@ -305,9 +323,22 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
     const list = Array.isArray((c as any)[key]) ? (c as any)[key] : [];
     change(key, list.includes(value) ? list.filter((v: string) => v !== value) : [...list, value]);
   };
+  const configSnapshot = state?.config ? JSON.stringify(state.config) : '';
+  const activeChildId = state?.child?.id ?? '';
+  const lastChildId = useRef(activeChildId);
   useEffect(() => {
-    if (state?.config && !form.formState.isDirty) form.reset({ ...defaults, ...state.config });
-  }, [state?.config?.version]);
+    if (state?.config && !form.formState.isDirty) {
+      const normalized = normalizeRules(state.config);
+      form.reset(normalized);
+      const hasRemote = Object.keys(normalized.gradeSubjects || {}).length > 0;
+      if (lastChildId.current !== activeChildId) {
+        lastChildId.current = activeChildId;
+        setGradeSubjectMode(hasRemote);
+      } else if (hasRemote) {
+        setGradeSubjectMode(true);
+      }
+    }
+  }, [activeChildId, configSnapshot]);
   // 失败后记住失败时的值，避免 isPending 变化触发同一个值反复自动重试（网络断开时每 0.8 秒弹一次错误）。
   const failedSignature = useRef('');
   const validationToast = useRef('');
@@ -316,7 +347,7 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
     onSuccess: (r, body) => {
       failedSignature.current = '';
       if (JSON.stringify(form.getValues()) === JSON.stringify(body)) {
-        form.reset({ ...defaults, ...r.config });
+        form.reset(normalizeRules(r.config));
       }
       client.invalidateQueries({ queryKey: ['state', sessionId] });
     },
@@ -386,6 +417,45 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
         : 'saved';
   const statusNode = <SaveStatus state={saveState} />;
   const supervisionEnabled = c.supervisionEnabled !== false;
+
+  const gradeSubjects = (c.gradeSubjects || {}) as Record<string, string[]>;
+  const gradeSubjectEntries = Object.entries(gradeSubjects);
+  const allScopeLevels = Array.from(new Set([...scopeLevels, ...Object.keys(gradeSubjects)]));
+  const gradeSubjectSummary = gradeSubjectEntries.length
+    ? `已配置 ${gradeSubjectEntries.length} 个年级：${gradeSubjectEntries
+        .map(([g, subs]) => `${g}(${subs.length ? subs.join('、') : '全部科目'})`)
+        .join('、')}`
+    : '暂未勾选年级；请勾选下方年级，或点击「从当前年级×科目一键导入」';
+
+  const toggleGradeInMap = (level: string) => {
+    const next = { ...gradeSubjects };
+    if (level in next) delete next[level];
+    else next[level] = [];
+    change('gradeSubjects', next);
+  };
+
+  const toggleSubjectInGrade = (level: string, subject: string) => {
+    const current = Array.isArray(gradeSubjects[level]) ? gradeSubjects[level] : [];
+    const nextSubs = current.includes(subject)
+      ? current.filter(s => s !== subject)
+      : [...current, subject];
+    change('gradeSubjects', { ...gradeSubjects, [level]: nextSubs });
+  };
+
+  const importFromFlatScope = () => {
+    const targetLevels = (c.quizLevels?.length ? c.quizLevels : scopeLevels).filter(Boolean);
+    if (!targetLevels.length) {
+      toast.error('题库里还没有年级可导入');
+      return;
+    }
+    const targetSubjects = (c.quizSubjects || []).filter(Boolean);
+    const next: Record<string, string[]> = {};
+    targetLevels.forEach(lvl => {
+      next[lvl] = [...targetSubjects];
+    });
+    change('gradeSubjects', next);
+    toast.success(`已从当前设置导入 ${targetLevels.length} 个年级`);
+  };
 
   const rewardAndQuotaFields = (
     <FieldGroup className={fieldGroup}>
@@ -517,7 +587,7 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
       </Card>
 
       <Tabs value={tab} onValueChange={value => setTab(value as typeof tab)} className="gap-5">
-        <TabsList className="w-full gap-1">
+        <TabsList className="flex w-full max-w-full flex-nowrap justify-start gap-1 overflow-x-auto sm:justify-center">
           {(
             [
               ['task', '任务与背诵'],
@@ -526,7 +596,12 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
               ['time', supervisionEnabled ? '时间计划' : '时间管控（未启用）'],
             ] as const
           ).map(([id, label]) => (
-            <TabsTrigger key={id} type="button" value={id}>
+            <TabsTrigger
+              key={id}
+              type="button"
+              value={id}
+              className="shrink-0 whitespace-nowrap max-[420px]:px-2 max-[420px]:text-xs"
+            >
               {label}
             </TabsTrigger>
           ))}
@@ -540,7 +615,7 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
                   <FieldContent>
                     <FieldTitle>玩法</FieldTitle>
                     <FieldDescription className="text-xs leading-5">
-                      按组闯关：答完一组结算；连续答对：连对 N 题达标；答对指定题数：累计答对 N 题达标
+                      按组闯关：答完一组结算；连续答对：连对 N 题达标；自由练习：不计解锁，随时刷题；答对指定题数：累计答对 N 题达标
                     </FieldDescription>
                   </FieldContent>
                   <Controller
@@ -654,16 +729,17 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
                           <Textarea
                             aria-label="公益视频直链"
                             rows={4}
-                            value={c.educationalVideos.join('\n')}
-                            onChange={e =>
-                              change(
-                                'educationalVideos',
-                                e.target.value
-                                  .split('\n')
-                                  .map(s => s.trim())
-                                  .filter(Boolean),
-                              )
-                            }
+                            value={videoText}
+                            onFocus={() => setVideoFocused(true)}
+                            onChange={e => {
+                              const raw = e.target.value;
+                              setVideoText(raw);
+                              change('educationalVideos', parseVideoLines(raw));
+                            }}
+                            onBlur={e => {
+                              setVideoFocused(false);
+                              setVideoText(parseVideoLines(e.target.value).join('\n'));
+                            }}
                           />
                         </Field>
                       </>
@@ -691,6 +767,18 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
                           {number('bootFreeMinutes', 0, 120)}
                         </Field>
                       </>
+                    )}
+
+                    {c.bootFreeMinutes > 0 && (
+                      <Field orientation="responsive" className="py-3.5">
+                        <FieldContent>
+                          <FieldTitle>开机间隔（分钟）</FieldTitle>
+                          <FieldDescription className="text-xs leading-5">
+                            开机或唤醒时，距上次发放至少这么久才会再次发放；0 为不限
+                          </FieldDescription>
+                        </FieldContent>
+                        {number('bootFreeIntervalMinutes', 0, 1440)}
+                      </Field>
                     )}
 
                     {c.playMode === 'round' && (
@@ -808,51 +896,164 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
                 </Field>
                 <Field orientation="responsive" className="py-3.5">
                   <FieldContent>
-                    <FieldTitle>科目</FieldTitle>
-                    <FieldDescription className="text-xs leading-5">只从选中的科目抽题</FieldDescription>
+                    <FieldTitle>按年级分别设置科目（主从组合）</FieldTitle>
+                    <FieldDescription className="text-xs leading-5">
+                      开启后可为不同年级指定不同科目（例如：三年级只练英语，四年级练语文/数学/英语）；关闭则恢复扁平多选
+                    </FieldDescription>
                   </FieldContent>
-                  <div className="flex min-w-0 flex-wrap gap-2">
-                    {scopeSubjects.length ? (
-                      scopeSubjects.map(v => (
-                        <FieldLabel
-                          key={v}
-                          className="cursor-pointer rounded-lg border border-border/70 px-3 py-2 font-normal transition-colors hover:bg-muted/40 has-data-[state=checked]:border-primary/40 has-data-[state=checked]:bg-primary/5"
-                        >
-                          <Checkbox
-                            checked={inScope('quizSubjects', v)}
-                            onCheckedChange={() => toggleScope('quizSubjects', v)}
-                          />
-                          <span>{v}</span>
-                        </FieldLabel>
-                      ))
-                    ) : (
-                      <FieldDescription className="text-xs">题库里还没有科目</FieldDescription>
-                    )}
-                  </div>
+                  <Switch
+                    aria-label="按年级分别设置科目"
+                    className="w-8! shrink-0"
+                    checked={gradeSubjectMode}
+                    onCheckedChange={checked => {
+                      setGradeSubjectMode(checked);
+                      if (!checked && Object.keys(gradeSubjects).length > 0) {
+                        change('gradeSubjects', {});
+                      }
+                    }}
+                  />
                 </Field>
-                <Field orientation="responsive" className="py-3.5">
-                  <FieldContent>
-                    <FieldTitle>年级</FieldTitle>
-                  </FieldContent>
-                  <div className="flex min-w-0 flex-wrap gap-2">
-                    {scopeLevels.length ? (
-                      scopeLevels.map(v => (
-                        <FieldLabel
-                          key={v}
-                          className="cursor-pointer rounded-lg border border-border/70 px-3 py-2 font-normal transition-colors hover:bg-muted/40 has-data-[state=checked]:border-primary/40 has-data-[state=checked]:bg-primary/5"
-                        >
-                          <Checkbox
-                            checked={inScope('quizLevels', v)}
-                            onCheckedChange={() => toggleScope('quizLevels', v)}
-                          />
-                          <span>{v}</span>
-                        </FieldLabel>
-                      ))
-                    ) : (
-                      <FieldDescription className="text-xs">题库里还没有年级</FieldDescription>
-                    )}
-                  </div>
-                </Field>
+                {gradeSubjectMode ? (
+                  <Field className="py-3.5">
+                    <div className="space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-muted/35 px-3 py-2">
+                        <p className="min-w-0 flex-1 text-xs leading-5 text-muted-foreground">
+                          {gradeSubjectSummary}
+                        </p>
+                        {(scopeLevels.length > 0 || (c.quizLevels?.length || 0) > 0) && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-7 px-2 text-xs"
+                            onClick={importFromFlatScope}
+                          >
+                            从当前年级×科目一键导入
+                          </Button>
+                        )}
+                      </div>
+                      {allScopeLevels.length ? (
+                        <div className="space-y-2">
+                          {allScopeLevels.map(lvl => {
+                            const enabled = lvl in gradeSubjects;
+                            const chosenSubs = Array.isArray(gradeSubjects[lvl])
+                              ? gradeSubjects[lvl]
+                              : [];
+                            const levelSubjects = Array.from(
+                              new Set([...scopeSubjects, ...chosenSubs]),
+                            );
+                            return (
+                              <div
+                                key={lvl}
+                                className={`rounded-lg border p-3 transition-colors ${
+                                  enabled
+                                    ? 'border-primary/40 bg-primary/[0.03]'
+                                    : 'border-border/70 bg-background'
+                                }`}
+                              >
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <FieldLabel className="cursor-pointer font-medium">
+                                    <Checkbox
+                                      checked={enabled}
+                                      onCheckedChange={() => toggleGradeInMap(lvl)}
+                                    />
+                                    <span>{lvl}</span>
+                                  </FieldLabel>
+                                  {enabled && (
+                                    <Badge variant="secondary" className="text-[11px] font-normal">
+                                      {chosenSubs.length
+                                        ? `已选 ${chosenSubs.length} 科`
+                                        : '全部科目'}
+                                    </Badge>
+                                  )}
+                                </div>
+                                {enabled && (
+                                  <div className="mt-2.5 space-y-1.5 border-t border-border/50 pt-2.5">
+                                    <p className="text-[11px] text-muted-foreground">
+                                      选择该年级要练习的科目（不勾选表示该年级全部科目）：
+                                    </p>
+                                    {levelSubjects.length ? (
+                                      <div className="flex flex-wrap gap-2">
+                                        {levelSubjects.map(sub => (
+                                          <FieldLabel
+                                            key={sub}
+                                            className="cursor-pointer rounded-md border border-border/70 bg-background px-2.5 py-1.5 text-xs font-normal transition-colors hover:bg-muted/40 has-data-[state=checked]:border-primary/40 has-data-[state=checked]:bg-primary/10"
+                                          >
+                                            <Checkbox
+                                              checked={chosenSubs.includes(sub)}
+                                              onCheckedChange={() => toggleSubjectInGrade(lvl, sub)}
+                                            />
+                                            <span>{sub}</span>
+                                          </FieldLabel>
+                                        ))}
+                                      </div>
+                                    ) : (
+                                      <p className="text-xs text-muted-foreground">
+                                        题库里还没有科目，将练习该年级全部题目
+                                      </p>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <FieldDescription className="text-xs">题库里还没有年级</FieldDescription>
+                      )}
+                    </div>
+                  </Field>
+                ) : (
+                  <>
+                    <Field orientation="responsive" className="py-3.5">
+                      <FieldContent>
+                        <FieldTitle>科目</FieldTitle>
+                        <FieldDescription className="text-xs leading-5">只从选中的科目抽题</FieldDescription>
+                      </FieldContent>
+                      <div className="flex min-w-0 flex-wrap gap-2">
+                        {scopeSubjects.length ? (
+                          scopeSubjects.map(v => (
+                            <FieldLabel
+                              key={v}
+                              className="cursor-pointer rounded-lg border border-border/70 px-3 py-2 font-normal transition-colors hover:bg-muted/40 has-data-[state=checked]:border-primary/40 has-data-[state=checked]:bg-primary/5"
+                            >
+                              <Checkbox
+                                checked={inScope('quizSubjects', v)}
+                                onCheckedChange={() => toggleScope('quizSubjects', v)}
+                              />
+                              <span>{v}</span>
+                            </FieldLabel>
+                          ))
+                        ) : (
+                          <FieldDescription className="text-xs">题库里还没有科目</FieldDescription>
+                        )}
+                      </div>
+                    </Field>
+                    <Field orientation="responsive" className="py-3.5">
+                      <FieldContent>
+                        <FieldTitle>年级</FieldTitle>
+                      </FieldContent>
+                      <div className="flex min-w-0 flex-wrap gap-2">
+                        {scopeLevels.length ? (
+                          scopeLevels.map(v => (
+                            <FieldLabel
+                              key={v}
+                              className="cursor-pointer rounded-lg border border-border/70 px-3 py-2 font-normal transition-colors hover:bg-muted/40 has-data-[state=checked]:border-primary/40 has-data-[state=checked]:bg-primary/5"
+                            >
+                              <Checkbox
+                                checked={inScope('quizLevels', v)}
+                                onCheckedChange={() => toggleScope('quizLevels', v)}
+                              />
+                              <span>{v}</span>
+                            </FieldLabel>
+                          ))
+                        ) : (
+                          <FieldDescription className="text-xs">题库里还没有年级</FieldDescription>
+                        )}
+                      </div>
+                    </Field>
+                  </>
+                )}
                 <Field orientation="responsive" className="py-3.5">
                   <FieldContent>
                     <FieldTitle>没做过的题先出</FieldTitle>
@@ -929,6 +1130,24 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
                   </Field>
                   <Field orientation="responsive" className="py-3.5">
                     <FieldContent>
+                      <FieldTitle>全天管控</FieldTitle>
+                      <FieldDescription className="text-xs leading-5">
+                        开启后全天按时间规则执行；关闭后可在下方每周时段表自定义
+                      </FieldDescription>
+                    </FieldContent>
+                    {toggle('allDay')}
+                  </Field>
+                  {!c.allDay && (
+                    <WeekSchedule
+                      value={c.weekSlots}
+                      onChange={v => change('weekSlots', v)}
+                      holidayMode={c.holidayMode || 'sunday'}
+                      onHolidayMode={v => change('holidayMode', v)}
+                      scheduleMode={c.scheduleMode || 'allow'}
+                    />
+                  )}
+                  <Field orientation="responsive" className="py-3.5">
+                    <FieldContent>
                       <FieldTitle>强制休息</FieldTitle>
                       <FieldDescription className="text-xs leading-5">
                         关屏、答题不计时，重启不能跳过
@@ -954,30 +1173,12 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
                   )}
                   <Field orientation="responsive" className="py-3.5">
                     <FieldContent>
-                      <FieldTitle>按流量判断是否在播放</FieldTitle>
+                      <FieldTitle>管控期间不允许进系统设置与应用管理</FieldTitle>
                       <FieldDescription className="text-xs leading-5">
-                        有的电视识别不到正在播放的视频。打开后，只要有声音、同时网络有明显下载，就当作在看视频
-                      </FieldDescription>
-                    </FieldContent>
-                    {toggle('trafficAssistEnabled')}
-                  </Field>
-                  <Field orientation="responsive" className="py-3.5">
-                    <FieldContent>
-                      <FieldTitle>锁定时不允许进系统设置</FieldTitle>
-                      <FieldDescription className="text-xs leading-5">
-                        锁定期间打不开系统设置；需要开启无障碍权限
+                        开启后（默认开启），管控、可用时长、临时解锁及自由时段均拦截系统设置与应用管理，防止从设置卸载；家长可在拦截页输管理密码临时进入 2 分钟。需开启无障碍或使用情况访问权限
                       </FieldDescription>
                     </FieldContent>
                     {toggle('blockSettingsDuringControl')}
-                  </Field>
-                  <Field orientation="responsive" className="py-3.5">
-                    <FieldContent>
-                      <FieldTitle>强制使用全屏学习页</FieldTitle>
-                      <FieldDescription className="text-xs leading-5">
-                        适合悬浮窗被视频遮挡的电视（如海信 VIDAA）
-                      </FieldDescription>
-                    </FieldContent>
-                    {toggle('forceFullscreenGate')}
                   </Field>
                   <Field orientation="responsive" className="py-3.5">
                     <FieldContent>
@@ -994,6 +1195,14 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
                       <FieldDescription className="text-xs leading-5">
                         这些应用在前台时不扣观看时长、不弹题，适合系统屏保、网课 App。最多 100 个。
                       </FieldDescription>
+                      {!!(c.watchWhitelist && c.watchWhitelist.length > 0) &&
+                        device.data?.monitor &&
+                        !device.data.monitor.accessibility &&
+                        !device.data.monitor.usage && (
+                          <p className="mt-1.5 text-xs leading-5 text-amber-600 dark:text-amber-400">
+                            ⚠ 当前设备未开启「使用情况访问」和「无障碍服务」，系统无法识别正在运行的应用，白名单暂不会生效；请到「设置 → 设备」开启其中任意一项。
+                          </p>
+                        )}
                     </FieldContent>
                     <Controller
                       name="watchWhitelist"
@@ -1006,39 +1215,50 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
                       )}
                     />
                   </Field>
-                  <Field orientation="responsive" className="py-3.5">
-                    <FieldContent>
-                      <FieldTitle>时区</FieldTitle>
-                      <FieldDescription className="text-xs leading-5">
-                        可用时段、全天可用和「今天」的重置都按这个时区算。
-                        {!c.timezone && device.data?.timezone
-                          ? `设备当前：${device.data.timezone}`
-                          : '人在国外或设备时间固定在国内时区时改这里。'}
-                      </FieldDescription>
-                    </FieldContent>
-                    <Choice
-                      value={c.timezone || 'device'}
-                      onChange={v => change('timezone', v === 'device' ? '' : v)}
-                      options={zoneChoices}
-                      label="时区"
-                    />
-                  </Field>
-                  <Field orientation="responsive" className="py-3.5">
-                    <FieldContent>
-                      <FieldTitle>全天管控</FieldTitle>
-                      <FieldDescription className="text-xs leading-5">忽略上面的时段设置</FieldDescription>
-                    </FieldContent>
-                    {toggle('allDay')}
-                  </Field>
-                  {!c.allDay && (
-                    <WeekSchedule
-                      value={c.weekSlots}
-                      onChange={v => change('weekSlots', v)}
-                      holidayMode={c.holidayMode || 'sunday'}
-                      onHolidayMode={v => change('holidayMode', v)}
-                    />
-                  )}
                 </FieldGroup>
+                <details className="group border-t border-border/60">
+                  <summary className="flex cursor-pointer list-none items-center gap-1.5 py-3.5 text-xs text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
+                    <ChevronDown className="size-3 transition-transform group-open:rotate-180" />
+                    高级排障选项（流量判断、防遮挡、时区等）
+                  </summary>
+                  <FieldGroup className={fieldGroup}>
+                    <Field orientation="responsive" className="py-3.5">
+                      <FieldContent>
+                        <FieldTitle>按流量判断是否在播放</FieldTitle>
+                        <FieldDescription className="text-xs leading-5">
+                          有的电视识别不到正在播放的视频。打开后，只要有声音、同时网络有明显下载，就当作在看视频
+                        </FieldDescription>
+                      </FieldContent>
+                      {toggle('trafficAssistEnabled')}
+                    </Field>
+                    <Field orientation="responsive" className="py-3.5">
+                      <FieldContent>
+                        <FieldTitle>强制使用全屏学习页</FieldTitle>
+                        <FieldDescription className="text-xs leading-5">
+                          适合悬浮窗被视频遮挡的电视（如海信 VIDAA）
+                        </FieldDescription>
+                      </FieldContent>
+                      {toggle('forceFullscreenGate')}
+                    </Field>
+                    <Field orientation="responsive" className="py-3.5">
+                      <FieldContent>
+                        <FieldTitle>时区</FieldTitle>
+                        <FieldDescription className="text-xs leading-5">
+                          可用时段、全天可用和「今天」的重置都按这个时区算。
+                          {!c.timezone && device.data?.timezone
+                            ? `设备当前：${device.data.timezone}`
+                            : '人在国外或设备时间固定在国内时区时改这里。'}
+                        </FieldDescription>
+                      </FieldContent>
+                      <Choice
+                        value={c.timezone || 'device'}
+                        onChange={v => change('timezone', v === 'device' ? '' : v)}
+                        options={zoneChoices}
+                        label="时区"
+                      />
+                    </Field>
+                  </FieldGroup>
+                </details>
               </FieldSet>
             </Panel>
             <Panel
@@ -1133,6 +1353,18 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
                     </Field>
                   </>
                 )}
+                <Field orientation="responsive" className="py-3.5">
+                  <FieldContent>
+                    <FieldTitle>当前加练池</FieldTitle>
+                    <FieldDescription className="text-xs leading-5">
+                      当前待完成加练 {Number(state?.learning?.extraPool) || 0} 题；积压过多时可一键清空，不会删除原题库与错题记录
+                    </FieldDescription>
+                  </FieldContent>
+                  <ClearExtraPoolButton
+                    sessionId={sessionId}
+                    count={Number(state?.learning?.extraPool) || 0}
+                  />
+                </Field>
               </FieldGroup>
             </FieldSet>
           </Panel>

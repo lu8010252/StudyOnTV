@@ -13,6 +13,12 @@ object WavAudio {
         val frames: Long get() = if (frameBytes > 0) data.size.toLong() / frameBytes else 0
     }
 
+    /** WAVE_FORMAT_EXTENSIBLE (0xFFFE) 对应的标准线性 PCM SubFormat GUID */
+    private val KSDATAFORMAT_SUBTYPE_PCM = byteArrayOf(
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00,
+        0x80.toByte(), 0x00, 0x00, 0xAA.toByte(), 0x00, 0x38, 0x9B.toByte(), 0x71
+    )
+
     fun isWave(bytes: ByteArray): Boolean =
         bytes.size >= 12 && tag(bytes, 0) == "RIFF" && tag(bytes, 8) == "WAVE"
 
@@ -23,29 +29,52 @@ object WavAudio {
         var rate = 0
         var channels = 0
         var bits = 0
-        var format = 0
+        var isPcmFormat = false
         while (position + 8 <= bytes.size) {
             val id = tag(bytes, position)
-            val size = le32(bytes, position + 4)
+            val sizeUnsigned = le32(bytes, position + 4).toLong() and 0xFFFFFFFFL
             val body = position + 8
-            if (size <= 0 || body + size > bytes.size) break
-            when (id) {
-                "fmt " -> if (size >= 16) {
-                    format = le16(bytes, body)
-                    channels = le16(bytes, body + 2)
-                    rate = le32(bytes, body + 4)
-                    bits = le16(bytes, body + 14)
+            if (id == "data") {
+                if (!isPcmFormat) return null
+                if (channels !in 1..2 || bits != 16 || rate <= 0) return null
+                val available = (bytes.size - body).coerceAtLeast(0)
+                if (available <= 0) return null
+                // #174：DeepSeek 流式 WAV 的 RIFF/data chunk size 为 0xFFFFFFFF（哨兵值）或大于实际长度，
+                // 此时读到字节流末尾并按采样帧对齐即可，不再提前 break 返回 null。
+                val rawLen = if (sizeUnsigned == 0L || sizeUnsigned == 0xFFFFFFFFL || body.toLong() + sizeUnsigned > bytes.size.toLong()) {
+                    available
+                } else {
+                    sizeUnsigned.toInt()
                 }
-                "data" -> {
-                    // 1 = PCM；0xFFFE = WAVE_FORMAT_EXTENSIBLE（子格式通常也是 PCM）
-                    if (format != 1 && format != 0xFFFE) return null
-                    if (channels !in 1..2 || bits != 16 || rate <= 0) return null
-                    return Pcm(rate, channels, bits, bytes.copyOfRange(body, body + size))
+                val frameBytes = channels * bits / 8
+                val alignedLen = if (frameBytes > 0) (rawLen / frameBytes) * frameBytes else rawLen
+                if (alignedLen <= 0) return null
+                return Pcm(rate, channels, bits, bytes.copyOfRange(body, body + alignedLen))
+            }
+            if (sizeUnsigned <= 0L || body.toLong() + sizeUnsigned > bytes.size.toLong()) break
+            val size = sizeUnsigned.toInt()
+            if (id == "fmt " && size >= 16) {
+                val format = le16(bytes, body)
+                channels = le16(bytes, body + 2)
+                rate = le32(bytes, body + 4)
+                bits = le16(bytes, body + 14)
+                isPcmFormat = when (format) {
+                    1 -> true
+                    0xFFFE -> size >= 40 && matchesGuid(bytes, body + 24, KSDATAFORMAT_SUBTYPE_PCM)
+                    else -> false
                 }
             }
             position = body + size + (size and 1)
         }
         return null
+    }
+
+    private fun matchesGuid(bytes: ByteArray, offset: Int, expected: ByteArray): Boolean {
+        if (offset < 0 || offset + expected.size > bytes.size) return false
+        for (i in expected.indices) {
+            if (bytes[offset + i] != expected[i]) return false
+        }
+        return true
     }
 
     private fun tag(bytes: ByteArray, offset: Int): String =

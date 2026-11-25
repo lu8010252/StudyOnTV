@@ -38,6 +38,24 @@ html:not(.tv-device) .fb-answer, html:not(.tv-device) .fb-tip { font-size: calc(
   -webkit-flex-direction: column; flex-direction: column;
   -webkit-justify-content: center; justify-content: center;
 }
+/* 电视上学习中心内容可能超过可视高度；取消垂直居中与绝对定位，让退出按钮稳稳排在卡片下方、不与右上角 #hubChildren 或卡片重叠，超出由 #stage 滚动。 */
+html.tv-device #screen-hub { height: auto; min-height: 100%; }
+html.tv-device .hub-wrap {
+  height: auto; min-height: 100%;
+  -webkit-justify-content: flex-start; justify-content: flex-start;
+  padding: 1rem 0 2.4rem;
+}
+html.tv-device .hub-top,
+html.tv-device .hub-heading,
+html.tv-device .hub-grid,
+html.tv-device .hub-foot {
+  -webkit-flex-shrink: 0; flex-shrink: 0;
+}
+html.tv-device .hub-foot {
+  position: static;
+  margin-top: 1.2rem;
+  -webkit-justify-content: flex-end; justify-content: flex-end;
+}
 .hub-top {
   display: -webkit-flex; display: flex;
   -webkit-flex-wrap: wrap; flex-wrap: wrap;
@@ -267,3 +285,126 @@ html:not(.tv-device) .anki-rate-btn .rate-sub { font-size: 12px; margin-top: 2px
   html:not(.tv-device) .study-choice-item { width: 100%; margin: 0 0 8px 0; }
   html:not(.tv-device) .anki-rate-btn { min-width: calc(50% - 8px); }
 }
+
+/* =====================================================================
+ * 多孩子切换密码弹窗 (#pinModal) — 电视遥控器 + 触屏双友好
+ * ===================================================================== */
+.pin-modal {
+  display: none;
+  position: fixed;
+  top: 0; right: 0; bottom: 0; left: 0;
+  z-index: 90;
+  background: rgba(0, 0, 0, .72);
+  -webkit-align-items: center; align-items: center;
+  -webkit-justify-content: center; justify-content: center;
+  padding: 2rem;
+}
+.pin-modal.show {
+  display: -webkit-flex;
+  display: flex;
+}
+.pin-dialog {
+  width: 100%;
+  max-width: 48rem;
+  padding: 3rem 3.2rem;
+  border-radius: 2.2rem;
+  background: #1F1F22;
+  border: 1px solid rgba(255, 255, 255, .12);
+  color: #F2F2F4;
+  -webkit-box-shadow: 0 2rem 5rem rgba(0, 0, 0, .55);
+  box-shadow: 0 2rem 5rem rgba(0, 0, 0, .55);
+}
+.pin-title { margin: 0 0 .6rem; font-size: 3rem; font-weight: 700; text-align: center; }
+.pin-sub { margin: 0 0 1.8rem; font-size: 1.8rem; color: #A1A1AA; text-align: center; }
+.pin-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 1.2rem 1.6rem;
+  border-radius: 1.2rem;
+  border: 2px solid rgba(255, 255, 255, .18);
+  background: rgba(255, 255, 255, .06);
+  color: #F2F2F4;
+  font-size: 2.8rem;
+  letter-spacing: .35em;
+  text-align: center;
+  outline: none;
+}
+.pin-input:focus { border-color: rgba(229, 229, 229, .78); }
+.pin-error {
+  min-height: 2.4rem;
+  margin: .8rem 0 1.2rem;
+  font-size: 1.8rem;
+  color: #FB7185;
+  text-align: center;
+}
+.pin-pad {
+  display: -webkit-flex; display: flex;
+  -webkit-flex-wrap: wrap; flex-wrap: wrap;
+  margin: 0 -1.2rem .8rem 0;
+}
+.pin-key {
+  width: calc(33.333% - 1.2rem);
+  margin: 0 1.2rem 1.2rem 0 !important;
+  padding: 1.3rem .8rem !important;
+  font-size: 2.4rem !important;
+  font-weight: 700;
+  text-align: center;
+  -webkit-justify-content: center; justify-content: center;
+}
+.pin-key-fn { font-size: 1.9rem !important; font-weight: 600; }
+.pin-actions {
+  display: -webkit-flex; display: flex;
+  -webkit-justify-content: space-between; justify-content: space-between;
+  margin-top: .6rem;
+}
+.pin-actions > * { -webkit-flex: 1; flex: 1; margin: 0 .6rem; }
+.pin-actions > *:first-child { margin-left: 0; }
+.pin-actions > *:last-child { margin-right: 0; }
+
+html.tv-device[data-mode="light"] .pin-dialog {
+  background: #FFFFFF;
+  color: #1E1E1E;
+  border-color: rgba(0, 0, 0, .1);
+}
+html.tv-device[data-mode="light"] .pin-sub { color: #666666; }
+html.tv-device[data-mode="light"] .pin-input {
+  background: #F4F4F5;
+  color: #1E1E1E;
+  border-color: rgba(0, 0, 0, .16);
+}
+html.tv-device[data-mode="light"] .pin-error { color: #BE123C; }
+
+html:not(.tv-device) .pin-modal { padding: 16px; }
+html:not(.tv-device) .pin-dialog {
+  max-width: 360px;
+  padding: 22px 20px;
+  border-radius: 20px;
+  background: var(--m-surface);
+  color: var(--m-text);
+  border: 1px solid var(--m-line);
+}
+html:not(.tv-device) .pin-title { font-size: 20px; margin-bottom: 4px; }
+html:not(.tv-device) .pin-sub { font-size: 13px; color: var(--m-text-2); margin-bottom: 14px; }
+html:not(.tv-device) .pin-input {
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 20px;
+  background: var(--m-surface-2);
+  color: var(--m-text);
+  border: 1px solid var(--m-line);
+}
+html:not(.tv-device) .pin-error { min-height: 20px; margin: 6px 0 10px; font-size: 13px; color: #E11D48; }
+html:not(.tv-device)[data-mode="dark"] .pin-error { color: #FB7185; }
+html:not(.tv-device) .pin-pad { margin: 0 -8px 6px 0; }
+html:not(.tv-device) .pin-key {
+  width: calc(33.333% - 8px);
+  margin: 0 8px 8px 0 !important;
+  padding: 10px 6px !important;
+  min-height: 46px !important;
+  font-size: 18px !important;
+}
+html:not(.tv-device) .pin-key-fn { font-size: 14px !important; }
+html:not(.tv-device) .pin-actions > * { margin: 0 5px; }
+html:not(.tv-device) .pin-actions > *:first-child { margin-left: 0; }
+html:not(.tv-device) .pin-actions > *:last-child { margin-right: 0; }

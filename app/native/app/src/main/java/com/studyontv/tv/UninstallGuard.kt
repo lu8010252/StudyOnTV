@@ -16,8 +16,10 @@ class UninstallGuard : DeviceAdminReceiver() {
         restoreOwnerPolicy(context)
     }
 
-    override fun onDisableRequested(context: Context, intent: Intent): CharSequence =
-        "关闭后“题了个题”可以被卸载，使用时间管理也会失效。请确认是家长在操作。"
+    override fun onDisableRequested(context: Context, intent: Intent): CharSequence {
+        SystemSettingsGuard.onPotentialTamper(context)
+        return "关闭后“题了个题”可以被卸载，使用时间管理也会失效。请确认是家长在操作。"
+    }
 
     companion object {
         fun component(context: Context) = ComponentName(context, UninstallGuard::class.java)

@@ -4,12 +4,14 @@ import {
   ChevronLeft,
   ChevronRight,
   Copy,
+  Globe,
   Image as ImageIcon,
   Pencil,
   Plus,
   Search,
   Sparkles,
   Trash2,
+  Upload,
 } from 'lucide-react';
 import { resolveMediaUrl } from '@/api';
 import { Button } from '@/components/ui/button';
@@ -47,6 +49,8 @@ type Props = {
   onReset: () => void;
   onCreate: () => void;
   onOpenAi: () => void;
+  onOpenMarket: () => void;
+  onOpenImport: () => void;
 };
 
 /** 空状态：没有题目、筛选没有结果时，给出下一步该做什么 */
@@ -204,7 +208,7 @@ export default function QuestionList(props: Props) {
                   <TableCell className="max-w-0 px-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className={'size-1.5 shrink-0 rounded-full ' + (dot[q.type] || dot.single)} />
-                      <MathText text={q.q} plain className="truncate" />
+                      <MathText text={q.q} className="truncate" />
                       {q.enabled === false && (
                         <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[10px]">
                           暂停
@@ -299,7 +303,7 @@ export default function QuestionList(props: Props) {
                 </ToolbarGroup>
               </Toolbar>
               <div className="flex items-start gap-2.5">
-                <MathText text={q.q} plain className="min-w-0 flex-1 text-sm font-medium leading-6" />
+                <MathText text={q.q} className="min-w-0 flex-1 text-sm font-medium leading-6" />
                 {thumb && (
                   <img
                     src={resolveMediaUrl(thumb)}
@@ -346,16 +350,24 @@ export default function QuestionList(props: Props) {
           <EmptyState
             icon={BookOpen}
             title="题库还没有题目"
-            description="从导入 JSON、AI 出题或在线题库市场开始添加"
+            description="可以从在线题库市场下载、导入 Word/PDF/JSON、AI 出题或手动新增"
             action={
-              <div className="flex gap-2">
-                <Button size="sm" onClick={props.onCreate}>
-                  <Plus className="size-3.5" />
-                  手动新增
+              <div className="flex flex-wrap justify-center gap-2">
+                <Button size="sm" onClick={props.onOpenMarket}>
+                  <Globe className="size-3.5" />
+                  在线题库市场
+                </Button>
+                <Button variant="outline" size="sm" onClick={props.onOpenImport}>
+                  <Upload className="size-3.5" />
+                  导入文档/JSON
                 </Button>
                 <Button variant="outline" size="sm" onClick={props.onOpenAi}>
                   <Sparkles className="size-3.5" />
                   AI 出题
+                </Button>
+                <Button variant="outline" size="sm" onClick={props.onCreate}>
+                  <Plus className="size-3.5" />
+                  手动新增
                 </Button>
               </div>
             }

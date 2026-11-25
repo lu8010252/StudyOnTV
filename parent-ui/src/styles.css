@@ -12,6 +12,10 @@
     @apply overflow-x-hidden;
   }
 
+  html:has([data-question-filter-sheet]) {
+    overflow-y: hidden;
+  }
+
   body {
     @apply min-h-svh w-full bg-background text-foreground;
     font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
@@ -294,6 +298,111 @@
 }
 
 .week-cell:hover {
+  outline: 1px solid color-mix(in oklab, var(--primary) 60%, transparent);
+}
+
+.week-v-wrap {
+  position: relative;
+  max-height: 420px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  -webkit-overflow-scrolling: touch;
+}
+
+.week-v-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: grid;
+  grid-template-columns: 48px repeat(7, minmax(0, 1fr));
+  align-items: center;
+  gap: 3px;
+  padding: 6px 6px 6px 4px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklab, var(--background) 95%, transparent);
+  backdrop-filter: blur(6px);
+}
+
+.week-v-corner {
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+
+.week-v-day-btn {
+  display: inline-flex;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--foreground);
+  transition: background 120ms ease;
+}
+
+.week-v-day-btn:hover,
+.week-v-day-btn:active {
+  background: var(--accent);
+}
+
+.week-v-body {
+  padding: 4px 6px 6px 4px;
+}
+
+.week-v-body.drag-paint,
+.week-v-body.drag-paint .week-v-cell {
+  touch-action: none;
+  user-select: none;
+}
+
+.week-v-row {
+  display: grid;
+  grid-template-columns: 48px repeat(7, minmax(0, 1fr));
+  align-items: center;
+  gap: 3px;
+  padding: 1.5px 0;
+}
+
+.week-v-row.is-hour {
+  margin-top: 2px;
+  padding-top: 3px;
+  border-top: 1px dashed color-mix(in oklab, var(--border) 65%, transparent);
+}
+
+.week-v-row:first-child.is-hour {
+  margin-top: 0;
+  border-top: none;
+}
+
+.week-v-time {
+  text-align: center;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in oklab, var(--muted-foreground) 55%, transparent);
+}
+
+.week-v-time.is-hour {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+
+.week-v-cell {
+  height: 26px;
+  width: 100%;
+  border-radius: 4px;
+  background: var(--secondary);
+  transition: background 100ms ease;
+}
+
+.week-v-cell.on {
+  background: var(--primary);
+}
+
+.week-v-cell:hover {
   outline: 1px solid color-mix(in oklab, var(--primary) 60%, transparent);
 }
 

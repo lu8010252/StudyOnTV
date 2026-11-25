@@ -19,14 +19,18 @@ android {
         minSdk = 21          // Android 5.0
         targetSdk = 34
         testInstrumentationRunner = "com.studyontv.tv.RegressionInstrumentation"
-        versionCode = 51
-        versionName = "0.9.4"
+        versionCode = 52
+        versionName = "0.9.5"
         // 带电视桌面的包在 desktop 这个 buildType 里改成 true
         buildConfigField("boolean", "DESKTOP", "false")
+        // 仅本地隐私版（EU Local-Only，Issue #175）：通过 -PlocalOnly=true 构建，彻底关闭一切公网连接与上报
+        val localOnly = (project.findProperty("localOnly")?.toString()?.toBoolean() == true) ||
+            (System.getenv("LOCAL_ONLY")?.equals("true", ignoreCase = true) == true)
+        buildConfigField("boolean", "LOCAL_ONLY", localOnly.toString())
         // 崩溃上报的默认地址/令牌：从 local.properties 或环境变量注入（都不入库），
         // 留空表示不内置——设备只在本机保留日志，家长可在面板里自己填。
-        val crashEndpoint = localProps.getProperty("CRASH_ENDPOINT") ?: System.getenv("CRASH_ENDPOINT") ?: ""
-        val crashToken = localProps.getProperty("CRASH_TOKEN") ?: System.getenv("CRASH_TOKEN") ?: ""
+        val crashEndpoint = if (localOnly) "" else (localProps.getProperty("CRASH_ENDPOINT") ?: System.getenv("CRASH_ENDPOINT") ?: "")
+        val crashToken = if (localOnly) "" else (localProps.getProperty("CRASH_TOKEN") ?: System.getenv("CRASH_TOKEN") ?: "")
         buildConfigField("String", "CRASH_ENDPOINT", "\"$crashEndpoint\"")
         buildConfigField("String", "CRASH_TOKEN", "\"$crashToken\"")
     }

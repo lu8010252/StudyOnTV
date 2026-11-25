@@ -16,7 +16,7 @@ const gradle=readFileSync(join(root,'app/native/app/build.gradle.kts'),'utf8');
 const version=gradle.match(/versionName\s*=\s*"([^"]+)"/)?.[1];
 const versionCode=Number(gradle.match(/versionCode\s*=\s*(\d+)/)?.[1]);
 if(!version)throw new Error('build.gradle.kts 里找不到 versionName');
-const files=readdirSync(dir).filter(f=>f.endsWith(`-v${version}.apk`));
+const files=readdirSync(dir).filter(f=>f.endsWith(`-v${version}.apk`)&&!f.includes('-EU-'));
 const pick=marker=>files.find(f=>f.includes(marker));
 const asset=name=>{if(!name)return undefined;const path=join(dir,name);return{name,url:`https://github.com/chadyi/StudyOnTV/releases/download/v${version}/${name}`,sha256:createHash('sha256').update(readFileSync(path)).digest('hex'),size:statSync(path).size};};
 const assets={tv:asset(pick('-TV-')),mobile:asset(pick('-Mobile-'))};

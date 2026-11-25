@@ -95,6 +95,7 @@ object BankMarket {
     }
 
     private fun validate(raw: String): URL {
+        LocalOnlyGuard.requireLocalUrl(raw, "题库源")
         val url = URL(raw.trim())
         require(url.userInfo == null) { "地址里不能带用户名密码" }
         require(url.toString().length <= 2048) { "地址太长" }
@@ -103,11 +104,14 @@ object BankMarket {
         return url
     }
 
-    /** 只有当主机名落在内网/本机时才放行 http，避免明文拉公网内容 */
+    /** 只有当所有解析地址均落在内网/本机时才放行 http，避免混合 DNS 记录明文拉公网内容 */
+    internal fun areAllPrivate(addresses: Array<InetAddress>): Boolean =
+        addresses.isNotEmpty() && addresses.all { it.isLoopbackAddress || it.isSiteLocalAddress || it.isLinkLocalAddress }
+
     private fun isLocal(host: String): Boolean {
         if (host.equals("localhost", true) || host.endsWith(".local") || host.endsWith(".lan")) return true
         return try {
-            InetAddress.getAllByName(host).any { it.isLoopbackAddress || it.isSiteLocalAddress || it.isLinkLocalAddress }
+            areAllPrivate(InetAddress.getAllByName(host))
         } catch (_: Exception) { false }
     }
 

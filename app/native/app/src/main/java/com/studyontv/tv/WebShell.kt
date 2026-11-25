@@ -1,7 +1,10 @@
 package com.studyontv.tv
 
 import android.annotation.SuppressLint
+import android.app.Application
 import android.content.Context
+import android.os.Build
+import android.os.Process
 import android.view.KeyEvent
 import android.view.View
 import android.webkit.WebChromeClient
@@ -11,21 +14,15 @@ import android.webkit.WebViewClient
 import java.net.HttpURLConnection
 import java.net.URL
 
-
-
-
-
-
-
-
 class WebShell(private val context: Context) {
 
     var onBackPressed: (() -> Unit)? = null
 
     @SuppressLint("SetJavaScriptEnabled")
     fun create(url: String): WebView {
-        WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
-        val web = WebView(context)
+        ensureDataDirectory(context)
+        val web = createWebViewSafely(context)
+        try { WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG) } catch (_: Throwable) { }
         web.setBackgroundColor(TvUi.background(context))
         web.isFocusable = true
         web.isFocusableInTouchMode = true
@@ -53,7 +50,17 @@ class WebShell(private val context: Context) {
 
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                if (LocalOnlyGuard.enabled && !LocalOnlyGuard.isLocalUrl(url)) return true
                 return !isAllowed(url)
+            }
+            override fun shouldInterceptRequest(view: WebView?, request: android.webkit.WebResourceRequest?): android.webkit.WebResourceResponse? {
+                if (LocalOnlyGuard.enabled) {
+                    val reqUrl = request?.url?.toString()
+                    if (!LocalOnlyGuard.isLocalUrl(reqUrl)) {
+                        return android.webkit.WebResourceResponse("text/plain", "utf-8", java.io.ByteArrayInputStream(ByteArray(0)))
+                    }
+                }
+                return super.shouldInterceptRequest(view, request)
             }
         }
         web.webChromeClient = WebChromeClient()
@@ -99,7 +106,51 @@ class WebShell(private val context: Context) {
     }
 
     companion object {
-        
+        @Volatile private var dataDirChecked = false
+
+        private fun sanitizeSuffix(raw: String): String =
+            raw.replace(Regex("[^a-zA-Z0-9._-]"), "_").take(64).ifEmpty { "sub" }
+
+        /**
+         * ST-613：Android 9+（API 28+）下，在任何 WebView 初始化之前隔离非主进程数据目录，
+         * 避免多进程或旧僵尸进程占锁导致 Using WebView from more than one process 崩溃。
+         */
+        private fun ensureDataDirectory(context: Context) {
+            if (dataDirChecked || Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
+            synchronized(this) {
+                if (dataDirChecked) return
+                dataDirChecked = true
+                try {
+                    val proc = Application.getProcessName().orEmpty()
+                    if (proc.isNotEmpty() && proc != context.packageName) {
+                        WebView.setDataDirectorySuffix(sanitizeSuffix(proc))
+                    }
+                } catch (_: Throwable) { }
+            }
+        }
+
+        private fun createWebViewSafely(context: Context): WebView {
+            ensureDataDirectory(context)
+            return try {
+                WebView(context)
+            } catch (e: RuntimeException) {
+                val msg = e.message.orEmpty()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+                    msg.contains("Using WebView from more than one process", ignoreCase = true)
+                ) {
+                    try {
+                        WebView.setDataDirectorySuffix("p_${Process.myPid()}")
+                        Diag.warn("WebView", "检测到旧进程占用默认 WebView 数据目录，已自动隔离至 p_${Process.myPid()}")
+                        WebView(context)
+                    } catch (_: Throwable) {
+                        throw e
+                    }
+                } else {
+                    throw e
+                }
+            }
+        }
+
         fun isAllowed(url: String?): Boolean {
             if (url == null || url == "about:blank") return true
             val base = PrefsHolder.baseUrl ?: return false

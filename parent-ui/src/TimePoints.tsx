@@ -3,7 +3,7 @@ import {Input} from '@/components/ui/input';
 import {Select,SelectContent,SelectItem,SelectTrigger,SelectValue} from '@/components/ui/select';
 import {FieldDescription} from '@/components/ui/field';
 import {Plus,Trash2} from 'lucide-react';
-import {useEffect,type ReactNode} from 'react';
+import {useEffect,useState,type ReactNode} from 'react';
 import type {ExemptWindow,TimePoint} from './schema';
 
 const DAYS=['一','二','三','四','五','六','日'];
@@ -57,13 +57,35 @@ function TimeFields({start,end,onStart,onEnd,label}:{start:string;end:string;onS
  </>;
 }
 
+function DailyMinutesInput({value,onChange,label}:{value:number|undefined;onChange:(value:number)=>void;label:string}){
+ const fallback=value!=null&&Number.isFinite(value)?Math.min(480,Math.max(1,Math.round(value))):60;
+ const [text,setText]=useState(String(fallback));
+ const [focused,setFocused]=useState(false);
+ useEffect(()=>{if(!focused)setText(String(fallback));},[fallback,focused]);
+ const commit=(raw:string)=>{
+  const trimmed=raw.trim();
+  const parsed=trimmed===''?1:Number(trimmed);
+  const next=Number.isFinite(parsed)?Math.min(480,Math.max(1,Math.round(parsed))):1;
+  setText(String(next));
+  if(next!==value)onChange(next);
+ };
+ return <Input className="h-8 w-24 text-center" type="number" inputMode="numeric" min={1} max={480} aria-label={label} value={text}
+  onFocus={()=>setFocused(true)}
+  onChange={e=>{
+   const raw=e.target.value;
+   setText(raw);
+   const trimmed=raw.trim();
+   if(trimmed!==''){const n=Number(trimmed);if(Number.isInteger(n)&&n>=1&&n<=480)onChange(n);}
+  }}
+  onBlur={e=>{setFocused(false);commit(e.target.value);}}
+  onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();e.currentTarget.blur();}}}/>;
+}
+
 export default function TimePoints({points,exempt,onPoints,onExempt}:{
  points:TimePoint[];exempt:ExemptWindow[];onPoints:(value:TimePoint[])=>void;onExempt:(value:ExemptWindow[])=>void;
 }){
  const list=Array.isArray(points)?points:[];
  const windows=Array.isArray(exempt)?exempt:[];
- // 旧配置里「计入限额」可能没有 dailyMinutes（Android 端会拒绝保存），进入页面时补成界面显示的默认值。
- useEffect(()=>{if(list.some(item=>item.mode==='counted'&&item.dailyMinutes==null))onPoints(list.map(item=>item.mode==='counted'&&item.dailyMinutes==null?{...item,dailyMinutes:60}:item));},[JSON.stringify(points)]);
  const update=(index:number,patch:Partial<TimePoint>)=>onPoints(list.map((item,i)=>i===index?{...item,...patch}:item));
  const updateExempt=(index:number,patch:Partial<ExemptWindow>)=>onExempt(windows.map((item,i)=>i===index?{...item,...patch}:item));
  const add=()=>onPoints([...list,{id:newId('tp_'),name:'网课',days:[0,2,4],start:'19:00',end:'20:00',mode:'free' as const}]);
@@ -98,9 +120,7 @@ export default function TimePoints({points,exempt,onPoints,onExempt}:{
        </Select>
       </div>
       {item.mode==='counted'&&<div className="space-y-1"><span className="text-xs text-muted-foreground">时段每日上限 · 分钟</span>
-       <Input className="h-8 w-24 text-center" type="number" min={1} max={480} aria-label={'网课时段 '+(index+1)+' 每日上限分钟'} value={item.dailyMinutes??''}
-        onChange={e=>{const raw=e.target.value;update(index,{dailyMinutes:raw===''?undefined:Number(raw)});}}
-        onBlur={e=>update(index,{dailyMinutes:Math.min(480,Math.max(1,Number(e.target.value)||1))})}/>
+       <DailyMinutesInput value={item.dailyMinutes} label={'网课时段 '+(index+1)+' 每日上限分钟'} onChange={dailyMinutes=>update(index,{dailyMinutes})}/>
       </div>}
      </div>
     </div>

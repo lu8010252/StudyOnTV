@@ -105,6 +105,7 @@ export default function AiGenerateDialog({open,onOpenChange,sessionId,onOpenImpo
  });
 
  async function generate(){
+  if(!configured)return toast.error('请先点击上方「去设置」配置模型 API');
   if(!aiForm.fromWrongBook&&!aiForm.topic.trim())return toast.error('请填写出题范围，或点击上方模板一键填入');
   if(!Object.values(aiForm.types).some(Boolean))return toast.error('至少选择一种题型');
   setAiLoading(true);setAiError('');
@@ -114,7 +115,7 @@ export default function AiGenerateDialog({open,onOpenChange,sessionId,onOpenImpo
    const fallbackBank=aiForm.bank.trim()||'默认题库';
    const result=await api('/api/questions/generate','POST',{
     fromWrongBook:aiForm.fromWrongBook,
-    topic:aiForm.topic.trim()||(aiForm.fromWrongBook?`${fallbackSubject||'综合'}近期错题举一反三巩固`:''),
+    topic:aiForm.topic.trim(),
     subject:fallbackSubject,
     level:fallbackLevel,
     bank:fallbackBank,
@@ -312,7 +313,7 @@ export default function AiGenerateDialog({open,onOpenChange,sessionId,onOpenImpo
     </FieldGroup>}
    </div>
    <DialogFooter className="border-t px-5 py-3">
-    {aiTab==='api'&&aiItems.length===0&&<><FieldDescription className="me-auto hidden sm:block">{aiLoading?'正在调用模型生成题目…':aiForm.fromWrongBook?'将自动分析近期错题生成巩固变式题':'生成结果会先预览'}</FieldDescription><Button variant="outline" onClick={()=>onOpenChange(false)} disabled={aiLoading}>取消</Button><Button onClick={generate} disabled={aiLoading}><Sparkles/>{aiLoading?'生成中…':aiForm.fromWrongBook?'一键生成错题变式':'生成题目'}</Button></>}
+    {aiTab==='api'&&aiItems.length===0&&<><FieldDescription className="me-auto hidden sm:block">{!configured?'请先点击上方「去设置」配置模型 API':aiLoading?'正在调用模型生成题目…':aiForm.fromWrongBook?'将自动分析近期错题生成巩固变式题':'生成结果会先预览'}</FieldDescription><Button variant="outline" onClick={()=>onOpenChange(false)} disabled={aiLoading}>取消</Button><Button onClick={generate} disabled={aiLoading||!configured}><Sparkles/>{aiLoading?'生成中…':aiForm.fromWrongBook?'一键生成错题变式':'生成题目'}</Button></>}
     {aiTab==='api'&&aiItems.length>0&&<><Button variant="outline" className="me-auto" onClick={()=>setAiItems([])} disabled={saveGenerated.isPending}>重新生成</Button><Button disabled={!aiSelected||saveGenerated.isPending} onClick={()=>{const fbBank=aiForm.bank.trim()||'默认题库',fbSubj=aiForm.subject.trim(),fbLvl=aiForm.level.trim();saveGenerated.mutate(aiItems.filter((q:any)=>q.include).map(({include,...q}:any)=>({...q,bank:q.bank||fbBank,subject:q.subject||fbSubj,level:q.level||fbLvl})));}}>{saveGenerated.isPending?'保存中…':`保存 ${aiSelected} 题到题库`}</Button></>}
     {aiTab==='agent'&&<Button variant="outline" onClick={()=>onOpenChange(false)}>关闭</Button>}
    </DialogFooter>

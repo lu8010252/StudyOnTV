@@ -81,6 +81,7 @@ function buildApiUrl(path: string): string {
 }
 
 const AI_GRADING_TIMEOUT = 60000;
+const BULK_IO_TIMEOUT = 60000;
 const AI_GENERATE_TIMEOUT = 90000;
 const LAN_TIMEOUT = 10000;
 
@@ -88,9 +89,10 @@ export function isAiPath(path: string) {
   return path.startsWith('/api/grading/') || path === '/api/questions/generate';
 }
 
-export function defaultTimeout(path: string) {
+export function defaultTimeout(path: string, method = 'GET') {
   if (path === '/api/questions/generate') return AI_GENERATE_TIMEOUT;
   if (path.startsWith('/api/grading/') || path.startsWith('/api/backup')) return AI_GRADING_TIMEOUT;
+  if (path === '/api/peers/sync' || (path === '/api/questions' && method.toUpperCase() === 'POST')) return BULK_IO_TIMEOUT;
   return LAN_TIMEOUT;
 }
 
@@ -98,7 +100,7 @@ export async function api(
   path: string,
   method = 'GET',
   body?: unknown,
-  timeoutMs = defaultTimeout(path),
+  timeoutMs = defaultTimeout(path, method),
 ) {
   if (import.meta.env.DEV && previewMode) {
     const { previewApi } = await import('./dev-preview');

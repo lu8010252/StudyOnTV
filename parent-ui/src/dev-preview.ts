@@ -14,7 +14,7 @@ let device:any={name:'客厅电视 · 开发预览',flavor:'tv',version:'0.3.10'
  autostart:{known:true,ok:true,pending:false,via:'boot',startedAfterSeconds:12,bootBroadcast:true,uptimeMinutes:320,accessibility:true},
  keepalive:{ignoringBattery:true,notifications:true,usbDebugging:false,developerOptions:false,sdk:34,manufacturer:'Xiaomi',brand:'Xiaomi',model:'Mi TV 6',android:'12',
   brandTip:'小米电视：设置 → 应用 → 应用管理 → 题了个题 → 自启动，开启；省电策略设为「无限制」'}};
-let grading:any={mode:'manual',passScore:60,provider:'deepseek',endpoint:'https://api.deepseek.com/v1',model:'deepseek-flash',vision:false,hasKey:false,providers:builtinProviders};
+let grading:any={mode:'manual',passScore:60,provider:'deepseek',endpoint:'https://api.deepseek.com/v1',model:'deepseek-flash',vision:false,temperature:0,hasKey:false,providers:builtinProviders};
 let integration:any={enabled:false,read:true,control:false,hasToken:false};
 let speech:any={mode:'system',autoRead:false,readLanguage:'',readScope:'question',azureKeySet:false,aliyunSecretSet:false};
 let children:any[]=[{id:'',name:'孩子1',createdAt:Date.now()-86400000,active:true},{id:'c2',name:'小红',createdAt:Date.now(),active:false}];
@@ -203,6 +203,28 @@ export async function previewApi(path:string,method:string,body:any){
  if(route==='/api/update'||route==='/api/update/check')return structuredClone(update);
  if(route==='/api/integration'){if(method==='PUT')integration={...integration,...body};return structuredClone(integration);}
  if(route==='/api/logs')return{lines:[]};
+ if(route==='/api/peers'){
+  return {
+   self:{id:'preview-self',name:device.name,ip:'192.168.1.10',port:8099,host:'192.168.1.10:8099',version:device.version,isTv:device.flavor==='tv',questions:questions.length},
+   peers:[
+    {id:'preview-peer-1',name:'卧室电视',ip:'192.168.1.20',port:8099,host:'192.168.1.20:8099',version:'0.5.7',isTv:true,questions:48,lastSeenAt:Date.now()-2000,online:true},
+    {id:'preview-peer-2',name:'书房 MatePad',ip:'192.168.1.35',port:8099,host:'192.168.1.35:8099',version:'0.5.7',isTv:false,questions:32,lastSeenAt:Date.now()-5000,online:true},
+   ],
+  };
+ }
+ if(route==='/api/peers/probe'){
+  const h=String(body?.host||'').trim();
+  if(!h)throw new Error('请填写有效的局域网设备地址');
+  return {ok:true,peer:{id:'preview-probe-'+h,name:`设备 ${h.split(':')[0]}`,host:h,version:'0.5.7',isTv:true,questions:24,online:true}};
+ }
+ if(route==='/api/peers/sync'){
+  const targets=Array.isArray(body?.targets)?body.targets:[];
+  const scopes=Array.isArray(body?.scopes)?body.scopes:[];
+  return {
+   ok:true,
+   results:targets.map((t:any)=>({host:t.host,name:t.host==='192.168.1.20:8099'?'卧室电视':t.host==='192.168.1.35:8099'?'书房 MatePad':t.host,ok:true,message:`已同步 ${scopes.join('、')}（开发预览模拟）`})),
+  };
+ }
  if(route==='/api/holidays')return{year:new Date().getFullYear(),count:0};
  if(route==='/api/logout')return{ok:true};
  throw new Error('开发预览暂不支持此操作');

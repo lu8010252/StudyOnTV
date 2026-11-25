@@ -23,7 +23,7 @@
       <div id="qMedia" class="question-media"></div>
       <div class="options" id="qOptions"></div>
       <div class="pool-status" id="qPool"></div>
-      <div class="feedback" id="qFeedback" role="status" aria-live="polite"><div class="fb-icon" id="fbIcon"></div><div class="fb-body"><div class="fb-title" id="fbTitle"></div><div class="fb-answer" id="fbAnswer"></div><div class="fb-tip" id="fbTip"></div></div><button class="btn btn-primary focusable" id="fbNext" data-action="next">继续</button></div>
+      <div class="feedback" id="qFeedback" role="status" aria-live="polite"><div class="fb-icon" id="fbIcon"></div><div class="fb-body"><div class="fb-title" id="fbTitle"></div><div class="fb-answer" id="fbAnswer"></div><div class="fb-tip" id="fbTip"></div></div><div class="fb-actions"><button class="btn btn-ghost focusable fb-read-btn" id="fbReadAloud" data-action="read-aloud" style="display:none">朗读</button><button class="btn btn-primary focusable" id="fbNext" data-action="next">继续</button></div></div>
       <div class="quiz-foot"><div class="dots-progress" id="qDots"></div><div class="quiz-foot-right"><button class="btn btn-ghost focusable read-aloud-btn" id="readAloudBtn" data-action="read-aloud" style="display:none">朗读</button><div class="hint"><span class="kbd">◀ ▶ ▲ ▼</span><span class="hint-text">选择</span><span class="kbd">OK</span><span class="hint-text">确认</span><span class="kbd">返回</span><span class="hint-text">回到桌面</span></div></div></div>
     </div>
   </section>
@@ -79,15 +79,41 @@
         <h1 class="pair-title">用手机管理这台设备</h1>
         <ol class="pair-steps">
           <li><b>1</b>手机连接与这台设备相同的 WiFi</li>
-          <li><b>2</b>用相机扫描二维码，或在浏览器打开<br><span class="pair-url" id="pairUrl"></span></li>
+          <li><b>2</b>用相机扫描二维码，或在浏览器打开<br><a class="pair-url" id="pairUrl" href="/admin/"></a></li>
           <li><b>3</b>输入管理密码，即可设置规则、题库与批改</li>
         </ol>
-        <div class="lock-actions"><button class="btn btn-primary focusable" data-action="quiz">返回答题</button><button class="btn btn-ghost focusable" data-action="permissions">权限设置</button><button class="btn btn-ghost focusable" data-action="password">修改密码</button></div>
+        <div class="lock-actions"><button class="btn btn-primary focusable" id="pairOpenLocal" data-action="open-local-admin">本机打开管理面板</button><button class="btn btn-ghost focusable" id="pairCopyUrl" data-action="copy-pair-url">复制地址</button><button class="btn btn-ghost focusable" data-action="quiz">返回答题</button><button class="btn btn-ghost focusable" data-action="permissions">权限设置</button><button class="btn btn-ghost focusable" data-action="password">修改密码</button></div>
       </div>
       <div class="qr-box" id="pairQr"></div>
     </div>
   </section>
 </main>
+<div class="pin-modal" id="pinModal" role="dialog" aria-modal="true" aria-labelledby="pinTitle">
+  <div class="pin-dialog">
+    <h2 class="pin-title" id="pinTitle">输入切换密码</h2>
+    <p class="pin-sub" id="pinSub">请输入该孩子的切换密码（也可输入家长密码）</p>
+    <input class="pin-input" id="pinInput" type="password" inputmode="numeric" maxlength="20" autocomplete="off" placeholder="请输入密码">
+    <div class="pin-error" id="pinError" role="alert"></div>
+    <div class="pin-pad" id="pinPad">
+      <button class="btn btn-ghost focusable pin-key" data-action="pin-digit" data-digit="1">1</button>
+      <button class="btn btn-ghost focusable pin-key" data-action="pin-digit" data-digit="2">2</button>
+      <button class="btn btn-ghost focusable pin-key" data-action="pin-digit" data-digit="3">3</button>
+      <button class="btn btn-ghost focusable pin-key" data-action="pin-digit" data-digit="4">4</button>
+      <button class="btn btn-ghost focusable pin-key" data-action="pin-digit" data-digit="5">5</button>
+      <button class="btn btn-ghost focusable pin-key" data-action="pin-digit" data-digit="6">6</button>
+      <button class="btn btn-ghost focusable pin-key" data-action="pin-digit" data-digit="7">7</button>
+      <button class="btn btn-ghost focusable pin-key" data-action="pin-digit" data-digit="8">8</button>
+      <button class="btn btn-ghost focusable pin-key" data-action="pin-digit" data-digit="9">9</button>
+      <button class="btn btn-ghost focusable pin-key pin-key-fn" data-action="pin-clear">清空</button>
+      <button class="btn btn-ghost focusable pin-key" data-action="pin-digit" data-digit="0">0</button>
+      <button class="btn btn-ghost focusable pin-key pin-key-fn" data-action="pin-back">退格</button>
+    </div>
+    <div class="pin-actions">
+      <button class="btn btn-ghost focusable" id="pinCancel" data-action="pin-cancel">取消</button>
+      <button class="btn btn-primary focusable" id="pinConfirm" data-action="pin-confirm">确认切换</button>
+    </div>
+  </div>
+</div>
 <script src="assets/js/qrcode.min.js"></script>
 <script src="assets/js/math.js"></script>
 <script src="assets/js/app.js"></script>

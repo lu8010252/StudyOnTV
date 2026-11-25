@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowUpRight,
   BookOpen,
+  BookX,
   ChartColumn,
   Check,
   ChevronDown,
@@ -21,6 +22,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from './api';
+import { ClearExtraPoolButton } from './components/ClearExtraPoolButton';
 import { defaults } from './schema';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -466,7 +468,14 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
               <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs font-semibold text-foreground">🚀 3 步快速提分上手</span>
                 <span className="text-xs text-muted-foreground">
-                  今日已练 {study.todayAnswered || 0} 题 · 待复习 {study.dueCount || 0} 题 · 错题 {study.wrongCount || 0} 道
+                  今日已练 {study.todayAnswered || 0} 题 · 待复习 {study.dueCount || 0} 题 ·{' '}
+                  <button
+                    type="button"
+                    className="font-medium text-primary underline-offset-4 hover:underline"
+                    onClick={() => (location.hash = '/wrong')}
+                  >
+                    错题 {study.wrongCount || 0} 道
+                  </button>
                 </span>
               </div>
               <div className="grid gap-2 sm:grid-cols-3">
@@ -714,7 +723,7 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
               icon: Sparkles,
               label: supervisionEnabled ? '待完成加练' : '待攻克错题',
               value: `${supervisionEnabled ? learning.extraPool || 0 : study.wrongCount || 0} 题`,
-              href: '/records',
+              href: '/wrong',
             },
           ].map(item => (
             <Item key={item.label} size="sm" className="rounded-none border-b px-4 py-3 last:border-b-0 sm:border-e sm:last:border-e-0 lg:border-b-0">
@@ -860,6 +869,22 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
                 <Button
                   variant="ghost"
                   className="h-auto w-full justify-start gap-3 px-3 py-3"
+                  onClick={() => (location.hash = '/wrong')}
+                >
+                  <span className="flex size-5 items-center justify-center text-muted-foreground">
+                    <BookX className="size-4" />
+                  </span>
+                  <span className="text-start">
+                    <span className="block text-sm font-medium">查看错题库</span>
+                    <span className="block text-xs font-normal text-muted-foreground">
+                      当前 {study.wrongCount || 0} 道错题，可一键加入加练池
+                    </span>
+                  </span>
+                  <ChevronRight className="ms-auto" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  className="h-auto w-full justify-start gap-3 px-3 py-3"
                   onClick={() => (location.hash = '/records')}
                 >
                   <span className="flex size-5 items-center justify-center text-muted-foreground">
@@ -891,6 +916,17 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
                     ? '按星级奖励'
                     : `${state.config?.sessionMinutes || 0} 分钟`}
               </span>
+            </div>
+            <div className="flex items-center justify-between gap-2 pt-1">
+              <span className="text-muted-foreground">
+                加练池：<strong className="font-medium text-foreground tabular-nums">{learning.extraPool || 0}</strong> 题
+              </span>
+              <ClearExtraPoolButton
+                sessionId={sessionId}
+                count={Number(learning.extraPool) || 0}
+                size="sm"
+                className="h-7 px-2 text-xs"
+              />
             </div>
           </CardContent>
           <CardFooter className="border-t pt-4">

@@ -5,9 +5,11 @@ import java.io.ByteArrayOutputStream
 import java.io.EOFException
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.Inet4Address
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.security.MessageDigest
+import java.net.SocketException
 import java.security.SecureRandom
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -27,9 +29,9 @@ object EdgeTts {
     private const val HOST = "speech.platform.bing.com"
     private const val PORT = 443
     private const val TRUSTED_TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4"
-    private const val CHROMIUM_VERSION = "130.0.2849.68"
+    private const val CHROMIUM_VERSION = "143.0.3650.75"
     private const val USER_AGENT =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0"
     private const val ORIGIN = "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold"
     private const val OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3"
     private const val MAX_AUDIO_BYTES = 4 * 1024 * 1024
@@ -61,45 +63,112 @@ object EdgeTts {
 
     private class Handshake403Exception(message: String, val serverMillis: Long?) : IllegalStateException(message)
 
+    internal fun requireOnlineAllowed(localOnly: Boolean = LocalOnlyGuard.enabled) {
+        if (localOnly) throw IllegalStateException("仅本地隐私版（EU Local-Only）已禁用 Edge 在线语音")
+    }
+
+    internal fun shouldRetryAfter403(usedNowMs: Long, serverMs: Long?): Boolean {
+        if (serverMs == null) return false
+        return secMsGec(serverMs) != secMsGec(usedNowMs) || kotlin.math.abs(serverMs - usedNowMs) >= 60_000L
+    }
+
+    internal fun orderAddressesIpv4First(addresses: List<InetAddress>): List<InetAddress> {
+        val v4 = addresses.filterIsInstance<Inet4Address>()
+        val other = addresses.filter { it !is Inet4Address }
+        return v4 + other
+    }
+
     fun synthesize(text: String, voice: String, language: String = "", rate: Double = 1.0): ByteArray {
+        requireOnlineAllowed()
         val chosenVoice = voice.trim().ifEmpty { defaultVoice(language) }
         val pct = (((rate.coerceIn(0.7, 1.5)) - 1.0) * 100.0).toInt()
         val rateStr = if (pct >= 0) "+${pct}%" else "${pct}%"
+        return synthesizeWithRetry(text, chosenVoice, rateStr, addressOffset = 0, allowTransientRetry = true)
+    }
+
+    private fun synthesizeWithRetry(
+        text: String,
+        chosenVoice: String,
+        rateStr: String,
+        addressOffset: Int,
+        allowTransientRetry: Boolean
+    ): ByteArray {
+        val usedNowMs = System.currentTimeMillis() + clockSkewMs
         return try {
-            synthesizeOnce(text, chosenVoice, rateStr, System.currentTimeMillis() + clockSkewMs)
+            synthesizeOnce(text, chosenVoice, rateStr, usedNowMs, addressOffset)
         } catch (e: Handshake403Exception) {
-            val serverMs = e.serverMillis ?: throw IllegalStateException(e.message ?: "Edge 语音握手被拒绝（HTTP 403）")
-            clockSkewMs = serverMs - System.currentTimeMillis()
-            synthesizeOnce(text, chosenVoice, rateStr, serverMs)
-        }
-    }
-
-    private fun openTlsSocket(): SSLSocket {
-        val raw = Socket()
-        try {
-            raw.connect(InetSocketAddress(HOST, PORT), 10_000)
-            raw.soTimeout = 15_000
-            val sslFactory = SSLSocketFactory.getDefault() as SSLSocketFactory
-            return (sslFactory.createSocket(raw, HOST, PORT, true) as SSLSocket).apply {
-                soTimeout = 15_000
-                startHandshake()
+            val serverMs = e.serverMillis
+            if (serverMs == null || !shouldRetryAfter403(usedNowMs, serverMs)) {
+                throw IllegalStateException(e.message ?: "Edge 语音握手被拒绝（HTTP 403）")
             }
-        } catch (e: Throwable) {
-            try { raw.close() } catch (_: Exception) { }
-            throw e
+            clockSkewMs = serverMs - System.currentTimeMillis()
+            try {
+                synthesizeOnce(text, chosenVoice, rateStr, serverMs, addressOffset)
+            } catch (retryErr: Handshake403Exception) {
+                throw IllegalStateException(retryErr.message ?: "Edge 语音握手被拒绝（HTTP 403）")
+            }
+        } catch (e: SocketException) {
+            if (!allowTransientRetry) throw e
+            synthesizeWithRetry(text, chosenVoice, rateStr, addressOffset = addressOffset + 1, allowTransientRetry = false)
+        } catch (e: EOFException) {
+            if (!allowTransientRetry) throw e
+            synthesizeWithRetry(text, chosenVoice, rateStr, addressOffset = addressOffset + 1, allowTransientRetry = false)
         }
     }
 
-    private fun synthesizeOnce(text: String, chosenVoice: String, rateStr: String, nowMillis: Long): ByteArray {
+    private fun openTlsSocket(addressOffset: Int = 0): SSLSocket {
+        val resolved = orderAddressesIpv4First(InetAddress.getAllByName(HOST).toList())
+        val candidates = if (resolved.isEmpty()) {
+            listOf<InetAddress?>(null)
+        } else {
+            val n = resolved.size
+            val shift = ((addressOffset % n) + n) % n
+            (0 until minOf(n, 4)).map { i -> resolved[(shift + i) % n] }
+        }
+        var lastError: Throwable? = null
+        for (addr in candidates) {
+            val raw = Socket()
+            try {
+                val target = if (addr != null) InetSocketAddress(addr, PORT) else InetSocketAddress(HOST, PORT)
+                raw.connect(target, 4_500)
+                raw.soTimeout = 15_000
+                val sslFactory = SSLSocketFactory.getDefault() as SSLSocketFactory
+                return (sslFactory.createSocket(raw, HOST, PORT, true) as SSLSocket).apply {
+                    soTimeout = 15_000
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                        sslParameters = sslParameters.apply {
+                            endpointIdentificationAlgorithm = "HTTPS"
+                        }
+                    }
+                    startHandshake()
+                    if (!javax.net.ssl.HttpsURLConnection.getDefaultHostnameVerifier().verify(HOST, session)) {
+                        throw javax.net.ssl.SSLPeerUnverifiedException("Hostname $HOST not verified")
+                    }
+                }
+            } catch (e: Throwable) {
+                try { raw.close() } catch (_: Exception) { }
+                lastError = e
+            }
+        }
+        throw lastError ?: IllegalStateException("无法连接 Edge 语音服务")
+    }
+
+    private fun synthesizeOnce(
+        text: String,
+        chosenVoice: String,
+        rateStr: String,
+        nowMillis: Long,
+        addressOffset: Int = 0
+    ): ByteArray {
         val connId = UUID.randomUUID().toString().replace("-", "")
         val muid = randomHex(16)
         val path = "/consumer/speech/synthesize/readaloud/edge/v1" +
             "?TrustedClientToken=$TRUSTED_TOKEN" +
             "&Sec-MS-GEC=${secMsGec(nowMillis)}" +
-            "&Sec-MS-GEC-Version=1-$CHROMIUM_VERSION" +
+            "&Sec-MS-GEC-Version=2-$CHROMIUM_VERSION" +
             "&ConnectionId=$connId"
 
-        val socket = openTlsSocket()
+        val socket = openTlsSocket(addressOffset)
         try {
             val out = socket.outputStream
             val input = BufferedInputStream(socket.inputStream, 16 * 1024)
@@ -168,14 +237,13 @@ object EdgeTts {
         }
     }
 
-    /** Sec-MS-GEC = SHA256(rounded_windows_ticks + TrustedClientToken) 大写十六进制 */
+    /** 生成 v2 握手参数，时间戳按五分钟取整。 */
     internal fun secMsGec(nowMillis: Long = System.currentTimeMillis()): String {
         var ticks = (nowMillis / 1000L) + 11_644_473_600L
         ticks -= ticks % 300L
         ticks *= 10_000_000L
         val raw = "$ticks$TRUSTED_TOKEN".toByteArray(Charsets.US_ASCII)
-        return MessageDigest.getInstance("SHA-256").digest(raw)
-            .joinToString("") { "%02X".format(Locale.US, it) }
+        return EdgeGecV2.encode(raw)
     }
 
     /** 解析 HTTP 响应头中的 RFC 1123 时间（例如 `Wed, 18 Nov 2026 05:30:00 GMT`）。 */
@@ -193,6 +261,28 @@ object EdgeTts {
             } catch (_: Exception) { }
         }
         return null
+    }
+
+    private val HTTP_STATUS_LINE_RE = Regex("^HTTP/\\d+\\.\\d+\\s+(\\d{3})(?:\\s.*)?$")
+    private const val WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+    internal fun parseHttpStatusCode(statusLine: String): Int? =
+        HTTP_STATUS_LINE_RE.matchEntire(statusLine.trim())?.groupValues?.get(1)?.toIntOrNull()
+
+    internal fun expectedAccept(wsKey: String): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-1")
+            .digest((wsKey + WS_GUID).toByteArray(Charsets.US_ASCII))
+        return MediaStore.encodeBase64(digest)
+    }
+
+    internal fun validateHandshakeResponse(statusLine: String, headers: Map<String, String>, wsKey: String) {
+        val code = parseHttpStatusCode(statusLine)
+        if (code == 403) {
+            throw Handshake403Exception("Edge 语音握手失败：$statusLine", parseHttpDate(headers["date"]))
+        }
+        require(code == 101) { "Edge 语音握手失败：$statusLine" }
+        val accept = headers["sec-websocket-accept"].orEmpty().trim()
+        require(accept == expectedAccept(wsKey)) { "Edge 语音握手校验失败（Sec-WebSocket-Accept 不匹配）" }
     }
 
     private fun handshake(input: BufferedInputStream, out: OutputStream, path: String, muid: String) {
@@ -222,10 +312,7 @@ object EdgeTts {
             val colon = line.indexOf(':')
             if (colon > 0) headers[line.substring(0, colon).trim().lowercase(Locale.US)] = line.substring(colon + 1).trim()
         }
-        if (statusLine.contains("403")) {
-            throw Handshake403Exception("Edge 语音握手失败：$statusLine", parseHttpDate(headers["date"]))
-        }
-        require(statusLine.contains("101")) { "Edge 语音握手失败：$statusLine" }
+        validateHandshakeResponse(statusLine, headers, wsKey)
     }
 
     private fun readHttpLine(input: BufferedInputStream): String {
@@ -374,10 +461,45 @@ object EdgeTts {
     private fun randomHex(bytes: Int): String =
         ByteArray(bytes).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02X".format(Locale.US, it) }
 
-    internal fun escapeXml(s: String): String = s
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\"", "&quot;")
-        .replace("'", "&apos;")
+    /**
+     * 按 XML 1.0 §2.2 净化并转义 SSML 文本：
+     * - 剥离非法控制字符（保留 \t、\n、\r）与 0xFFFE/0xFFFF；
+     * - 完整保留合法 UTF-16 代理对，丢弃孤立高/低代理字符；
+     * - 转义 XML 特殊字符 & < > " '。
+     */
+    internal fun escapeXml(s: String): String {
+        val out = StringBuilder(s.length)
+        var i = 0
+        while (i < s.length) {
+            val ch = s[i]
+            if (Character.isHighSurrogate(ch)) {
+                if (i + 1 < s.length && Character.isLowSurrogate(s[i + 1])) {
+                    out.append(ch).append(s[i + 1])
+                    i += 2
+                } else {
+                    i++
+                }
+                continue
+            }
+            if (Character.isLowSurrogate(ch)) {
+                i++
+                continue
+            }
+            val code = ch.code
+            val xmlValid = ch == '\t' || ch == '\n' || ch == '\r' ||
+                (code in 0x20..0xD7FF) || (code in 0xE000..0xFFFD)
+            if (xmlValid) {
+                when (ch) {
+                    '&' -> out.append("&amp;")
+                    '<' -> out.append("&lt;")
+                    '>' -> out.append("&gt;")
+                    '"' -> out.append("&quot;")
+                    '\'' -> out.append("&apos;")
+                    else -> out.append(ch)
+                }
+            }
+            i++
+        }
+        return out.toString()
+    }
 }

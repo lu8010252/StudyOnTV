@@ -39,8 +39,11 @@ class GateService : Service() {
     /** 上一轮 tick 的状态：mediaTick / diagnostics 用它做「静音是否同源」的纯函数判定 */
     @Volatile private var freeNow = false
     @Volatile private var gateExpectedNow = false
+    @Volatile private var settingsBlockedNow = false
     private var lastDiag = ""
     private var lastAccessibilityCheckAt = -1L
+    private var lastOverlayCheckAt = -1L
+    private var lastTelemetryCheckAt = 0L
     private var countdownActiveAt = -1L
     private var countdownPackage: String? = null
     private var lastAwake: Boolean? = null
@@ -60,11 +63,26 @@ class GateService : Service() {
      * 计时会照走；系统广播和显示状态任一说熄灭就按熄灭处理。
      */
     @Volatile private var screenOn = true
+    /** 收到系统关机广播后禁止再拉起全屏学习页或覆盖层唤醒屏幕（ST-002 / GitHub #143） */
+    @Volatile private var shuttingDown = false
+    /** 遥控器电源键退出全屏学习页后的退让截止时间（elapsedRealtime），避免下一 tick 立刻重拉 */
+    @Volatile private var powerExitUntil = 0L
+    private var screenReceiverRegistered = false
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
-                Intent.ACTION_SCREEN_ON -> screenOn = true
+                Intent.ACTION_SCREEN_ON -> {
+                    screenOn = true
+                    shuttingDown = false
+                    powerExitUntil = 0L
+                }
                 Intent.ACTION_SCREEN_OFF -> screenOn = false
+                Intent.ACTION_SHUTDOWN, "android.intent.action.QUICKBOOT_POWEROFF" -> {
+                    shuttingDown = true
+                    screenOn = false
+                    wasUsing = false
+                    handler.post { hideAll(); countdown.hide() }
+                }
             }
         }
     }
@@ -99,6 +117,7 @@ class GateService : Service() {
             wasUsing = false
             freeNow = true
             gateExpectedNow = false
+            settingsBlockedNow = false
             beatWatch(false)
             hideAll()
             countdown.hide()
@@ -113,8 +132,7 @@ class GateService : Service() {
         if (!canOverlay) overlay.hide()
         val status = DeviceRuntime.learning.status()
         val free = status.optBoolean("free")
-        freeNow = free
-        if (free) MediaPause.releaseAll(this)
+        val unlimited = status.optJSONObject("override")?.optString("mode") == "indefinite"
         if (InputSupport.active) {
             wasUsing = false
             beatWatch(false)
@@ -122,10 +140,10 @@ class GateService : Service() {
             countdown.hide()
             return
         }
-        if (SystemSettingsGuard.active(now)) { wasUsing = false; beatWatch(false); hideAll(); countdown.hide(); if (MediaPause.active) releaseMuteWithoutGate("settings"); return }
+        if (SystemSettingsGuard.active(now)) { settingsBlockedNow = false; freeNow = free; wasUsing = false; beatWatch(false); hideAll(); countdown.hide(); if (MediaPause.active) releaseMuteWithoutGate("settings"); return }
         val power = getSystemService(POWER_SERVICE) as PowerManager
         val locked = (getSystemService(KEYGUARD_SERVICE) as KeyguardManager).isKeyguardLocked
-        val awake = power.isInteractive && !locked && screenOn && displayOn()
+        val awake = power.isInteractive && !locked && screenOn && displayOn() && !shuttingDown
         if (lastAwake != awake) { DeviceRuntime.learning.awake(awake); lastAwake = awake }
         val monitoring = canOverlay || WatchAccessibilityService.connected || Foreground.hasUsageAccess(this)
         monitorMode = when {
@@ -160,22 +178,36 @@ class GateService : Service() {
             else -> launcherPlaying(pkg) || (pkg != packageName && (pkg == launcherPackage() || Foreground.isTransient(pkg)) &&
                 DeviceRuntime.store.config().optBoolean("trafficAssistEnabled") && PlaybackTraffic.playing(this))
         }
+        if (SystemSettingsGuard.tamperActive()) SystemSettingsGuard.syncForeground(this, pkg, now)
+        val settingsBlocked = SystemSettingsGuard.blocked(
+            context = this,
+            awake = awake,
+            monitoring = monitoring,
+            unlimited = unlimited,
+            pkg = pkg,
+            blockSettings = config.optBoolean("blockSettingsDuringControl", true),
+            recentlyVerified = AdminAuth.recentlyVerified(),
+            now = now
+        )
+        settingsBlockedNow = settingsBlocked
+        val effectiveFree = free && !settingsBlocked
+        freeNow = effectiveFree
+        if (effectiveFree && MediaPause.active) MediaPause.releaseAll(this)
         // 手机 / 平板的桌面本身不是内容页：到点后仍然允许孩子回到桌面挑应用，
         // 否则桌面先被拦住，「不计时白名单」里的应用根本点不进去（用户反馈）。
-        // 打开白名单以外的应用时照常拦截。电视的桌面包常常就是影视入口（聚好看 / JUUI），
-        // 那里继续沿用原来的口径：桌面在放视频时照样弹题。
-        val mobileHome = pkg != null && !DeviceBridge.isTv(this) && exempt(pkg) && !launcherPlaying(pkg)
-        val protecting = awake && monitoring && !ownForeground && !whitelistedNow && !mobileHome && (pkg == null || !exempt(pkg, false))
+        // 注意：只能匹配真正的桌面包名，绝不能用 exempt(pkg) 把系统设置 / 应用管理也当成桌面而每秒 hideAll()。
+        val mobileHome = !settingsBlocked && pkg != null && !DeviceBridge.isTv(this) &&
+            (pkg == launcherPackage() || Foreground.isLauncher(pkg)) && !launcherPlaying(pkg)
+        val exemptNonSettings = !settingsBlocked && pkg != null && exempt(pkg, false)
+        val protecting = awake && monitoring && !ownForeground && !whitelistedNow && !mobileHome && !exemptNonSettings
         val reason = status.getString("reason")
-        val settingsBlocked = SystemSettingsGuard.blocked(this, awake, monitoring, free, pkg,
-            DeviceRuntime.store.config().optBoolean("blockSettingsDuringControl", true), AdminAuth.recentlyVerified())
         val gateReason = if (settingsBlocked) "settings" else reason
         val pendingFeedback = DeviceRuntime.store.get("review_feedback").isNotEmpty()
-        val practice = DeviceRuntime.store.config().optString("playMode") == "practice"
+        val practice = config.optString("playMode") == "practice"
         // 一次 tick 内统一口径：什么情况下应该有 Gate（静音与弹窗共用这个判断）
-        gateExpectedNow = !free && !whitelistedNow && !mobileHome && (gateReason.isNotEmpty() || pendingFeedback || practice)
+        gateExpectedNow = settingsBlocked || (!free && !whitelistedNow && !mobileHome && !exemptNonSettings && (gateReason.isNotEmpty() || pendingFeedback || practice))
         val feedbackVisible = !free && hasGate() && pendingFeedback
-        AudioController.syncLearningActivity(free, gateExpectedNow)
+        AudioController.syncLearningActivity(effectiveFree, gateExpectedNow)
         wasUsing = active && !free && reason.isEmpty() && !feedbackVisible
         // (二改) 状态诊断:显示在电视页右上角,并记进家长后台“计时诊断”
         val why = when {
@@ -193,12 +225,22 @@ class GateService : Service() {
         val stateText = monitorMode + " · " + diag
         if (stateText != lastStateText) { lastStateText = stateText; note(stateText) }
         beatWatch(wasUsing)
-        if (!awake || !monitoring || mobileHome || (!settingsBlocked && (ownForeground || (reason.isEmpty() && !feedbackVisible) || (pkg != null && exempt(pkg, false))))) hideAll()
+        if (!awake || !monitoring || mobileHome || (!settingsBlocked && (ownForeground || (reason.isEmpty() && !feedbackVisible) || exemptNonSettings))) hideAll()
+        // 冷启动校时后新一天的免费额度到账，收起先前为旧额度弹出的全屏页。
+        if (awake && !gateExpectedNow && status.optBoolean("canExit") && status.optLong("freeQuotaSeconds") > 0) {
+            val gateActivity = Foreground.learningActivity() as? GateActivity
+            val launchReason = gateActivity?.intent?.getStringExtra("reason")
+            if (!launchReason.isNullOrEmpty() && launchReason != "settings") gateActivity?.finish()
+        }
         // #162：无障碍按键过滤只在学习页真的要拦 Home / 任务键时打开，平时关掉，
         // 否则海信 VIDAA 这类固件的系统音量条会从厂商面板退回 AOSP 白卡片。
         try { WatchAccessibilityService.setHomeFilter(LearningNavigation.shouldBlockHome()) } catch (_: Exception) { }
         val snapshot = "reason=$gateReason free=$free awake=$awake screen=$screenOn monitoring=$monitoring own=$ownForeground pkg=$pkg cls=${pkg?.let { Foreground.currentClass(it) }} active=$active gate=${hasGate()} overlay=$canOverlay mute=${MediaPause.active} failures=$gateFailures"
         if (snapshot != lastDiag) { lastDiag = snapshot; Diag.info("Gate", snapshot) }
+        if (now - lastTelemetryCheckAt >= 1_800_000L) {
+            lastTelemetryCheckAt = now
+            Diag.uploadRuntimeLogsIfDue(this)
+        }
         val state = GateTickState(now, free, awake, screenOn, monitoring, canOverlay, ownForeground, pkg,
             gateExpectedNow, gateReason, settingsBlocked, active, protecting)
         ensureGateVisible(state)
@@ -253,7 +295,7 @@ class GateService : Service() {
         val canOverlay = state.canOverlay
         val protecting = state.protecting
         val settingsBlocked = state.settingsBlocked
-        // attach 了却一直不可见：不能算「已弹出」，当作失败并重试（hide 会解除静音）
+        // attach 了却一直不可见：不能算「已弹出」，当作失败并重试（hide 会解除静音）；连续失败达到阈值直接降级全屏 Activity
         if (overlay.isShowing && !overlay.presenting(now)) {
             lastGateError = overlay.lastError.ifEmpty { "overlay attached but not visible kind=${overlay.lastErrorKind}" }
             lastGateErrorAt = now
@@ -261,6 +303,10 @@ class GateService : Service() {
             Diag.warn("Gate", "overlay attached but never visible (attempt=$gateFailures) $lastGateError → hide and retry")
             // 用 hide 而不是 destroy：保留 WebView 供 60 秒内下次弹出复用，避免每几秒重建一次
             overlay.hide()
+            if (gateFailures >= 2 && (protecting || settingsBlocked) && gateReason.isNotEmpty()) {
+                fallbackToActivity(now, gateReason)
+                return
+            }
         }
         if (WatchAccessibilityService.hasGate() && !WatchAccessibilityService.presentedGate(now)) {
             lastGateError = WatchAccessibilityService.lastGateError()
@@ -268,6 +314,20 @@ class GateService : Service() {
             gateFailures++
             Diag.warn("Gate", "accessibility gate attached but never visible (attempt=$gateFailures) $lastGateError → hide and retry")
             WatchAccessibilityService.hideGate()
+            if (gateFailures >= 2 && (protecting || settingsBlocked) && gateReason.isNotEmpty()) {
+                fallbackToActivity(now, gateReason)
+                return
+            }
+        }
+        // 只有真正校验可见后才清零失败计数（不能在 overlay.show() 刚 addView 返回 true 时就清零）
+        val gateVerifiedVisible = (overlay.isShowing && overlay.verifiedVisible) ||
+            (WatchAccessibilityService.hasGate() && WatchAccessibilityService.presentedGate(now) &&
+                now - lastGate >= GatePresentation.VISIBILITY_GRACE_MS)
+        if (gateVerifiedVisible && gateFailures > 0) {
+            Diag.info("Gate", "gate verified visible after $gateFailures failed attempts reason=$gateReason")
+            gateFailures = 0
+            lastGateError = ""
+            lastGateErrorAt = -1L
         }
         // 全屏学习页已经在前台 = 已经弹出来了（SDK<26 的老盒子走的就是这条路），
         // 不要再每 2 秒重复拉起 / 重复写日志。
@@ -284,19 +344,28 @@ class GateService : Service() {
         //   1. 家长勾选「强制使用全屏学习页」；
         //   2. 悬浮窗权限只靠 addView 探针成立（固件 AppOps 不忠实），且暂停时确实有音频在播
         //      —— 也就是「画面上正放着视频」，正是会被压住的那个场景。
+        // 关机态或遥控器电源键退让宽限期内禁止拉起全屏页或覆盖层，避免打断关机/唤醒屏幕（ST-002 / #143）
+        val power = getSystemService(POWER_SERVICE) as PowerManager
+        if (!GatePresentation.fullscreenLaunchAllowed(power.isInteractive, screenOn, shuttingDown, now, powerExitUntil)) {
+            return
+        }
+        val shouldShow = (protecting || settingsBlocked) && gateReason.isNotEmpty()
         val forcedFullscreen = DeviceRuntime.store.config().optBoolean("forceFullscreenGate", false)
         val preferFullscreen = GatePresentation.preferFullscreen(
             forcedFullscreen, OverlayAccess.probeOnly(this), MediaPause.lastPauseHadAudio)
-        if (preferFullscreen && (protecting || settingsBlocked) && gateReason.isNotEmpty() &&
-            now - lastGate > GatePresentation.VISIBLE_RETRY_MS && now - lastFullscreenAt > 5_000) {
-            if (openFullscreenGate(gateReason, forcedFullscreen)) {
-                lastFullscreenAt = now
-                lastGate = now
-                if (overlay.isShowing) overlay.hide()
-                return
+        when (GatePresentation.fullscreenDecision(preferFullscreen, shouldShow, now, lastGate, lastFullscreenAt)) {
+            GatePresentation.FullscreenDecision.WAIT_COOLDOWN -> return
+            GatePresentation.FullscreenDecision.LAUNCH_FULLSCREEN -> {
+                if (openFullscreenGate(gateReason, forcedFullscreen)) {
+                    lastFullscreenAt = now
+                    lastGate = now
+                    hideAll()
+                    return
+                }
             }
+            GatePresentation.FullscreenDecision.USE_OVERLAY -> Unit
         }
-        if (!(protecting || settingsBlocked) || gateReason.isEmpty() || hasGate()) return
+        if (!shouldShow || hasGate()) return
         val delay = if (gateFailures > 0) GatePresentation.failureRetryDelayMs(gateFailures) else GatePresentation.VISIBLE_RETRY_MS
         if (now - lastGate <= delay) return
         lastGate = now
@@ -312,10 +381,7 @@ class GateService : Service() {
             false
         }
         if (shown) {
-            if (gateFailures > 0) Diag.info("Gate", "gate shown after $gateFailures failed attempts reason=$gateReason")
-            gateFailures = 0
-            lastGateError = ""
-            lastGateErrorAt = -1L
+            // addView 成功不代表窗口真正可见；等 overlay.presenting(now) / verifiedVisible 通过后再清零 gateFailures
             // (二改) 极米等投影看视频时画面常走硬件图层,悬浮窗会被盖在下面看不见,
             // 所以悬浮窗挂上后 1.5 秒,再把拦截页作为 Activity 拉到前台(有可见窗口时系统才允许从后台启动 Activity)
             if (Foreground.learningActivity() == null && now - lastLaunch > 5000) {
@@ -397,13 +463,20 @@ class GateService : Service() {
      * @return false 表示连 Activity 都拉不起来，调用方应继续走原来的悬浮窗路径。
      */
     private fun openFullscreenGate(gateReason: String, forced: Boolean): Boolean = try {
-        lastFallbackActivityAt = SystemClock.elapsedRealtime()
-        startActivity(Intent(this, GateActivity::class.java)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            .putExtra("reason", gateReason))
-        Diag.info("Gate", if (forced) "家长已开启强制全屏学习页，跳过悬浮窗 reason=$gateReason"
-        else "悬浮窗可能被视频层压住（探针权限+正在播放视频），改用全屏学习页 reason=$gateReason")
-        true
+        val now = SystemClock.elapsedRealtime()
+        val power = getSystemService(POWER_SERVICE) as PowerManager
+        if (!GatePresentation.fullscreenLaunchAllowed(power.isInteractive, screenOn, shuttingDown, now, powerExitUntil)) {
+            Diag.info("Gate", "跳过全屏学习页拉起（关机或电源键退让期 interactive=${power.isInteractive} screenOn=$screenOn shuttingDown=$shuttingDown）")
+            false
+        } else {
+            lastFallbackActivityAt = now
+            startActivity(Intent(this, GateActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                .putExtra("reason", gateReason))
+            Diag.info("Gate", if (forced) "家长已开启强制全屏学习页，跳过悬浮窗 reason=$gateReason"
+            else "悬浮窗可能被视频层压住（探针权限+正在播放视频），改用全屏学习页 reason=$gateReason")
+            true
+        }
     } catch (e: Exception) {
         lastGateError = "fullscreen startActivity=${e.javaClass.simpleName}: ${e.message ?: ""}"
         Diag.warn("Gate", "cannot open fullscreen gate: $lastGateError")
@@ -481,6 +554,7 @@ class GateService : Service() {
 
     private val mediaTick = object : Runnable {
         override fun run() {
+            try { checkOverlayPermission() } catch (e: Exception) { Diag.error("Gate", "overlay self-check failed", e) }
             try { checkAccessibilityLost() } catch (e: Exception) { Diag.error("Gate", "accessibility self-check failed", e) }
             try { BankAutomation.tick(DeviceRuntime.store) } catch (_: Exception) { }
             // #110：只有 Gate 真的在屏幕上才持续静音；否则立即解除，不能让「静音了但没弹窗」卡住。
@@ -496,29 +570,41 @@ class GateService : Service() {
     }
 
     private fun checkOverlayPermission() {
+        val now = SystemClock.elapsedRealtime()
+        if (lastOverlayCheckAt >= 0 && now - lastOverlayCheckAt < 60_000L) return
+        lastOverlayCheckAt = now
+        val supervisionEnabled = try { DeviceRuntime.store.config().optBoolean("supervisionEnabled", true) } catch (_: Exception) { true }
         val p = getSharedPreferences("sotv", MODE_PRIVATE)
+        val wasGranted = p.getBoolean("overlay_was_granted", false)
         val granted = GateOverlay.canDraw(this)
-        if (granted) {
-            if (!p.getBoolean("overlay_was_granted", false)) p.edit().putBoolean("overlay_was_granted", true).apply()
-            return
+        if (granted && !wasGranted) {
+            p.edit().putBoolean("overlay_was_granted", true).apply()
         }
-        if (!p.getBoolean("overlay_was_granted", false)) return
-        p.edit().putBoolean("overlay_was_granted", false).apply()
-        Diag.warn("Gate", "overlay permission was revoked by system")
-        BuglyInit.reportPermissionLost("SYSTEM_ALERT_WINDOW", "revoked by system firmware")
-        try {
-            val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-            val channelId = "sotv_gate_alert"
-            if (Build.VERSION.SDK_INT >= 26) manager.createNotificationChannel(
-                NotificationChannel(channelId, "学习提醒", NotificationManager.IMPORTANCE_HIGH))
-            val pi = PendingIntent.getActivity(this, 2, Intent(this, OnboardingActivity::class.java),
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-            val builder = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, channelId) else Notification.Builder(this)
-            manager.notify(1003, builder.setContentTitle("悬浮窗权限缺失，答题拦截可能已停止")
-                .setContentText("孩子可能已绕过时间限制，请点此重新授权悬浮窗")
-                .setSmallIcon(android.R.drawable.ic_lock_idle_alarm).setContentIntent(pi)
-                .setAutoCancel(true).setOnlyAlertOnce(true).build())
-        } catch (e: Exception) { Diag.error("Gate", "cannot notify overlay revoked", e) }
+        when (GatePresentation.overlayPermissionAlertAction(supervisionEnabled, wasGranted, granted)) {
+            GatePresentation.OverlayAlertAction.CANCEL_ALERT -> {
+                try { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).cancel(1003) } catch (_: Exception) { }
+                return
+            }
+            GatePresentation.OverlayAlertAction.NONE -> return
+            GatePresentation.OverlayAlertAction.NOTIFY_REVOKED -> {
+                p.edit().putBoolean("overlay_was_granted", false).apply()
+                Diag.warn("Gate", "overlay permission was revoked by system")
+                BuglyInit.reportPermissionLost("SYSTEM_ALERT_WINDOW", "revoked by system firmware")
+                try {
+                    val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+                    val channelId = "sotv_gate_alert"
+                    if (Build.VERSION.SDK_INT >= 26) manager.createNotificationChannel(
+                        NotificationChannel(channelId, "学习提醒", NotificationManager.IMPORTANCE_HIGH))
+                    val pi = PendingIntent.getActivity(this, 2, Intent(this, OnboardingActivity::class.java),
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+                    val builder = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, channelId) else Notification.Builder(this)
+                    manager.notify(1003, builder.setContentTitle("悬浮窗权限缺失，答题拦截可能已停止")
+                        .setContentText("孩子可能已绕过时间限制，请点此重新授权悬浮窗")
+                        .setSmallIcon(android.R.drawable.ic_lock_idle_alarm).setContentIntent(pi)
+                        .setAutoCancel(true).setOnlyAlertOnce(true).build())
+                } catch (e: Exception) { Diag.error("Gate", "cannot notify overlay revoked", e) }
+            }
+        }
     }
 
     private fun checkAccessibilityLost() {
@@ -634,22 +720,8 @@ class GateService : Service() {
         return pkg == launcher || Foreground.isLauncher(pkg)
     }
 
-    override fun onCreate() {
-        super.onCreate()
-        DeviceRuntime.ensure(this)
-        // 第一件事就把自唤醒闹钟续上：后面任何一步出错也不能断链
-        Revive.rearm(this)
-        UninstallGuard.restoreOwnerPolicy(this)
-        // 保持 CPU 不睡死：投影待机/息屏后系统会让 CPU 休眠，局域网网页和计时都会停；设备是插电的，代价可以忽略
-        try {
-            val pm = getSystemService(POWER_SERVICE) as PowerManager
-            cpuLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "StudyOnTV:gate").apply { setReferenceCounted(false); acquire() }
-        } catch (_: Exception) { }
-        overlay = GateOverlay(this, GateOverlay.applicationWindowType())
-        instance = this
-        // 服务重建 = 新的一轮，静音/弹窗不同源的计时从零开始
-        AudioController.reset()
-        Prefs.setServiceRunning(this, true)
+    /** 尽早进入前台服务：Android 8+ 要求 startForegroundService 后 5 秒内必须调用 startForeground，绝不能放在数据库初始化后面（#166） */
+    private fun enterForeground() {
         val channelId = "sotv_gate"
         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= 26) manager.createNotificationChannel(NotificationChannel(channelId, "使用时间管理", NotificationManager.IMPORTANCE_LOW))
@@ -657,14 +729,48 @@ class GateService : Service() {
         val builder = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, channelId) else Notification.Builder(this)
         val notification = builder.setContentTitle("题了个题 · 使用时间管理中").setContentText("点击打开学习任务")
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm).setContentIntent(pi).setOngoing(true).build()
-        if (Build.VERSION.SDK_INT >= 34) startForeground(1001, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        else startForeground(1001, notification)
-        // 屏幕亮灭广播：用于识别 TCL「关机未断电」这类 PowerManager 仍报 interactive 的情况
         try {
-            registerReceiver(screenReceiver, IntentFilter().apply {
+            if (Build.VERSION.SDK_INT >= 34) startForeground(1001, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            else startForeground(1001, notification)
+        } catch (e: Exception) {
+            Diag.warn("Service", "startForeground failed: ${e.javaClass.simpleName} ${e.message ?: ""}")
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        // #166：2GB 内存电视被强杀后重启时 IO 慢，先抢在任何数据库/磁盘操作前调用 startForeground，避免 5 秒超时崩掉
+        enterForeground()
+        // 第一件事就把自唤醒闹钟续上：后面任何一步出错也不能断链
+        Revive.rearm(this)
+        // 保持 CPU 不睡死：投影待机/息屏后系统会让 CPU 休眠，局域网网页和计时都会停；设备是插电的，代价可以忽略
+        try {
+            val pm = getSystemService(POWER_SERVICE) as PowerManager
+            cpuLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "StudyOnTV:gate").apply { setReferenceCounted(false); acquire() }
+        } catch (_: Exception) { }
+        DeviceRuntime.ensure(this)
+        PeerDiscovery.start(this, DeviceRuntime.store)
+        UninstallGuard.restoreOwnerPolicy(this)
+        overlay = GateOverlay(this, GateOverlay.applicationWindowType())
+        instance = this
+        // 服务重建 = 新的一轮，静音/弹窗不同源的计时从零开始
+        AudioController.reset()
+        Prefs.setServiceRunning(this, true)
+        // 屏幕亮灭与关机广播：用于识别 TCL「关机未断电」及创维等按电源键关机时抑制重拉（ST-002 / ST-112）
+        try {
+            val filter = IntentFilter().apply {
                 addAction(Intent.ACTION_SCREEN_ON)
                 addAction(Intent.ACTION_SCREEN_OFF)
-            })
+                addAction(Intent.ACTION_SHUTDOWN)
+                addAction("android.intent.action.QUICKBOOT_POWEROFF")
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(screenReceiver, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                registerReceiver(screenReceiver, filter)
+            }
+            screenReceiverRegistered = true
         } catch (e: Exception) { Diag.warn("Gate", "cannot register screen receiver: ${e.message}") }
         // 被杀期间秒表停了，先按 UsageStats 事件补记漏掉的时长（后台线程，别卡住启动）
         Thread {
@@ -687,7 +793,10 @@ class GateService : Service() {
         handler.postDelayed(mediaTick, 1000)
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        enterForeground()
+        return START_STICKY
+    }
     override fun onBind(intent: Intent?): IBinder? = null
 
     /** 被“从最近任务里划掉”时：把自唤醒闹钟续上，手机上 2 秒后再拉起服务 */
@@ -700,11 +809,20 @@ class GateService : Service() {
     override fun onDestroy() {
         try { cpuLock?.release() } catch (_: Exception) { }
         try { DeviceRuntime.learning.flushUsage() } catch (_: Exception) { }
+        try { PeerDiscovery.stop() } catch (_: Exception) { }
         if (Prefs.onboarded(this)) scheduleRestart(this, 5000)
         handler.removeCallbacks(tick); handler.removeCallbacks(mediaTick)
-        try { unregisterReceiver(screenReceiver) } catch (_: Exception) { }
-        MediaPause.release(this)
-        overlay.destroy(); WatchAccessibilityService.hideGate(); countdown.destroy()
+        if (screenReceiverRegistered) {
+            try { unregisterReceiver(screenReceiver) } catch (_: Exception) { }
+            screenReceiverRegistered = false
+        }
+        if (::overlay.isInitialized) overlay.destroy()
+        WatchAccessibilityService.hideGate(); countdown.destroy()
+        if (GatePresentation.shouldReleaseAllMuteOnDestroy(Foreground.learningActivity() != null)) {
+            MediaPause.releaseAll(this)
+        } else {
+            MediaPause.release(this)
+        }
         instance = null
         Prefs.setServiceRunning(this, false)
         // 正常停止前把心跳落准，下次启动补记不会多算
@@ -779,7 +897,7 @@ class GateService : Service() {
             val overlayPresenting = overlay?.presenting(now) == true
             val learningActivity = Foreground.learningActivity() != null
             val gateExpected = service?.gateExpectedNow == true
-            val free = freeState()
+            val free = freeState() && service?.settingsBlockedNow != true
             val mute = MediaPause.active
             val gateVisible = GatePresentation.gateVisible(accessibilityGate, overlayPresenting, learningActivity, gateExpected)
             val mismatch = GatePresentation.inconsistentMute(mute, gateVisible, InputSupport.active, free)
@@ -875,11 +993,22 @@ class GateService : Service() {
             if (parentAuthorized) AdminAuth.markVerified()
             instance?.let { service ->
                 val canIdentify = WatchAccessibilityService.connected || Foreground.hasUsageAccess(service)
-                val settingsLocked = !DeviceRuntime.learning.status().optBoolean("free") &&
-                    DeviceRuntime.store.config().optBoolean("blockSettingsDuringControl", true)
+                val status = DeviceRuntime.learning.status()
+                val unlimited = status.optJSONObject("override")?.optString("mode") == "indefinite"
+                val config = DeviceRuntime.store.config()
+                val settingsLocked = config.optBoolean("supervisionEnabled", true) && !unlimited &&
+                    config.optBoolean("blockSettingsDuringControl", true)
                 // Installation is allowed; it must not grant a child access to every Settings page.
                 if (!parentAuthorized && !AdminAuth.recentlyVerified() && canIdentify && settingsLocked) return
                 SystemSettingsGuard.grant()
+                service.wasUsing = false
+            }
+            hideGates()
+        }
+        /** 遥控器电源/休眠键退出全屏学习页时通知门卫进入短暂退让期，避免下一 tick 立刻重拉唤醒屏幕（ST-002 / #143） */
+        fun onPowerKeyExit(graceMs: Long = GatePresentation.POWER_EXIT_GRACE_MS) {
+            instance?.let { service ->
+                service.powerExitUntil = SystemClock.elapsedRealtime() + graceMs.coerceAtLeast(0L)
                 service.wasUsing = false
             }
             hideGates()
@@ -907,8 +1036,73 @@ object GatePresentation {
     const val VISIBILITY_GRACE_MS = 3200L
     /** 兜底全屏 Activity 拉起后给它的启动宽限（避免刚 startActivity 就判定「没有 Gate」而解除静音） */
     const val FALLBACK_GRACE_MS = 5000L
+    /** 主动切全屏学习页的最小重试冷却间隔 */
+    const val FULLSCREEN_COOLDOWN_MS = 5_000L
+    /** 按遥控器电源键退出全屏学习页后的关机/息屏退让宽限期（ST-002 / #143） */
+    const val POWER_EXIT_GRACE_MS = 8_000L
     /** 连续失败后的重试间隔上限 */
     const val MAX_FAILURE_RETRY_MS = 10_000L
+
+    /** 是否允许拉起全屏学习页或覆盖层：非交互、熄屏、关机中或处于电源键退让宽限期时一律禁止（ST-002 / #143） */
+    fun fullscreenLaunchAllowed(
+        interactive: Boolean,
+        screenOn: Boolean,
+        shuttingDown: Boolean,
+        now: Long,
+        powerExitUntil: Long
+    ): Boolean = interactive && screenOn && !shuttingDown && (powerExitUntil <= 0L || now >= powerExitUntil)
+
+    enum class FullscreenDecision {
+        /** 不走全屏优先策略，继续走悬浮窗 / 无障碍覆盖层路径 */
+        USE_OVERLAY,
+        /** 处于全屏学习页冷却期内，等待全屏页拉起，禁止穿透到悬浮窗/无障碍层 */
+        WAIT_COOLDOWN,
+        /** 立即拉起全屏学习页（仅当拉起明确失败时才允许降级走悬浮窗路径） */
+        LAUNCH_FULLSCREEN
+    }
+
+    /**
+     * 全屏优先策略与冷却窗口的状态机判定（ST-101）：
+     * - 当 `preferFullscreen && shouldShow` 时，冷却期内必须返回 [FullscreenDecision.WAIT_COOLDOWN]，
+     *   严禁穿透到悬浮窗/无障碍覆盖层路径；
+     * - 仅当冷却结束时返回 [FullscreenDecision.LAUNCH_FULLSCREEN]，且只有在拉起 Activity 明确失败时才允许降级。
+     */
+    fun fullscreenDecision(
+        preferFullscreen: Boolean,
+        shouldShow: Boolean,
+        now: Long,
+        lastGateAt: Long,
+        lastFullscreenAt: Long
+    ): FullscreenDecision {
+        if (!preferFullscreen || !shouldShow) return FullscreenDecision.USE_OVERLAY
+        val gateReady = lastGateAt <= 0L || now - lastGateAt > VISIBLE_RETRY_MS
+        val fullscreenReady = lastFullscreenAt <= 0L || now - lastFullscreenAt > FULLSCREEN_COOLDOWN_MS
+        return if (gateReady && fullscreenReady) FullscreenDecision.LAUNCH_FULLSCREEN
+        else FullscreenDecision.WAIT_COOLDOWN
+    }
+
+    /** GateService 销毁时，若前台没有活跃的全屏学习页，必须释放全部静音持有者，避免残留静音（ST-103） */
+    fun shouldReleaseAllMuteOnDestroy(hasLearningActivity: Boolean): Boolean = !hasLearningActivity
+
+    enum class OverlayAlertAction {
+        /** 首次未授权，无需发通知也不必取消 */
+        NONE,
+        /** 权限正常或总管控关闭，取消残留的 1003 告警通知 */
+        CANCEL_ALERT,
+        /** 权限曾授权但在管控开启期间被撤回，发出 1003 告警通知 */
+        NOTIFY_REVOKED
+    }
+
+    /** 悬浮窗权限失联告警状态转移判定（ST-110） */
+    fun overlayPermissionAlertAction(
+        supervisionEnabled: Boolean,
+        wasGranted: Boolean,
+        nowGranted: Boolean
+    ): OverlayAlertAction = when {
+        !supervisionEnabled || nowGranted -> OverlayAlertAction.CANCEL_ALERT
+        wasGranted -> OverlayAlertAction.NOTIFY_REVOKED
+        else -> OverlayAlertAction.NONE
+    }
 
     /**
      * 失败后的重试间隔：2s → 3s → 5s → 10s（上限）。

@@ -250,7 +250,8 @@ em { font-style: normal; }
 }
 .lock-desc { margin: 0 0 4.6rem; font-size: 2.3rem; line-height: 1.7; color: #A2A2AA; }
 .lock-desc b { color: #F2F2F4; }
-.lock-actions { display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center; -webkit-justify-content: center; justify-content: center; }
+.lock-actions { display: -webkit-flex; display: flex; -webkit-flex-wrap: wrap; flex-wrap: wrap; -webkit-align-items: center; align-items: center; -webkit-justify-content: center; justify-content: center; }
+.lock-actions .btn { margin-bottom: 1.6rem; }
 .lock-note { margin-top: 4.2rem; font-size: 1.7rem; color: #63636B; }
 
 
@@ -486,9 +487,12 @@ html.tv-device .hint { display: -webkit-flex; display: flex; }
 .fb-title { font-size: 3.6rem; font-weight: 800; color: #7BE3A4; }
 .is-wrong .fb-title { color: #FF9A9E; }
 .fb-answer { margin-top: 1rem; font-size: 2.6rem; font-weight: 700; color: #F2F2F4; }
-.fb-tip { margin-top: .8rem; font-size: 2rem; line-height: 1.5; color: #B9B9C1; max-height: 6rem; overflow: hidden; }
+.fb-tip { margin-top: .8rem; font-size: 2rem; line-height: 1.5; color: #B9B9C1; max-height: 22vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 .fb-answer:empty, .fb-tip:empty { display: none; }
-.feedback .btn { -webkit-flex-shrink: 0; flex-shrink: 0; margin-left: 3rem; min-width: 22rem; font-size: 2.6rem; }
+.fb-actions { display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center; -webkit-flex-shrink: 0; flex-shrink: 0; margin-left: 3rem; }
+.feedback .btn { -webkit-flex-shrink: 0; flex-shrink: 0; margin-left: 0; margin-right: 1.6rem; min-width: 22rem; font-size: 2.6rem; }
+.feedback .btn:last-child { margin-right: 0; }
+.feedback .fb-read-btn { min-width: auto; padding: 1.8rem 2.8rem; background: rgba(255,255,255,.12); color: #E8E8E8; }
 .feedback.is-right .btn-primary { background: #33D17A; color: #06210F; -webkit-box-shadow: none; box-shadow: none; }
 .btn-danger { background: #F2545B; color: #2A0507; border-color: transparent; }
 .feedback .btn.focused { -webkit-box-shadow: 0 0 0 .45rem rgba(255,255,255,.85); box-shadow: 0 0 0 .45rem rgba(255,255,255,.85); }
@@ -500,9 +504,12 @@ html:not(.tv-device) .fb-icon { width: 46px; height: 46px; line-height: 46px; fo
 html:not(.tv-device) .fb-title { font-size: 20px; color: #2f8a52; }
 html:not(.tv-device) .is-wrong .fb-title { color: #c4473f; }
 html:not(.tv-device) .fb-answer { font-size: 16px; color: #303a33; margin-top: 4px; }
-html:not(.tv-device) .fb-tip { font-size: 14px; color: #6b7768; max-height: none; }
-html:not(.tv-device) .feedback .btn { min-width: 112px; font-size: 16px; margin-left: 16px; padding: 14px 22px; }
-@media (max-width:600px) { html:not(.tv-device) .feedback { -webkit-flex-wrap: wrap; flex-wrap: wrap; } html:not(.tv-device) .feedback .btn { width: 100%; margin: 14px 0 0; } }
+html:not(.tv-device) .fb-tip { font-size: 14px; color: #6b7768; max-height: 28vh; overflow-y: auto; }
+html:not(.tv-device) .fb-actions { margin-left: 16px; }
+html:not(.tv-device) .feedback .btn { min-width: 112px; font-size: 16px; margin-left: 0; margin-right: 10px; padding: 14px 22px; }
+html:not(.tv-device) .feedback .btn:last-child { margin-right: 0; }
+html:not(.tv-device) .feedback .fb-read-btn { min-width: auto; padding: 14px 16px; }
+@media (max-width:600px) { html:not(.tv-device) .feedback { -webkit-flex-wrap: wrap; flex-wrap: wrap; } html:not(.tv-device) .fb-actions { width: 100%; margin: 14px 0 0; } html:not(.tv-device) .fb-actions .btn { -webkit-flex: 1; flex: 1; margin: 0 10px 0 0; } html:not(.tv-device) .fb-actions .btn:last-child { margin-right: 0; } html:not(.tv-device) .fb-actions .fb-read-btn { -webkit-flex: 0 0 auto; flex: 0 0 auto; } }
 
 
 /* =====================================================================
@@ -586,7 +593,7 @@ html.tv-device .lock-note { font-size: 1.9rem; color: #6E6E6E; margin-top: 4.6re
 .pair-steps { list-style: none; margin: 0 0 5rem; padding: 0; }
 .pair-steps li { position: relative; padding-left: 7rem; margin-bottom: 3rem; font-size: 2.6rem; line-height: 1.5; color: #CFCFCF; min-height: 4.6rem; }
 .pair-steps li b { position: absolute; left: 0; top: -.2rem; width: 4.6rem; height: 4.6rem; line-height: 4.6rem; border-radius: 50%; text-align: center; font-size: 2.2rem; background: rgba(255,255,255,.1); background: #2E2E2E; color: #E8E8E8; }
-.pair-url { display: inline-block; margin-top: 1rem; padding: .8rem 1.6rem; border-radius: 1rem; background: #222222; color: #E8E8E8; font-weight: 600; font-size: 2.4rem; letter-spacing: .01em; }
+.pair-url { display: inline-block; margin-top: 1rem; padding: .8rem 1.6rem; border-radius: 1rem; background: #222222; color: #E8E8E8; font-weight: 600; font-size: 2.4rem; letter-spacing: .01em; text-decoration: none; word-break: break-all; }
 .pair-wrap .lock-actions { -webkit-justify-content: flex-start; justify-content: flex-start; }
 html.tv-device .qr-box { width: 46rem; height: 46rem; padding: 3rem; border-radius: 3.2rem; background: #FFFFFF; margin: 0; -webkit-flex-shrink: 0; flex-shrink: 0; -webkit-box-shadow: 0 3rem 8rem rgba(0,0,0,.5); box-shadow: 0 3rem 8rem rgba(0,0,0,.5); }
 html.tv-device .qr-box img, html.tv-device .qr-box canvas { width: 40rem; height: 40rem; }
@@ -597,7 +604,7 @@ html:not(.tv-device) .pair-eyebrow { font-size: 13px; color: #879385; }
 html:not(.tv-device) .pair-steps { text-align: left; display: inline-block; margin-bottom: 24px; }
 html:not(.tv-device) .pair-steps li { font-size: 15px; padding-left: 40px; margin-bottom: 14px; min-height: 28px; color: #4b5650; }
 html:not(.tv-device) .pair-steps li b { width: 28px; height: 28px; line-height: 28px; font-size: 13px; background: #eef1eb; color: #4b5650; }
-html:not(.tv-device) .pair-url { font-size: 14px; background: #eef1eb; color: #26312b; padding: 4px 10px; }
+html:not(.tv-device) .pair-url { font-size: 14px; background: #eef1eb; color: #26312b; padding: 6px 12px; text-decoration: underline; cursor: pointer; }
 html:not(.tv-device) .pair-wrap .qr-box { margin: 0 auto 24px; }
 html:not(.tv-device) .pair-wrap .lock-actions { -webkit-justify-content: center; justify-content: center; }
 body.on-pair .pill { display: none; }
@@ -908,3 +915,9 @@ html.tv-device .read-aloud-btn { font-size: 1.8rem; padding: 1rem 2rem; margin-r
 html.tv-device .read-aloud-btn.focused { opacity: 1; }
 /* 手机 / 平板也保留「朗读」按钮：家长常用于让孩子重听题干（以前这里把整个页脚右侧连同按钮一起隐藏了） */
 html:not(.tv-device) .read-aloud-btn { font-size: 1.5rem; padding: .8rem 1.8rem; margin-left: 1.2rem; }
+/* 反馈条内的「朗读」保持次按钮样式，不与主操作「继续」抢视觉焦点 */
+html.tv-device .feedback .fb-read-btn, html.tv-device .feedback.is-wrong .fb-read-btn { min-width: auto; background: #2E2E2E; color: #E8E8E8; }
+html.tv-device .feedback .fb-read-btn.focused, html.tv-device .feedback.is-wrong .fb-read-btn.focused { background: #3A3A3A; color: #FFFFFF; }
+html.tv-device[data-mode="light"] .feedback .fb-read-btn, html.tv-device[data-mode="light"] .feedback.is-wrong .fb-read-btn { background: #E4E4E4; color: #1E1E1E; }
+html.tv-device[data-mode="light"] .feedback .fb-read-btn.focused, html.tv-device[data-mode="light"] .feedback.is-wrong .fb-read-btn.focused { background: #FFFFFF; color: #1E1E1E; }
+html:not(.tv-device) .feedback .fb-read-btn, html:not(.tv-device) .feedback.is-wrong .fb-read-btn { min-width: auto; background: var(--m-surface-2); color: var(--m-text); font-weight: 500; }

@@ -32,9 +32,11 @@ open class MainActivity : Activity() {
         // 透明主题的拦截页在安卓 8.0 上不允许设置方向（会直接崩溃），电视本来就是横屏，跳过
         if (DeviceBridge.isTv(this) && this !is GateActivity) requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
         val reason = intent.getStringExtra("reason")
-        page = if (this is GateActivity && reason != null && reason !in listOf("timeup", "feedback")) "lock?reason=$reason" else "quiz"
+        page = if (this is GateActivity && reason != null) gateLearningPage(reason) else "quiz"
         createWeb()
-        GateService.start(this)
+        GateService.ensureRunning(this, "app")
+        // #166：2GB 电视进程重建时若首次拉起前台服务被系统延迟/拒绝，3 秒后补试一次
+        web.postDelayed({ if (!isFinishing && !isDestroyed && Prefs.onboarded(this)) GateService.ensureRunning(this, "app-retry") }, 3000)
     }
 
     /**
@@ -47,8 +49,23 @@ open class MainActivity : Activity() {
         if (!BuglyInit.configured) { CrashDetector.clear(this); return }   // 没配置自己的 Bugly，不弹窗、不上传
         if (!CrashDetector.hasPending(this)) return
 
+        // EU 仅本地隐私版：不弹外部上传征求框，直接清理遗留崩溃标记
+        if (LocalOnlyGuard.enabled) {
+            CrashDetector.readAndClear(this)
+            return
+        }
+
+        // 全屏锁屏学习页面向孩子，不弹家长级隐私授权对话框
+        if (this is GateActivity) return
+
         // 已同意：DeviceRuntime.ensure() 已自动触发上传，无需再操作
         if (Prefs.crashUploadConsent(this)) return
+
+        // 已明确拒绝过：清理遗留崩溃标记，不再重复打扰
+        if (Prefs.crashUploadConsentAsked(this)) {
+            CrashDetector.readAndClear(this)
+            return
+        }
 
         // 未同意：弹窗征求同意
         val summary = CrashDetector.readAndClear(this)
@@ -126,7 +143,7 @@ open class MainActivity : Activity() {
         super.onNewIntent(intent)
         setIntent(intent)
         val reason = intent?.getStringExtra("reason")
-        page = if (this is GateActivity && reason != null && reason !in listOf("timeup", "feedback")) "lock?reason=$reason" else "quiz"
+        page = if (this is GateActivity && reason != null) gateLearningPage(reason) else "quiz"
         if (::web.isInitialized && !webReleased) {
             web.loadUrl(Prefs.localBase(this) + "#/$page")
             web.evaluateJavascript("window.SOTV_RESUME&&SOTV_RESUME()", null)
@@ -159,12 +176,13 @@ open class MainActivity : Activity() {
         if (isPowerKey(event.keyCode)) {
             if (event.action == KeyEvent.ACTION_DOWN && this is GateActivity) {
                 Diag.info("Gate", "遥控器电源键：退出全屏学习页，交给系统处理")
+                GateService.onPowerKeyExit()
                 finish()
             }
             return super.dispatchKeyEvent(event)
         }
-        // 手机 / 平板的回车键交给网页输入框
-        if (!DeviceBridge.isTv(this) && event.keyCode == KeyEvent.KEYCODE_ENTER) return super.dispatchKeyEvent(event)
+        // 手机 / 平板把方向键和回车交给网页输入框，仅拦截返回键给 window.TV.back()
+        if (!DeviceBridge.isTv(this) && event.keyCode != KeyEvent.KEYCODE_BACK) return super.dispatchKeyEvent(event)
         val view = if (::web.isInitialized && !webReleased) web else null
         return remote.handle(view, event) || super.dispatchKeyEvent(event)
     }

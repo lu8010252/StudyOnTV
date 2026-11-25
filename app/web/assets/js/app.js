@@ -7,9 +7,10 @@
     screen: '', round: null, config: {}, learning: {}, study: {},
     busy: false, selected: [], version: 0, awaiting: false, reviewed: false,
     review: null, draft: null, unlockPending: false, unlockPendingAt: 0,
-    cardIndex: 0, cardRevealed: false, lastStartOpts: null
+    cardIndex: 0, cardRevealed: false, lastStartOpts: null, loaded: false
   };
-  var toastTimer, nextTimer, taps = 0, lastTap = 0, upTaps = 0, lastUpTap = 0;
+  var toastTimer, nextTimer, resumeTimer, taps = 0, lastTap = 0, upTaps = 0, lastUpTap = 0;
+  function clearResumeTimer() { window.clearTimeout(resumeTimer); resumeTimer = null; }
   var QUESTION_INPUT_GUARD_MS = 300;
   var renderedQuestionNonce = null, questionInputAllowedAt = 0;
   function questionInputTime() {
@@ -30,7 +31,7 @@
       }));
     } catch (e) {}
   }
-  function clearRound() { try { window.localStorage.removeItem(ROUND_KEY); } catch (e) {} }
+  function clearRound() { listenUsed = {}; lastListenAttempt = null; try { window.localStorage.removeItem(ROUND_KEY); } catch (e) {} }
   function savedRound() {
     try {
       var saved = JSON.parse(window.localStorage.getItem(ROUND_KEY) || 'null');
@@ -46,8 +47,12 @@
   }
   function canVoice() { return !!(window.SOTVNative && typeof window.SOTVNative.answerVoice === 'function'); }
   function canRead() { return !!(window.SOTVNative && typeof window.SOTVNative.readInLanguage === 'function'); }
+  function canReadRate() { return !!(window.SOTVNative && typeof window.SOTVNative.readWithRate === 'function'); }
   function isPureStudyMode() { return state.config && state.config.supervisionEnabled === false; }
   function isHubAvailable() { return isPureStudyMode() || !!(state.learning && state.learning.free); }
+  function overrideKey(learning) {
+    return learning && learning.override ? (learning.override.mode + ':' + learning.override.at) : '';
+  }
   // 可用时段文案由设备按周计划算好（state.learning.scheduleText），页面不再自己拼旧版的 windowStart/windowEnd
   function scheduleText() { return (state.learning && state.learning.scheduleText) || ''; }
   // 朗读内容由家长在「设置 → 朗读」里定：只读题干、题干加选项、再加答案（答案在作答后才读）
@@ -56,6 +61,80 @@
   function speakable(text) {
     if (window.SOTV_PLAIN) return window.SOTV_PLAIN(text);
     return String(text == null ? '' : text).replace(/\$\$?/g, '').trim();
+  }
+  // 听力题：listen 只交给朗读，屏幕上不显示；listenTimes 限制本组最多播几次（默认 5 次）
+  // 闪卡（memorize）与测验（quiz）阶段分开计数；朗读失败时自动退回本次计数
+  var listenUsed = {};
+  var lastListenAttempt = null;
+  function listenKey(item) {
+    var phase = (state.round && state.round.studyPhase === 'memorize') ? 'memorize' : 'quiz';
+    return phase + ':' + String((item && (item.id || item.q)) || '');
+  }
+  function listenCap(item) {
+    var cap = Number(item && item.listenTimes);
+    return cap >= 1 && cap <= 5 ? Math.floor(cap) : 5;
+  }
+  function listenLeft(item) { return Math.max(0, listenCap(item) - (listenUsed[listenKey(item)] || 0)); }
+  function refundListen(key, item) {
+    if (listenUsed[key] > 0) {
+      listenUsed[key] = listenUsed[key] - 1;
+      refreshListenBtn(item);
+    }
+  }
+  // 没有原生桥（电脑浏览器打开家长面板同款页面）时用 Web Speech API 兜底
+  function webSpeak(text, lang, onError) {
+    if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) return false;
+    var utterance = new window.SpeechSynthesisUtterance(String(text || ''));
+    utterance.lang = lang || 'en-US';
+    if (typeof onError === 'function') utterance.onerror = onError;
+    try { window.speechSynthesis.cancel(); window.speechSynthesis.speak(utterance); return true; } catch (e) { return false; }
+  }
+  function playListen(item) {
+    if (!item || !item.listen || listenLeft(item) <= 0) return false;
+    var key = listenKey(item);
+    var lang = item.language || 'en-US';
+    var rate = Number(item.listenRate);
+    var usedNative = false;
+    if (canReadRate() && rate >= 0.7 && rate <= 1.5) {
+      nativeCall('readWithRate', [item.listen, lang, rate]);
+      usedNative = true;
+    } else if (canRead()) {
+      nativeCall('readInLanguage', [item.listen, lang]);
+      usedNative = true;
+    } else {
+      var refunded = false;
+      var ok = webSpeak(item.listen, lang, function () {
+        if (refunded) return;
+        refunded = true;
+        refundListen(key, item);
+      });
+      if (!ok) {
+        toast('当前设备暂不支持朗读听力');
+        return false;
+      }
+    }
+    listenUsed[key] = (listenUsed[key] || 0) + 1;
+    lastListenAttempt = usedNative ? { key: key, item: item } : null;
+    refreshListenBtn(item);
+    return true;
+  }
+  // 只改按钮文案，不重渲染整页：重渲染会再触发一次自动朗读
+  function refreshListenBtn(item) {
+    var button = $('listenBtn');
+    if (!button || !item) return;
+    var left = listenLeft(item);
+    button.textContent = left > 0 ? '▶ 播放听力（还可播 ' + left + ' 次）' : '听力已播放完';
+    button.disabled = left <= 0;
+    // 播完置灰后不能让遥控器焦点停在禁用按钮上，否则按 OK 只弹提示、选不了选项
+    // 使用 ES5 兼容的 add/remove 代替二参 classList.toggle，兼容旧版电视 WebView
+    if (left <= 0) {
+      button.classList.add('answered');
+      button.classList.remove('focusable');
+      if (button.classList.contains('focused')) focusDefault();
+    } else {
+      button.classList.remove('answered');
+      button.classList.add('focusable');
+    }
   }
   function formatOptionAnswer(item, i) {
     var raw = (item && item.a ? item.a : [])[i];
@@ -69,6 +148,7 @@
   }
   function readText(item) {
     if (!item) return '';
+    if (item.listen) return speakable(item.listen);
     var parts = [speakable(item.q)];
     if (readScope() !== 'question' && item.a && item.a.length) {
       (item.a || []).forEach(function (_, index) { parts.push(formatSpokenOption(item, index)); });
@@ -77,6 +157,11 @@
   }
   // 答题 / 锁定页的家长解锁入口（默认关闭，家长在「时间计划」里打开）
   function canUnlock() { return !!(window.SOTVNative && typeof window.SOTVNative.askParentPassword === 'function' && typeof window.SOTVNative.quizUnlock === 'function'); }
+  function canUnlockSettings() { return !!(window.SOTVNative && typeof window.SOTVNative.askSettingsPassword === 'function' && typeof window.SOTVNative.settingsUnlock === 'function'); }
+  function isSettingsLockActive() {
+    var unlimited = state.learning && state.learning.override && state.learning.override.mode === 'indefinite';
+    return !isPureStudyMode() && !unlimited && state.config.blockSettingsDuringControl !== false;
+  }
   function nativeCall(name, args) {
     var bridge = window.SOTVNative;
     try { if (bridge && typeof bridge[name] === 'function') return bridge[name].apply(bridge, args || []); } catch (e) {}
@@ -93,7 +178,7 @@
       if (xhr.readyState !== 4) return;
       var data;
       try { data = JSON.parse(xhr.responseText); } catch (e) { return done('连接设备失败'); }
-      if (xhr.status < 200 || xhr.status >= 300 || data.error) return done(data.message || '请求失败，请重试');
+      if (xhr.status < 200 || xhr.status >= 300 || data.error) return done(data.message || '请求失败，请重试', data);
       done(null, data);
     };
     xhr.onerror = function () { done('连接设备失败'); };
@@ -108,6 +193,8 @@
     toastTimer = window.setTimeout(function () { box.className = 'toast'; }, 3000);
   }
   function show(screen) {
+    clearResumeTimer();
+    if (screen !== 'quiz') nativeCall('stopReading');
     all('.screen').forEach(function (el) { el.className = 'screen'; });
     var target = $('screen-' + screen);
     if (target) target.className = 'screen active';
@@ -152,6 +239,7 @@
         // 多孩子（#132）：孩子列表和当前是谁由设备端算好，页面只负责显示 / 切换
         state.children = result.children || [];
         state.activeChild = result.activeChild || '';
+        state.loaded = true;
         pill(); applyTheme(state.config.theme); applyFont();
       }
       if (callback) callback(error, result);
@@ -161,6 +249,76 @@
     var list = state.children || [];
     for (var i = 0; i < list.length; i++) if (list[i].id === (id === undefined ? state.activeChild : id)) return list[i].name;
     return '';
+  }
+  function findChild(id) {
+    var list = state.children || [];
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+    return null;
+  }
+  function isPinModalOpen() {
+    var modal = $('pinModal');
+    return !!(modal && modal.className.indexOf('show') >= 0);
+  }
+  function openPinModal(kid, afterMode, errorMsg) {
+    var modal = $('pinModal'), input = $('pinInput'), err = $('pinError');
+    if (!modal || !input) return;
+    state.pinTarget = { id: kid.id, name: kid.name || childName(kid.id) || '该孩子', afterMode: afterMode || 'hub' };
+    if ($('pinTitle')) $('pinTitle').textContent = '切换到「' + state.pinTarget.name + '」';
+    if (err) err.textContent = errorMsg || '';
+    input.value = '';
+    input.readOnly = isTv();
+    modal.className = 'pin-modal show';
+    focusDefault();
+    if (!isTv()) {
+      try { input.focus(); } catch (e) {}
+    }
+  }
+  function closePinModal() {
+    var modal = $('pinModal'), input = $('pinInput'), err = $('pinError');
+    if (modal) modal.className = 'pin-modal';
+    if (input) { input.value = ''; try { input.blur(); } catch (e) {} }
+    if (err) err.textContent = '';
+    state.pinTarget = null;
+    focusDefault();
+  }
+  function performChildSwitch(kidId, pin, afterMode, fromModal) {
+    if (state.busy) return;
+    var body = { id: kidId };
+    if (fromModal || (pin !== undefined && pin !== null && pin !== '')) body.pin = String(pin || '');
+    state.busy = true;
+    request('/api/children/switch', body, function (error, result) {
+      state.busy = false;
+      if (error) {
+        var code = result && result.error;
+        if (code === 'child_pin_required' || code === 'child_pin_invalid') {
+          var msg = (result && result.message) || (code === 'child_pin_invalid' ? '密码错误，请重试' : '请输入切换密码');
+          if (!isPinModalOpen()) {
+            var targetKid = findChild(kidId) || { id: kidId, name: childName(kidId) || '该孩子' };
+            openPinModal(targetKid, afterMode, msg);
+          } else {
+            if ($('pinError')) $('pinError').textContent = msg;
+            if (code === 'child_pin_invalid' && $('pinInput')) $('pinInput').value = '';
+            focusDefault();
+          }
+          return;
+        }
+        if (isPinModalOpen() && $('pinError')) $('pinError').textContent = error;
+        else toast(error);
+        return;
+      }
+      if (isPinModalOpen()) closePinModal();
+      state.children = result.items || [];
+      state.activeChild = result.active || '';
+      state.chosen = true;
+      pill();
+      if (afterMode === 'hub') {
+        loadState(function () { renderHub(); });
+      } else if (afterMode === 'start') {
+        loadState(function () { if (isHubAvailable()) renderHub(); else start(); });
+      } else {
+        loadState(function () { if (isHubAvailable()) renderHub(); else route(); });
+      }
+    });
   }
   function applyFont() {
     var scale = Math.max(75, Math.min(200, +state.config.fontScale || 100));
@@ -209,6 +367,7 @@
   }
 
   function renderHub() {
+    nativeCall('stopReading');
     state.round = null;
     state.awaiting = false;
     state.reviewed = false;
@@ -228,7 +387,7 @@
           btn.className = 'btn ' + (isAct ? 'btn-primary' : 'btn-ghost') + ' focusable hub-child-btn';
           btn.setAttribute('data-action', 'hub-switch-child');
           btn.setAttribute('data-child', kid.id);
-          btn.textContent = (isAct ? '✓ ' : '') + kid.name;
+          btn.textContent = (isAct ? '✓ ' : '') + (kid.hasPin ? '🔒 ' : '') + kid.name;
           kidsBox.appendChild(btn);
         });
       }
@@ -266,11 +425,12 @@
     return out;
   }
 
-  function start(arg) {
+  function start(arg, fromGate) {
     if (state.busy) return;
     var payload = buildStartPayload(arg);
     if (payload.focus) state.lastStartOpts = payload;
     else if (!arg) state.lastStartOpts = null;
+    if (fromGate === true) payload.fromGate = true;
     state.busy = true;
     request('/api/quiz/start', payload, function (error, result) {
       state.busy = false;
@@ -329,7 +489,15 @@
       state.awaiting = false; state.reviewed = false;
       if (result.studyPhase === 'memorize' && Array.isArray(result.studyCards) && result.studyCards.length > 0) {
         state.round = result;
-        state.cardIndex = 0;
+        var nextIdx = -1;
+        for (var ci = 0; ci < result.studyCards.length; ci++) {
+          if (!result.studyCards[ci].rated) { nextIdx = ci; break; }
+        }
+        if (nextIdx < 0) {
+          if (result.focus === 'memorize') { finishFlashcards(result.studyCards.length); return; }
+          nextIdx = 0;
+        }
+        state.cardIndex = nextIdx;
         state.cardRevealed = false;
         show('quiz');
         renderStudyCard();
@@ -343,7 +511,8 @@
       if (result.watching && !payload.focus) {
         state.lockReason = '';
         show('lock'); $('lockTitle').textContent = '已解锁使用时间';
-        $('lockDesc').textContent = '还可以使用 ' + Math.ceil(state.learning.remainingSeconds / 60) + ' 分钟';
+        var watchSeconds = (state.learning.remainingSeconds || 0) + (state.learning.freeQuotaSeconds || 0);
+        $('lockDesc').textContent = '还可以使用 ' + Math.ceil(watchSeconds / 60) + ' 分钟';
         icon($('lockIcon'), 'check'); $('lockNote').textContent = '';
         $('lockActions').innerHTML = '<button class="btn btn-primary focusable" data-action="home">返回桌面</button>' +
           '<button class="btn btn-ghost focusable" data-action="start-study" data-focus="quiz">继续练题</button>';
@@ -406,7 +575,8 @@
     $('qText').className = 'question' + (qLength > 120 ? ' longer' : qLength > 56 ? ' long' : '');
     renderMedia(card);
     if (!state.cardRevealed) {
-      if (state.speech && state.speech.autoRead) nativeCall('readInLanguage', [speakable(card.q), card.language || '']);
+      if (card.listen && state.speech && state.speech.autoRead) playListen(card);
+      else if (state.speech && state.speech.autoRead) nativeCall('readInLanguage', [speakable(card.q), card.language || '']);
       else nativeCall('stopReading');
     }
 
@@ -417,6 +587,7 @@
     if (Array.isArray(card.a) && card.a.length > 0 && card.type !== 'boolean') {
       var preview = document.createElement('div');
       preview.className = 'study-choices-preview';
+      options.appendChild(preview);
       card.a.forEach(function (val, i) {
         var row = document.createElement('div');
         row.className = 'study-choice-item';
@@ -425,6 +596,9 @@
         ltr.textContent = String.fromCharCode(65 + i) + '.';
         var body = document.createElement('div');
         body.className = 'opt-body';
+        row.appendChild(ltr);
+        row.appendChild(body);
+        preview.appendChild(row);
         var optImg = Array.isArray(card.optionImages) ? card.optionImages[i] : '';
         if (optImg && MEDIA_SRC_RE.test(optImg)) {
           var img = document.createElement('img');
@@ -437,14 +611,10 @@
         if (String(val || '').trim()) {
           var txt = document.createElement('span');
           txt.className = 'opt-text';
-          if (window.SOTV_RICH) window.SOTV_RICH(txt, val); else txt.textContent = val;
           body.appendChild(txt);
+          if (window.SOTV_RICH) window.SOTV_RICH(txt, val); else txt.textContent = val;
         }
-        row.appendChild(ltr);
-        row.appendChild(body);
-        preview.appendChild(row);
       });
-      options.appendChild(preview);
     }
 
     if (!state.cardRevealed) {
@@ -473,25 +643,25 @@
     } else {
       var backBox = document.createElement('div');
       backBox.className = 'study-card-back';
+      options.appendChild(backBox);
       var ansLabel = document.createElement('div');
       ansLabel.className = 'study-back-label';
       ansLabel.textContent = '正确答案';
       var ansBody = document.createElement('div');
       ansBody.className = 'study-back-answer';
+      backBox.appendChild(ansLabel);
+      backBox.appendChild(ansBody);
       var ansStr = formatCardAnswerFallback(card);
       if (window.SOTV_RICH) window.SOTV_RICH(ansBody, ansStr || '请参考下方解析');
       else ansBody.textContent = ansStr || '请参考下方解析';
-      backBox.appendChild(ansLabel);
-      backBox.appendChild(ansBody);
 
       if (card.tip && String(card.tip).trim()) {
         var tipBody = document.createElement('div');
         tipBody.className = 'study-back-tip';
+        backBox.appendChild(tipBody);
         if (window.SOTV_RICH) window.SOTV_RICH(tipBody, '重点解析：' + card.tip);
         else tipBody.textContent = '重点解析：' + card.tip;
-        backBox.appendChild(tipBody);
       }
-      options.appendChild(backBox);
 
       if (round.focus === 'memorize') {
         var iv = card.intervals || {};
@@ -546,12 +716,12 @@
       }
     }
 
+    if (window.SOTV_MATH) window.SOTV_MATH(options);
     var readAloudBtn = $('readAloudBtn');
     if (readAloudBtn) {
       readAloudBtn.className = 'btn btn-ghost focusable read-aloud-btn';
       readAloudBtn.style.display = canRead() ? '' : 'none';
     }
-    if (window.SOTV_MATH) { window.SOTV_MATH($('qText')); window.SOTV_MATH(options); }
     if (state.cardRevealed && round.focus === 'memorize' && isTv()) {
       // 默认把焦点落在「良好」上，按 OK 即可顺畅翻下一张，左右可切换重来 / 困难 / 简单
       var fList = focusables();
@@ -567,6 +737,7 @@
   }
 
   function finishFlashcards(count) {
+    nativeCall('stopReading');
     state.round = null;
     clearRound();
     loadState();
@@ -582,6 +753,11 @@
     focusDefault();
   }
 
+  function renderStars(difficulty) {
+    var raw = Number(difficulty);
+    var count = isFinite(raw) && raw > 0 ? Math.max(1, Math.min(5, Math.round(raw))) : 2;
+    return new Array(count + 1).join('★');
+  }
   function renderQuestion() {
     var round = state.round;
     if (round && round.studyPhase === 'memorize') { renderStudyCard(); return; }
@@ -594,12 +770,16 @@
     else $('qText').textContent = item.q;
     $('qIndex').textContent = round.mode === 'count' ? round.correct || 0 : round.mode === 'streak' ? round.streak : round.mode === 'practice' ? round.answered + 1 : Math.min(round.answered + 1, round.target);
     $('qTotal').textContent = round.mode === 'practice' ? '题' : '/ ' + round.target;
-    $('qMode').textContent = (round.extra ? '加练任务' : round.focus === 'wrong' ? '错题闯关' : round.focus === 'due' ? '记忆复习' : round.mode === 'streak' ? '连续答对' : round.mode === 'count' ? '答对指定题数' : round.mode === 'practice' ? '自由练习' : '本组任务') + ' · ' + new Array((item.difficulty || 2) + 1).join('★');
+    $('qMode').textContent = (round.extra ? '加练任务' : round.focus === 'wrong' ? '错题闯关' : round.focus === 'due' ? '记忆复习' : round.mode === 'streak' ? '连续答对' : round.mode === 'count' ? '答对指定题数' : round.mode === 'practice' ? '自由练习' : '本组任务') + ' · ' + renderStars(item.difficulty);
     $('qPool').textContent = round.extraPool > 0 ? '加练池还剩 ' + round.extraPool + ' 题' : '';
     $('qDots').textContent = round.mode === 'streak' ? '连续答对 ' + round.streak + ' 题' : '';
     var qLength = speakable(item.q).length;
     $('qText').className = 'question' + (qLength > 120 ? ' longer' : qLength > 56 ? ' long' : '');
-    if (state.speech && state.speech.autoRead) nativeCall('readInLanguage', [readText(item), item.language || '']);
+    if (item.listen) {
+      // 听力题只播听力文本：题干和选项一律不进 TTS，否则选项被念出来等于给答案
+      if (state.speech && state.speech.autoRead) playListen(item);
+      else nativeCall('stopReading');
+    } else if (state.speech && state.speech.autoRead) nativeCall('readInLanguage', [readText(item), item.language || '']);
     else nativeCall('stopReading');
     renderMedia(item);
     var options = $('qOptions'); options.innerHTML = '';
@@ -650,6 +830,7 @@
         button.setAttribute('data-opt', index);
         var letter = document.createElement('span'); letter.className = 'letter'; letter.textContent = String.fromCharCode(65 + index);
         var body = document.createElement('span'); body.className = 'opt-body';
+        button.appendChild(letter); button.appendChild(body); options.appendChild(button);
         var optImg = Array.isArray(item.optionImages) ? item.optionImages[index] : '';
         if (optImg && MEDIA_SRC_RE.test(optImg)) {
           var img = document.createElement('img'); img.className = 'opt-image'; img.src = optImg; img.alt = '选项 ' + String.fromCharCode(65 + index);
@@ -658,12 +839,12 @@
         }
         if (String(value || '').trim()) {
           var label = document.createElement('span'); label.className = 'opt-text';
-          if (window.SOTV_RICH) window.SOTV_RICH(label, value); else label.textContent = value;
           body.appendChild(label);
+          if (window.SOTV_RICH) window.SOTV_RICH(label, value); else label.textContent = value;
         }
-        button.appendChild(letter); button.appendChild(body); options.appendChild(button);
       });
       if (item.type === 'multiple') addSubmit(options, '确认所选答案');
+      if (window.SOTV_MATH) window.SOTV_MATH(options);
     }
     // 「朗读」固定放在页脚，不再混进选项区，避免遥控器在选项之间误选
     var readAloudBtn = $('readAloudBtn');
@@ -671,7 +852,6 @@
       readAloudBtn.className = 'btn btn-ghost focusable read-aloud-btn';
       readAloudBtn.style.display = canRead() ? '' : 'none';
     }
-    window.SOTV_MATH($('qText')); window.SOTV_MATH(options);
     focusDefault();
     // #141：排版要等公式 / 图片渲染完再量；这一步不会改变正常字号下的显示
     window.setTimeout(fitQuiz, 0);
@@ -717,6 +897,18 @@
       if (window.SOTVNative) { var play = document.createElement('button'); play.className = 'btn btn-ghost focusable'; play.setAttribute('data-action', 'play-audio'); play.textContent = '播放题目音频'; box.appendChild(play); }
       else { var audio = document.createElement('audio'); audio.src = item.audio; audio.controls = true; audio.className = 'focusable'; audio.preload = 'none'; box.appendChild(audio); }
     }
+    // 听力题：不摆音频文件，点按钮让设备朗读 listen（listenTimes 次为上限）
+    if (item.listen && !item.audio) {
+      var left = listenLeft(item);
+      var listenBtn = document.createElement('button');
+      listenBtn.id = 'listenBtn';
+      listenBtn.className = 'btn btn-ghost' + (left > 0 ? ' focusable' : ' answered');
+      listenBtn.textContent = left > 0 ? '▶ 播放听力（还可播 ' + left + ' 次）' : '听力已播放完';
+      listenBtn.disabled = left <= 0;
+      if (window.SOTVNative) listenBtn.setAttribute('data-action', 'play-listen');
+      else listenBtn.onclick = function () { playListen(item); };
+      box.appendChild(listenBtn);
+    }
   }
   function addSubmit(parent, value) {
     var button = document.createElement('button'); button.className = 'btn btn-primary focusable answer-submit';
@@ -737,6 +929,8 @@
   function submit() {
     if (state.busy || !state.round || questionInputBlocked()) return;
     var round = state.round, item = round.question, written = $('writtenAnswer');
+    // 必听题：一次都没播过不让提交，避免不看听力直接猜
+    if (item.listenRequired && item.listen && listenLeft(item) === listenCap(item)) { toast('请先播放听力再作答'); return; }
     if (written ? (!written.value.trim() && !state.draft.drawing) : !state.selected.length) { toast('请先填写或选择答案'); return; }
     state.busy = true;
     request('/api/quiz/answer', { roundId: round.id, nonce: round.nonce, selections: state.selected, text: written ? written.value : '', drawing: state.draft ? state.draft.drawing : '' }, function (error, result) {
@@ -800,12 +994,15 @@
         : (result.correctIndices || []).map(function (i) { return formatSpokenOption(item, i); }).join('，');
       if (spokenAnswer) nativeCall('readInLanguage', ['正确答案：' + spokenAnswer, item.language || '']);
     }
+    var fbRead = $('fbReadAloud');
+    if (fbRead) {
+      fbRead.style.display = canRead() ? '' : 'none';
+    }
     var go = $('fbNext');
     state.feedbackUntil = Date.now() + ((result.status && result.status.feedbackSeconds) || 0) * 1000;
     go.textContent = result.finished ? '查看结果' : '继续';
     updateFeedbackClock();
     go.className = 'btn ' + (right ? 'btn-primary' : 'btn-danger') + ' focusable';
-    if (window.SOTV_MATH) { window.SOTV_MATH($('fbAnswer')); window.SOTV_MATH($('fbTip')); }
     // 选项已经作答，焦点留在“继续”上（反馈层展开时跳过被遮挡的页脚按钮）
     all('#qOptions .focusable').forEach(function (el) { el.classList.remove('focusable'); el.classList.add('answered'); });
     var list = focusables(); for (var i = 0; i < list.length; i++) if (list[i] === go) { setFocus(i); break; }
@@ -860,13 +1057,17 @@
       if (result.passed) {
         if (result.status && result.status.reason) { lock(result.status.reason); toast('奖励已保存，达到可用时段后使用'); return; }
         var reward = Math.round((result.rewardMinutes || 0) * 10) / 10;
+        state.lockReason = '';
         show('lock'); $('lockTitle').textContent = '任务完成'; icon($('lockIcon'), 'check');
         $('lockDesc').textContent = reward > 0 ? '已解锁 ' + reward + ' 分钟' : '今天的时间额度已经领满，先使用已有的时间吧'; var pb = result.status.points;
         $('lockNote').textContent = pb && pb.enabled && pb.balance >= 0 ? '星星屋积分 ' + pb.balance + '（今天已得 ' + pb.today + '）' : '';
         $('lockActions').innerHTML = '<button class="btn btn-primary focusable" data-action="resume">开始使用</button>';
         focusDefault();
         // 解锁后回到解题前正在看的应用，不要跳回桌面（#68 / #74）
-        window.setTimeout(function () { if (state.screen === 'lock') nativeCall('resumePrevious'); }, 2500);
+        resumeTimer = window.setTimeout(function () {
+          resumeTimer = null;
+          if (state.screen === 'lock' && !state.lockReason) nativeCall('resumePrevious');
+        }, 2500);
       } else { toast('本组未通过，再试一组'); start(state.lastStartOpts); }
     } else if (result.next) { state.round = result.next; renderQuestion(); }
     else quizEmpty(result.quizEmptyMessage);
@@ -891,6 +1092,7 @@
     focusDefault();
   }
   function lock(reason) {
+    nativeCall('stopReading');
     if (isPureStudyMode() && reason !== 'settings') { renderHub(); return; }
     state.lockReason = reason;
     show('lock'); state.round = null; clearRound();
@@ -903,9 +1105,10 @@
     if (reason === 'settings') {
       icon($('lockIcon'), 'hourglass');
       $('lockTitle').textContent = '管控期间暂不能打开系统设置';
-      $('lockDesc').textContent = '家长验证后可临时进入，或返回学习页继续。';
+      $('lockDesc').textContent = '家长验证管理密码后可临时进入设置 2 分钟，或返回继续。';
       $('lockNote').textContent = '';
-      $('lockActions').innerHTML = '<button class="btn btn-primary focusable" data-action="return-learning">返回学习页</button>';
+      $('lockActions').innerHTML = '<button class="btn btn-primary focusable" data-action="return-learning">返回学习页</button>' +
+        (canUnlockSettings() ? '<button class="btn btn-ghost focusable" data-action="settings-unlock">家长验证进入设置</button>' : '');
       appendUnlockButton();
       focusDefault(); return;
     }
@@ -926,8 +1129,12 @@
       // 服务端按家长设置的时区算好文案，设备时区不对时也能和规则对得上
       when = state.learning.nextAtText || '';
       if (!when) {
+        // 和服务端同一个口径：今明两天说「今天 / 明天」，再远显示日期（Issue #147）
         var date = new Date(state.learning.nextAvailableAt);
-        when = (date.getMonth() + 1) + ' 月 ' + date.getDate() + ' 日 ' + ('0' + date.getHours()).slice(-2) + ':' + ('0' + date.getMinutes()).slice(-2);
+        var hm = ('0' + date.getHours()).slice(-2) + ':' + ('0' + date.getMinutes()).slice(-2);
+        var today = new Date(); today.setHours(0, 0, 0, 0);
+        var days = Math.round((new Date(date.getFullYear(), date.getMonth(), date.getDate()) - today) / 86400000);
+        when = days === 0 ? '今天 ' + hm : days === 1 ? '明天 ' + hm : (date.getMonth() + 1) + ' 月 ' + date.getDate() + ' 日 ' + hm;
       }
     }
     $('lockDesc').textContent = when ? '下次可用：' + when : reason === 'timeup' ? '完成学习任务后才能使用设备' : '现在暂不可用';
@@ -965,7 +1172,8 @@
       button.className = 'btn ' + (kid.active ? 'btn-primary' : 'btn-ghost') + ' focusable';
       button.setAttribute('data-action', 'start-as-child');
       button.setAttribute('data-child', kid.id);
-      button.textContent = isStart ? '开始学习 · ' + kid.name : kid.name;
+      var label = (kid.hasPin ? '🔒 ' : '') + kid.name;
+      button.textContent = isStart ? '开始学习 · ' + label : label;
       $('lockActions').appendChild(button);
     });
   }
@@ -986,10 +1194,22 @@
     try { info = JSON.parse(raw); } catch (e) {}
     if (!info) { nativeCall('openParent'); return; }
     show('pair');
-    if (!info.ip) { $('pairQr').textContent = '请先连接 WiFi'; $('pairUrl').textContent = '暂无局域网地址，学习功能可离线使用'; focusDefault(); return; }
-    var url = 'http://' + info.ip + ':' + info.port + '/admin/';
-    $('pairUrl').textContent = url;
-    var qr = window.qrcode(0, 'M'); qr.addData(url); qr.make(); $('pairQr').innerHTML = qr.createImgTag(8, 8);
+    var port = info.port || window.location.port || 8080;
+    var localUrl = 'http://127.0.0.1:' + port + '/admin/';
+    var lanUrl = info.ip ? ('http://' + info.ip + ':' + port + '/admin/') : '';
+    var displayUrl = lanUrl || localUrl;
+    state.pairUrl = displayUrl;
+    state.pairLocalUrl = localUrl;
+    var urlEl = $('pairUrl');
+    if (urlEl) {
+      urlEl.textContent = displayUrl;
+      if (urlEl.tagName === 'A') urlEl.setAttribute('href', localUrl);
+    }
+    if (!lanUrl) {
+      $('pairQr').textContent = '未连接 WiFi，可在本机直接打开管理面板';
+    } else {
+      var qr = window.qrcode(0, 'M'); qr.addData(lanUrl); qr.make(); $('pairQr').innerHTML = qr.createImgTag(8, 8);
+    }
     focusDefault();
   }
   // 深色 / 浅色 / 跟随系统（电视系统的深色模式设置）
@@ -1014,6 +1234,9 @@
   }
   function isTv() { return document.documentElement.classList.contains('tv-device'); }
   function focusables() {
+    if (isPinModalOpen()) {
+      return all('#pinModal .focusable').filter(function (el) { return !el.disabled && (el.offsetWidth > 0 || el.offsetHeight > 0); });
+    }
     var screen = document.querySelector('.screen.active');
     var list = screen ? Array.prototype.slice.call(screen.querySelectorAll('.focusable')) : [];
     // 答题反馈面板弹出时遮挡了底部页脚，排除 .quiz-foot 里的按钮，防止遥控器焦点落到面板背后消失
@@ -1024,7 +1247,8 @@
     }
     // 右上角更新提示也要能用遥控器选中
     if ($('updateTip').className.indexOf('show') >= 0) list = list.concat(all('#updateTip .focusable'));
-    return list.filter(function (el) { return el.offsetWidth > 0 || el.offsetHeight > 0; });
+    // 禁用的按钮不进焦点链：听力播完的「播放听力」不能把遥控器焦点吸住
+    return list.filter(function (el) { return !el.disabled && (el.offsetWidth > 0 || el.offsetHeight > 0); });
   }
   function reveal(el) {
     // 旧版电视 WebView 不支持 scrollIntoView({block}) 参数，手动滚动到可见
@@ -1078,10 +1302,41 @@
     return false;
   }
   function activate(el) {
-    if (!el) el = document.querySelector('.screen.active .focused') || document.querySelector('.focused');
+    if (!el) el = (isPinModalOpen() ? document.querySelector('#pinModal.show .focused') : null) || document.querySelector('.screen.active .focused') || document.querySelector('.focused');
     if (!el) return;
     if (el.hasAttribute('data-opt')) return choose(+el.getAttribute('data-opt'));
     var action = el.getAttribute('data-action');
+    if (action === 'pin-digit') {
+      var pIn = $('pinInput');
+      var digit = el.getAttribute('data-digit') || '';
+      if (pIn && pIn.value.length < 20) pIn.value += digit;
+      if ($('pinError')) $('pinError').textContent = '';
+      return;
+    }
+    if (action === 'pin-clear') {
+      if ($('pinInput')) $('pinInput').value = '';
+      if ($('pinError')) $('pinError').textContent = '';
+      return;
+    }
+    if (action === 'pin-back') {
+      var pBack = $('pinInput');
+      if (pBack && pBack.value.length > 0) pBack.value = pBack.value.slice(0, -1);
+      if ($('pinError')) $('pinError').textContent = '';
+      return;
+    }
+    if (action === 'pin-cancel') {
+      closePinModal();
+      return;
+    }
+    if (action === 'pin-confirm' && state.pinTarget) {
+      var pVal = $('pinInput') ? $('pinInput').value : '';
+      if (!pVal) {
+        if ($('pinError')) $('pinError').textContent = '请输入切换密码';
+        return;
+      }
+      performChildSwitch(state.pinTarget.id, pVal, state.pinTarget.afterMode, true);
+      return;
+    }
     if (action === 'submit') submit();
     if (action === 'next') proceed();
     if (action === 'back-hub') { renderHub(); return; }
@@ -1094,15 +1349,12 @@
     if (action === 'hub-switch-child' && !state.busy) {
       var hubKid = el.getAttribute('data-child');
       if (hubKid === state.activeChild) return;
-      state.busy = true;
-      request('/api/children/switch', { id: hubKid }, function (error, result) {
-        state.busy = false;
-        if (error) { toast(error); return; }
-        state.children = result.items || [];
-        state.activeChild = result.active || '';
-        state.chosen = true;
-        loadState(function () { renderHub(); });
-      });
+      var hubKidObj = findChild(hubKid);
+      if (hubKidObj && hubKidObj.hasPin) {
+        openPinModal(hubKidObj, 'hub');
+        return;
+      }
+      performChildSwitch(hubKid, '', 'hub', false);
       return;
     }
     if (action === 'reveal-card') {
@@ -1132,12 +1384,14 @@
       return;
     }
     if (action === 'rate-card' && !state.busy && state.round && state.round.studyCards) {
+      var reqRoundId = state.round.id;
       var rCard = state.round.studyCards[state.cardIndex || 0];
       var quality = +el.getAttribute('data-quality') || 4;
       var totalCards = state.round.studyCards.length;
       state.busy = true;
-      request('/api/quiz/rate', { roundId: state.round.id, qid: rCard ? rCard.id : '', quality: quality }, function (error, result) {
+      request('/api/quiz/rate', { roundId: reqRoundId, qid: rCard ? rCard.id : '', quality: quality }, function (error, result) {
         state.busy = false;
+        if (!state.round || state.round.id !== reqRoundId || state.screen !== 'quiz') return;
         if (error) { toast(error); return; }
         if (result && result.study) state.study = result.study;
         if (result && Array.isArray(result.studyCards)) state.round.studyCards = result.studyCards;
@@ -1152,9 +1406,11 @@
       return;
     }
     if (action === 'finish-memorize' && !state.busy && state.round) {
+      var memRoundId = state.round.id;
       state.busy = true;
-      request('/api/quiz/memorized', { roundId: state.round.id }, function (error, response) {
+      request('/api/quiz/memorized', { roundId: memRoundId }, function (error, response) {
         state.busy = false;
+        if (!state.round || state.round.id !== memRoundId || state.screen !== 'quiz') return;
         if (error) { toast(error); return; }
         var nextRound = (response && response.round) ? response.round : response;
         if (nextRound && nextRound.status) state.learning = nextRound.status;
@@ -1202,6 +1458,28 @@
       }, 180000);
       nativeCall('askParentPassword');
     }
+    if (action === 'settings-unlock') {
+      if (!canUnlockSettings()) { toast('当前设备不支持密码验证'); return; }
+      state.settingsUnlockPending = true;
+      state.settingsUnlockPendingAt = Date.now();
+      var settingsPendingAt = state.settingsUnlockPendingAt;
+      window.setTimeout(function () {
+        if (state.settingsUnlockPendingAt === settingsPendingAt) { state.settingsUnlockPending = false; state.settingsUnlockPendingAt = 0; }
+      }, 180000);
+      nativeCall('askSettingsPassword');
+    }
+    if (action === 'open-local-admin') {
+      window.location.href = state.pairLocalUrl || '/admin/';
+      return;
+    }
+    if (action === 'copy-pair-url') {
+      var copyTarget = state.pairUrl || state.pairLocalUrl || '';
+      if (!copyTarget) { toast('暂无可复制的地址'); return; }
+      var copied = nativeCall('copyText', [copyTarget]);
+      if (copied === true) toast('已复制地址：' + copyTarget);
+      else toast('复制失败，请手动输入地址');
+      return;
+    }
     if (action === 'permissions' || action === 'password') nativeCall(action === 'permissions' ? 'openPermissions' : 'changePassword');
     if (action === 'clear-drawing') { state.draft.drawing = ''; renderQuestion(); }
     if (action === 'watch-lesson') nativeCall('watchLesson');
@@ -1209,30 +1487,61 @@
       var audioTarget = state.round.studyPhase === 'memorize' && state.round.studyCards ? state.round.studyCards[state.cardIndex || 0] : state.round.question;
       if (audioTarget) nativeCall('playAudio', [audioTarget.audio || '']);
     }
+    if (action === 'play-listen' && state.round) {
+      var listenTarget = state.round.studyPhase === 'memorize' && state.round.studyCards ? state.round.studyCards[state.cardIndex || 0] : state.round.question;
+      if (listenTarget && !playListen(listenTarget)) toast('这道题的听力已经播放完 ' + listenCap(listenTarget) + ' 次');
+    }
     if (action === 'read-aloud') {
       if (state.round && state.round.studyPhase === 'memorize' && state.round.studyCards) {
         var mCard = state.round.studyCards[state.cardIndex || 0];
         if (mCard) {
-          var cardSpoken = speakable(mCard.q);
+          if (mCard.listen && !state.cardRevealed) {
+            if (!playListen(mCard)) toast('这道题的听力已经播放完 ' + listenCap(mCard) + ' 次');
+            return;
+          }
+          var cardSpoken = mCard.listen ? '' : speakable(mCard.q);
           if (state.cardRevealed) {
             var cardAns = speakable(formatCardAnswerFallback(mCard));
-            if (cardAns) cardSpoken += '。正确答案：' + cardAns;
-            if (mCard.tip) cardSpoken += '。解析：' + speakable(mCard.tip);
+            if (cardAns) cardSpoken += (cardSpoken ? '。' : '') + '正确答案：' + cardAns;
+            if (mCard.tip) cardSpoken += (cardSpoken ? '。' : '') + '解析：' + speakable(mCard.tip);
           }
-          nativeCall('readInLanguage', [cardSpoken, mCard.language || '']);
+          if (cardSpoken) {
+            lastListenAttempt = null;
+            nativeCall('readInLanguage', [cardSpoken, mCard.language || '']);
+          }
         }
         return;
       }
-      // 作答后这一下就是「再读一遍」：题干 + 选项（按家长设置的朗读范围）+ 正确答案
+      // 听力题点击「朗读」时只走听力播放（受 listenTimes / listenRate 约束，不剧透题干与选项）
       var readItem = state.round ? state.round.question : null;
-      var spoken = readItem ? readText(readItem) : '';
       var feedback = state.feedback;
+      if (readItem && readItem.listen) {
+        if (!feedback) {
+          if (!playListen(readItem)) toast('这道题的听力已经播放完 ' + listenCap(readItem) + ' 次');
+          return;
+        }
+        if (readScope() === 'questionOptionsAnswer') {
+          var listenCorrect = (feedback.correctIndices || []).map(function (i) {
+            return formatSpokenOption(readItem, i);
+          }).join('，') || speakable(feedback.answerText || '');
+          if (listenCorrect) {
+            lastListenAttempt = null;
+            nativeCall('readInLanguage', ['正确答案：' + listenCorrect, readItem.language || '']);
+            return;
+          }
+        }
+        if (!playListen(readItem)) toast('这道题的听力已经播放完 ' + listenCap(readItem) + ' 次');
+        return;
+      }
+      // 作答后这一下就是「再读一遍」：题干 + 选项（按家长设置的朗读范围）+ 正确答案
+      var spoken = readItem ? readText(readItem) : '';
       if (feedback && readItem && readScope() === 'questionOptionsAnswer') {
         var correct = (feedback.correctIndices || []).map(function (i) {
           return formatSpokenOption(readItem, i);
         }).join('，') || speakable(feedback.answerText || '');
         if (correct) spoken += '。正确答案：' + correct;
       }
+      lastListenAttempt = null;
       nativeCall('readInLanguage', [spoken, readItem ? readItem.language || '' : '']);
     }
     // retry 用于错误 / 空题库的重试，start-quiz 用于「时间到了」页的「开始答题」；两者都重新取题
@@ -1241,42 +1550,51 @@
     if (action === 'start-as-child' && !state.busy) {
       var kidId = el.getAttribute('data-child');
       var wantStart = !state.chosen || state.lockReason === 'timeup';
-      state.chosen = true;
       if (kidId === state.activeChild) {
+        state.chosen = true;
         if (isHubAvailable()) renderHub(); else if (wantStart) start();
         return;
       }
+      var kidObj = findChild(kidId);
+      var afterMode = wantStart ? 'start' : 'route';
+      if (kidObj && kidObj.hasPin) {
+        openPinModal(kidObj, afterMode);
+        return;
+      }
+      performChildSwitch(kidId, '', afterMode, false);
+    }
+    if (action === 'skip-review' && !state.busy) {
       state.busy = true;
-      request('/api/children/switch', { id: kidId }, function (error, result) {
+      request('/api/quiz/skip', {}, function (error) {
         state.busy = false;
         if (error) { toast(error); return; }
-        state.children = result.items || []; state.activeChild = result.active || ''; pill();
-        // 点名字就是为了开始：切换成功后直接开这一轮，不必再点一次
-        if (isHubAvailable()) renderHub();
-        else if (wantStart) start(); else route();
+        state.awaiting = false; state.reviewed = false;
+        if (isHubAvailable()) renderHub(); else start();
       });
     }
-    if (action === 'skip-review') { request('/api/quiz/skip', {}, function (error, result) { if (error) { toast(error); return; } state.awaiting = false; state.reviewed = false; state.busy = false; if (isHubAvailable()) renderHub(); else start(); }); }
     if (action === 'return-learning') nativeCall('backToQuiz');
     if (action === 'home') nativeCall('exitToLauncher');
-    if (action === 'resume') nativeCall('resumePrevious');
+    if (action === 'resume') { clearResumeTimer(); nativeCall('resumePrevious'); }
     if (action === 'quiz') { if (state.screen === 'pair') nativeCall('backToQuiz'); else if (isHubAvailable()) renderHub(); else start(); }
   }
   function route() {
-    window.clearTimeout(nextTimer); state.busy = false; hideFeedback();
+    window.clearTimeout(nextTimer); clearResumeTimer(); state.busy = false; hideFeedback();
     var hash = location.hash || '#/quiz';
+    var fromGate = hash.indexOf('?reason=') >= 0;
     state.settingsGate = hash.indexOf('reason=settings') >= 0;
     if (hash.indexOf('#/pair') === 0) return pair();
     loadState(function (error) {
       if (error) { show('quiz'); $('qText').textContent = error; return; }
       if (state.settingsGate) {
-        if (!isPureStudyMode() && state.config.blockSettingsDuringControl !== false && !state.learning.free) { lock('settings'); return; }
+        if (isSettingsLockActive()) { lock('settings'); return; }
         state.settingsGate = false;
       }
       if (isHubAvailable() && !state.learning.awaitingReview && (!state.round || hash.indexOf('#/hub') === 0)) {
         renderHub();
         return;
       }
+      if (fromGate && !state.settingsGate && !state.learning.reason && state.learning.freeQuotaSeconds > 0 &&
+          state.config.playMode !== 'practice') return start(null, true);
       // 答题途中被系统清掉再打开：服务端还停在同一题、当前也确实该答题时，恢复原来那组
       if (!state.settingsGate && hash.indexOf('#/lock') !== 0 && !state.learning.reason && !state.learning.free &&
           !state.learning.awaitingReview && !((state.children || []).length > 1 && !state.chosen)) {
@@ -1292,7 +1610,52 @@
       }
       if (hash.indexOf('#/lock') === 0 && !state.learning.free && !isPureStudyMode()) lock(state.learning.reason || 'timeup');
       else if ((state.children || []).length > 1 && !state.chosen) chooseChild();
-      else start();
+      else start(null, fromGate);
+    });
+  }
+  function resumeSync() {
+    var hash = location.hash || '#/quiz';
+    if (hash.indexOf('#/pair') === 0 || ((state.settingsGate || hash.indexOf('reason=settings') >= 0) && isSettingsLockActive())) {
+      route();
+      return;
+    }
+    if (state.screen !== 'quiz' || !state.round) {
+      route();
+      return;
+    }
+    var prevQuizGen = state.learning.quizGeneration || 0;
+    var prevPure = isPureStudyMode();
+    var prevFree = !!state.learning.free;
+    var prevOvKey = overrideKey(state.learning);
+    var prevAwaiting = !!state.learning.awaitingReview;
+    var prevChild = state.activeChild || '';
+    loadState(function (error) {
+      if (error) return;
+      if (state.screen !== 'quiz' || !state.round) return;
+      var reason = state.learning.reason;
+      var settingsBlocked = (state.settingsGate || reason === 'settings') && isSettingsLockActive();
+      var forceLock = settingsBlocked ||
+        (!isPureStudyMode() && reason === 'locked') ||
+        (!isHubAvailable() && state.config.playMode !== 'practice' && reason &&
+          ['rest', 'schedule', 'rounds', 'quota', 'feedback'].indexOf(reason) >= 0);
+      if (forceLock) {
+        window.clearTimeout(nextTimer); state.busy = false; state.awaiting = false; state.reviewed = false;
+        state.round = null; clearRound(); hideFeedback();
+        lock(settingsBlocked ? 'settings' : reason);
+        return;
+      }
+      var invalidated =
+        prevQuizGen !== (state.learning.quizGeneration || 0) ||
+        prevPure !== isPureStudyMode() ||
+        (prevChild && state.activeChild && prevChild !== state.activeChild) ||
+        (!isPureStudyMode() && prevOvKey !== overrideKey(state.learning)) ||
+        (!isPureStudyMode() && state.config.playMode !== 'practice' && prevFree !== !!state.learning.free) ||
+        prevAwaiting !== !!state.learning.awaitingReview;
+      if (invalidated) {
+        window.clearTimeout(nextTimer); state.busy = false; state.awaiting = false; state.reviewed = false;
+        state.round = null; clearRound(); hideFeedback();
+        route();
+      }
     });
   }
   function boot() {
@@ -1310,6 +1673,34 @@
     });
     // 只有家长页 / 实体键盘会走到这里（学习页的遥控器按键由原生层转发给 window.TV）
     document.addEventListener('keydown', function (event) {
+      if (isPinModalOpen()) {
+        if (event.keyCode === 27) { closePinModal(); event.preventDefault(); return; }
+        if (event.target && event.target.id === 'pinInput' && !event.target.readOnly) {
+          if (event.keyCode === 13) { activate($('pinConfirm')); event.preventDefault(); }
+          return;
+        }
+        if (event.keyCode >= 48 && event.keyCode <= 57) {
+          var pKeyIn = $('pinInput');
+          if (pKeyIn && pKeyIn.value.length < 20) pKeyIn.value += String(event.keyCode - 48);
+          if ($('pinError')) $('pinError').textContent = '';
+          event.preventDefault();
+          return;
+        }
+        if (event.keyCode >= 96 && event.keyCode <= 105) {
+          var pNumIn = $('pinInput');
+          if (pNumIn && pNumIn.value.length < 20) pNumIn.value += String(event.keyCode - 96);
+          if ($('pinError')) $('pinError').textContent = '';
+          event.preventDefault();
+          return;
+        }
+        if (event.keyCode === 8) {
+          var pDelIn = $('pinInput');
+          if (pDelIn && pDelIn.value.length > 0) pDelIn.value = pDelIn.value.slice(0, -1);
+          if ($('pinError')) $('pinError').textContent = '';
+          event.preventDefault();
+          return;
+        }
+      }
       if (event.target.tagName === 'INPUT' || (event.target.tagName === 'TEXTAREA' && !event.target.readOnly)) return;
       var dir = { 37: 'left', 38: 'up', 39: 'right', 40: 'down' }[event.keyCode];
       if (dir) {
@@ -1318,7 +1709,7 @@
           var now = Date.now(); upTaps = now - lastUpTap < 900 ? upTaps + 1 : 1; lastUpTap = now;
           if (upTaps >= 5) { upTaps = 0; nativeCall('openParent'); }
         } else if (!event.repeat) upTaps = 0;
-      } else if (event.keyCode === 13) { if (!event.repeat) activate(); } else return;
+      } else if (event.keyCode === 13 || event.keyCode === 23) { if (!event.repeat) activate(); } else return;
       event.preventDefault();
     });
     var info = nativeCall('deviceInfo');
@@ -1333,9 +1724,9 @@
     window.setInterval(function () {
       $('clock').textContent = new Date().toTimeString().slice(0, 5);
       if (state.screen === 'pair') return;
-      // 题目提交中：等作答响应回来再轮询，否则 start() 可能把还在途中的提交状态重置掉
-      if (state.busy && !state.feedback) return;
-      var version = state.config.version, quizGeneration = state.learning.quizGeneration || 0, wasFree = !!state.learning.free, wasPure = isPureStudyMode();
+      // 题目提交中或正在输入切换密码：等操作完成再轮询，否则可能把状态重置掉
+      if (!state.loaded || (state.busy && !state.feedback) || isPinModalOpen()) return;
+      var version = state.config.version, quizGeneration = state.learning.quizGeneration || 0, wasFree = !!state.learning.free, wasPure = isPureStudyMode(), prevOvKey = overrideKey(state.learning);
       loadState(function (error) {
         if (error) return;
         if (state.screen === 'lock' && !state.lockReason && !state.learning.reason && state.learning.remainingSeconds > 0)
@@ -1353,7 +1744,7 @@
           return;
         }
         if (state.settingsGate) {
-          if (!isPureStudyMode() && !state.learning.free && state.config.blockSettingsDuringControl !== false) return;
+          if (isSettingsLockActive()) return;
           state.settingsGate = false;
           if (isHubAvailable()) renderHub(); else start();
           return;
@@ -1364,9 +1755,7 @@
           if (isHubAvailable()) renderHub(); else start();
           return;
         }
-        var ovKey = state.learning.override ? state.learning.override.mode + state.learning.override.at : '';
-        if (ovKey !== (state.ovKey || '')) {
-          state.ovKey = ovKey;
+        if (overrideKey(state.learning) !== prevOvKey) {
           if (!isPureStudyMode()) {
             window.clearTimeout(nextTimer); state.busy = false; state.awaiting = false; state.reviewed = false;
             state.round = null; hideFeedback();
@@ -1390,7 +1779,7 @@
         if (state.screen === 'lock' && (state.lockReason !== state.learning.reason || state.wasFree !== !!state.learning.free)) {
           state.wasFree = !!state.learning.free;
           if (isHubAvailable()) renderHub();
-          else if (!state.learning.reason) start();
+          else if (!state.learning.reason) start(null, true);
           else lock(state.learning.reason);
           return;
         }
@@ -1402,10 +1791,29 @@
   window.SOTV_INPUT_CANCEL = function () {
     state.unlockPending = false;
     state.unlockPendingAt = 0;
+    state.settingsUnlockPending = false;
+    state.settingsUnlockPendingAt = 0;
   };
   window.SOTV_INPUT = function (result, token) {
     // 原生侧靠这个标记确认注入成功，失败会重试（部分电视 WebView 切回来时 JS 尚未就绪）
     if (token) window.__sotvAck = token;
+    if (state.settingsUnlockPending) {
+      state.settingsUnlockPending = false;
+      state.settingsUnlockPendingAt = 0;
+      var sPass = (result && result.text) || '';
+      if (!sPass) { toast('已取消验证'); return; }
+      var sReply = null;
+      try { sReply = JSON.parse(nativeCall('settingsUnlock', [sPass]) || 'null'); } catch (e) {}
+      if (sReply && sReply.ok) {
+        state.settingsGate = false;
+        state.lockReason = '';
+        toast('验证通过，已临时放行系统设置 2 分钟');
+        return;
+      }
+      toast(sReply && sReply.error === 'wrong' ? '密码错误，连续错误 5 次后需等待一分钟' : '验证失败，请重试');
+      focusDefault();
+      return;
+    }
     // 家长解锁：回传的是密码，不能写进答题草稿
     if (state.unlockPending) {
       state.unlockPending = false;
@@ -1436,19 +1844,32 @@
   window.SOTV_UPDATE = function (info) { if (!info || !info.latest) return; window.currentUpdate = info;
     try { if (!info.force && window.localStorage.setItem && window.localStorage.getItem('sotv_update_dismissed') === info.latest) return; } catch (e) {} $('updateText').textContent = '发现新版本 v' + info.latest; $('updateTip').className = 'update-tip show'; };
   // 朗读失败（没有系统语音、云端 Key 不对、语言不支持…）直接显示在电视上，不能再「点了没声音」
-  window.SOTV_SPEECH_NOTICE = function (info) { if (!info || info.ok !== false) return; toast(String(info.message || '朗读失败，请重试')); };
+  window.SOTV_SPEECH_NOTICE = function (info) {
+    if (!info || info.ok !== false) return;
+    if (lastListenAttempt) {
+      var attempt = lastListenAttempt;
+      lastListenAttempt = null;
+      refundListen(attempt.key, attempt.item);
+    }
+    toast(String(info.message || '朗读失败，请重试'));
+  };
   window.SOTV_NAVIGATION_BLOCKED = function (message) { toast(message || '现在暂不可用'); return true; };
   window.TV = {
     move: move,
     select: function () { activate(); },
     back: function () {
-      if (state.screen === 'quiz' && isHubAvailable()) { renderHub(); return; }
+      if (isPinModalOpen()) { closePinModal(); return; }
+      if (state.screen === 'pair') { nativeCall('backToQuiz'); return; }
+      if ((state.screen === 'quiz' || (state.screen === 'lock' && state.lockReason !== 'settings')) && isHubAvailable()) {
+        renderHub();
+        return;
+      }
       if (isPureStudyMode() || state.learning.canExit === true) nativeCall('exitToLauncher');
       else if (nativeCall('navigationBlocked') !== true) window.SOTV_NAVIGATION_BLOCKED();
     },
     state: state
   };
-  window.SOTV_RESUME = function () { if (document.readyState === 'complete' && !state.busy && state.screen !== 'pair') route(); };
+  window.SOTV_RESUME = function () { if (document.readyState === 'complete' && !state.busy && state.screen !== 'pair') resumeSync(); };
   window.addEventListener('hashchange', route);
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 })();

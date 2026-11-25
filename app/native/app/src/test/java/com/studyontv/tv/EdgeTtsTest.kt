@@ -17,7 +17,7 @@ class EdgeTtsTest {
         val t1 = 1_700_000_399_000L
         val t2 = 1_700_000_400_000L
         val gec0 = EdgeTts.secMsGec(t0)
-        assertEquals(64, gec0.length)
+        assertEquals("0919602B5750900A-EC9DD394F23CB5635CF62A0E8E24136DCD32B26D10C543B10082E482D7516397", gec0)
         assertEquals(gec0, EdgeTts.secMsGec(t1))
         assertNotEquals(gec0, EdgeTts.secMsGec(t2))
     }
@@ -114,5 +114,66 @@ class EdgeTtsTest {
         assertEquals(1_794_979_800_000L, ms!!)
         assertNull(EdgeTts.parseHttpDate(""))
         assertNull(EdgeTts.parseHttpDate("not-a-date"))
+    }
+
+    @Test
+    fun escapeXmlStripsIllegalControlCharsAndLoneSurrogatesWhilePreservingValidEmoji() {
+        val loneHigh = '\uD83D'
+        val loneLow = '\uDC00'
+        val raw = "A\u0000B\u000BC\u000CD\t\n\r${loneHigh}E${loneLow}F📐𝜋<x>&y"
+        assertEquals("ABCD\t\n\rEF📐𝜋&lt;x&gt;&amp;y", EdgeTts.escapeXml(raw))
+    }
+
+    @Test(expected = IllegalStateException::class)
+    fun requireOnlineAllowedRejectsLocalOnlyMode() {
+        EdgeTts.requireOnlineAllowed(localOnly = true)
+    }
+
+    @Test
+    fun handshakeValidatesStatusCodeAndSecWebSocketAccept() {
+        // RFC 6455 §1.3 official test vector
+        val wsKey = "dGhlIHNhbXBsZSBub25jZQ=="
+        val expected = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+        assertEquals(expected, EdgeTts.expectedAccept(wsKey))
+        assertEquals(101, EdgeTts.parseHttpStatusCode("HTTP/1.1 101 Switching Protocols"))
+        assertEquals(403, EdgeTts.parseHttpStatusCode("HTTP/1.1 403 Forbidden"))
+        assertNull(EdgeTts.parseHttpStatusCode("GARBAGE 101"))
+
+        // Valid 101 + matching Sec-WebSocket-Accept passes
+        EdgeTts.validateHandshakeResponse(
+            "HTTP/1.1 101 Switching Protocols",
+            mapOf("sec-websocket-accept" to expected),
+            wsKey
+        )
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun handshakeRejectsMismatchedSecWebSocketAccept() {
+        EdgeTts.validateHandshakeResponse(
+            "HTTP/1.1 101 Switching Protocols",
+            mapOf("sec-websocket-accept" to "wrong-accept"),
+            "dGhlIHNhbXBsZSBub25jZQ=="
+        )
+    }
+
+    @Test
+    fun shouldRetryAfter403WhenCrossingFiveMinuteBoundaryEvenWithSmallSkew() {
+        // tBefore = ...399s 与 tAfter = ...400s 仅差 1 秒，但跨越了 300s 分桶边界，必须允许重试
+        val tBefore = 1_700_000_399_000L
+        val tAfter = 1_700_000_400_000L
+        assertTrue(EdgeTts.shouldRetryAfter403(tBefore, tAfter))
+        // 同一个 5 分钟桶内且偏差 < 60s，不重复等待
+        assertTrue(!EdgeTts.shouldRetryAfter403(1_700_000_110_000L, 1_700_000_120_000L))
+        // 无服务端 Date 不重试
+        assertTrue(!EdgeTts.shouldRetryAfter403(tBefore, null))
+    }
+
+    @Test
+    fun orderAddressesIpv4FirstPromotesIpv4AheadOfIpv6() {
+        val v6 = java.net.InetAddress.getByName("2620:1ec:33::10")
+        val v4a = java.net.InetAddress.getByName("204.79.197.200")
+        val v4b = java.net.InetAddress.getByName("13.107.21.200")
+        val ordered = EdgeTts.orderAddressesIpv4First(listOf(v6, v4a, v4b))
+        assertEquals(listOf(v4a, v4b, v6), ordered)
     }
 }

@@ -39,6 +39,30 @@ object Foreground {
     )
     fun isTransient(pkg: String?): Boolean = pkg != null && transientPackages.contains(pkg)
 
+    @Volatile private var cachedImePackages: Set<String> = emptySet()
+    @Volatile private var cachedImeAt = 0L
+
+    internal fun isInputMethodName(pkg: String?): Boolean {
+        if (pkg.isNullOrEmpty()) return false
+        val lower = pkg.lowercase(java.util.Locale.US)
+        return lower.contains("inputmethod") || lower.contains("keyboard") || lower.contains("secime") || lower.contains("input_")
+    }
+
+    /** 识别系统已启用输入法及常见厂商安全键盘（如 com.huawei.secime、com.baidu.input_huawei），避免输密码弹键盘时触发误拦截 */
+    fun isInputMethod(context: Context, pkg: String?): Boolean {
+        if (pkg.isNullOrEmpty()) return false
+        if (isInputMethodName(pkg)) return true
+        val now = SystemClock.elapsedRealtime()
+        if (cachedImeAt == 0L || now - cachedImeAt > 60_000L) {
+            cachedImePackages = try {
+                val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+                imm?.enabledInputMethodList?.mapNotNull { it.packageName }?.toSet() ?: emptySet()
+            } catch (_: Exception) { emptySet() }
+            cachedImeAt = now
+        }
+        return cachedImePackages.contains(pkg)
+    }
+
     fun resumeOwn(activity: android.app.Activity) {
         ownActivity = java.lang.ref.WeakReference(activity)
         selfPackage = activity.packageName
@@ -87,7 +111,11 @@ object Foreground {
 
     /** 最近一个真正的前台应用（不含系统临时窗口），供「解锁后回到原画面」使用 */
     fun lastReal(): String? = lastRealPackage?.takeUnless { it == selfPackage || (it == lastPackage && isTransient(it)) }
-    fun hasResumedActivity(): Boolean = ownActivity?.get() != null
+    fun hasResumedActivity(): Boolean {
+        val activity = ownActivity?.get() ?: return false
+        if (Build.VERSION.SDK_INT >= 24 && activity.isInMultiWindowMode) return false
+        return true
+    }
     fun resumedActivity(): android.app.Activity? = ownActivity?.get()
     fun learningActivity(): android.app.Activity? = ownActivity?.get()?.takeIf { it is MainActivity }
 
@@ -122,17 +150,21 @@ object Foreground {
         }
         if (WatchAccessibilityService.connected) {
             val cached = lastPackage
-            // 缓存里是系统临时窗口 / 我们自己 / 已经很久没更新时不采信，先用使用情况统计重新确认，
+            // 缓存里是系统临时窗口 / 我们自己 / 已经很久没更新时不采信，先用实时窗口与使用情况统计重新确认，
             // 再退到最近一个「真正的前台应用」。否则小米电视上会被卡在 com.android.systemui 上
             // 一直判定为系统界面而不再计时（issue #69），或者在旧包名上永远不停（#93）。
-            if (cached != null && cached != self && !isTransient(cached) && fresh(lastPackageAt)) return cached
-            if (hasUsageAccess(context)) usageFallback(context)?.takeUnless { it == self || isTransient(it) }?.let { return it }
+            if (cached != null && cached != self && !isTransient(cached) && !isInputMethod(context, cached) && fresh(lastPackageAt)) return cached
+            WatchAccessibilityService.activeWindowPackage(context)?.let { live ->
+                update(live, if (live == lastPackage) lastClass else null)
+                return live
+            }
+            if (hasUsageAccess(context)) usageFallback(context)?.takeUnless { it == self || isTransient(it) || isInputMethod(context, it) }?.let { return it }
             // 兜底时不能返回本应用自己：那会被当成「在自家学习页」而停扣时长。
-            lastRealPackage?.takeIf { it != self && fresh(lastRealAt) }?.let { return it }
+            lastRealPackage?.takeIf { it != self && !isInputMethod(context, it) && fresh(lastRealAt) }?.let { return it }
             return null
         }
-        if (!hasUsageAccess(context)) return lastRealPackage?.takeIf { it != self && fresh(lastRealAt) }
-        return usageFallback(context)?.takeUnless { it == self || isTransient(it) }
+        if (!hasUsageAccess(context)) return lastRealPackage?.takeIf { it != self && !isInputMethod(context, it) && fresh(lastRealAt) }
+        return usageFallback(context)?.takeUnless { it == self || isTransient(it) || isInputMethod(context, it) }
     }
 
     /**
@@ -156,12 +188,18 @@ object Foreground {
             while (events.hasNextEvent()) {
                 events.getNextEvent(event)
                 val pkg = event.packageName ?: continue
-                // 系统临时窗口和我们自己都不算前台应用，否则同样会停扣时长 / 误判豁免
-                if (event.eventType != UsageEvents.Event.MOVE_TO_FOREGROUND) continue
-                if (isTransient(pkg) || pkg == context.packageName) continue
-                latest = pkg
-                latestClass = event.className
-                latestAge = (now - event.timeStamp).coerceAtLeast(0)
+                if (isTransient(pkg) || isInputMethod(context, pkg) || pkg == context.packageName) continue
+                if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND ||
+                    (Build.VERSION.SDK_INT >= 29 && event.eventType == UsageEvents.Event.ACTIVITY_RESUMED)) {
+                    latest = pkg
+                    latestClass = event.className
+                    latestAge = (now - event.timeStamp).coerceAtLeast(0)
+                    usageLatestPaused = false
+                } else if ((event.eventType == UsageEvents.Event.MOVE_TO_BACKGROUND ||
+                        (Build.VERSION.SDK_INT >= 29 && event.eventType == UsageEvents.Event.ACTIVITY_PAUSED)) &&
+                    pkg == (latest ?: usageLatest)) {
+                    usageLatestPaused = true
+                }
             }
             usageQueriedAt = now
             if (latest != null) {
@@ -170,15 +208,24 @@ object Foreground {
                 usageLatestAt = (SystemClock.elapsedRealtime() - latestAge).coerceAtLeast(1L)
             }
             val sticky = usageLatest
-            if (sticky != null && !isTransient(sticky) && fresh(usageLatestAt)) return sticky
+            // #173：连续使用同一款不计时应用（如网课 / 阅读 / BiliPicks）超过 30 分钟不切应用时不会产生新的前台事件；
+            // 只要该应用尚未收到退后台事件，且仍在播放音视频或本身在「不计时白名单」内，继续认为它在前台，避免 30 分钟后掉回 pkg=null 误计时弹题。
+            val stickyWhitelisted = sticky != null && try {
+                WatchWhitelist.of(DeviceRuntime.store.config()).contains(sticky)
+            } catch (_: Throwable) { false }
+            if (sticky != null && !isTransient(sticky) && !isInputMethod(context, sticky) &&
+                (fresh(usageLatestAt) || (!usageLatestPaused && (Playback.hasActive(context) || stickyWhitelisted)))) {
+                return sticky
+            }
             // 没有可用事件（例如刚开机还没有新事件）时，退到最近真的用过的应用；
-            // 只接受 STALE_MS 内用过的，避免把早已退出的应用当成当前前台（#93）。
+            // 只接受 STALE_MS 内用过的，避免把早已退出的应用当成当前前台（#93），同时过滤输入法避免污染 usageLatest（ST-104）。
             val recent = try {
-                manager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, now - 86400000, now)
-                    ?.filter {
-                        it.lastTimeUsed > 0 && now - it.lastTimeUsed <= STALE_MS &&
-                            !isTransient(it.packageName) && it.packageName != context.packageName
-                    }?.maxByOrNull { it.lastTimeUsed }
+                val stats = manager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, now - 86400000, now)
+                    ?.mapNotNull { stat ->
+                        val pkg = stat.packageName
+                        if (pkg.isNullOrEmpty()) null else UsageCandidate(pkg, stat.lastTimeUsed)
+                    }.orEmpty()
+                pickRecentUsage(stats, now, context.packageName) { isInputMethod(context, it) }
             } catch (_: Exception) { null }
             if (recent == null) return null
             usageLatest = recent.packageName
@@ -189,11 +236,31 @@ object Foreground {
         } catch (_: Exception) { null }
     }
 
+    internal data class UsageCandidate(val packageName: String, val lastTimeUsed: Long)
+
+    internal fun pickRecentUsage(
+        candidates: Iterable<UsageCandidate>,
+        now: Long,
+        selfPackage: String,
+        isInputMethodPkg: (String) -> Boolean
+    ): UsageCandidate? = candidates
+        .asSequence()
+        .filter {
+            it.lastTimeUsed > 0L &&
+                now - it.lastTimeUsed <= STALE_MS &&
+                it.packageName.isNotEmpty() &&
+                it.packageName != selfPackage &&
+                !isTransient(it.packageName) &&
+                !isInputMethodPkg(it.packageName)
+        }
+        .maxByOrNull { it.lastTimeUsed }
+
     @Volatile private var usageQueriedAt = 0L
     @Volatile private var usageLatest: String? = null
     @Volatile private var usageLatestClass: String? = null
     /** usageLatest 是什么时候被确认的（elapsedRealtime） */
     @Volatile private var usageLatestAt = 0L
+    @Volatile private var usageLatestPaused = false
 
     fun hasUsageAccess(context: Context): Boolean = try {
         val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as android.app.AppOpsManager

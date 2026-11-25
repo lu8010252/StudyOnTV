@@ -27,6 +27,7 @@ class UpdateInstallReceiver : BroadcastReceiver() {
                 try {
                     confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     context.startActivity(confirm)
+                    Updater.onInstallPendingUserAction()
                     Diag.info("Install", "user confirm page started")
                     return
                 } catch (e: Exception) {
@@ -34,10 +35,14 @@ class UpdateInstallReceiver : BroadcastReceiver() {
                 }
             }
             // 拉不起确认页（部分电视限制后台启动界面）：退回交给系统安装器
-            if (ApkInstaller.fallbackToView(context)) Diag.info("Install", "fallback installer started")
-            else {
-                Prefs.setUpdateInstallError(context, ApkInstaller.lastError.ifEmpty { "无法打开安装确认页" })
+            if (ApkInstaller.fallbackToView(context)) {
+                Updater.onInstallPendingUserAction()
+                Diag.info("Install", "fallback installer started")
+            } else {
+                val err = ApkInstaller.lastError.ifEmpty { "无法打开安装确认页" }
+                Prefs.setUpdateInstallError(context, err)
                 Prefs.setUpdateInProgress(context, false)
+                Updater.onInstallResult(success = false, message = err)
             }
             return
         }
@@ -45,6 +50,7 @@ class UpdateInstallReceiver : BroadcastReceiver() {
             Diag.info("Install", "install succeeded")
             Prefs.setUpdateInstallError(context, "")
             Prefs.setUpdateInProgress(context, false)
+            Updater.onInstallResult(success = true, message = "安装成功")
             return
         }
         val text = when (status) {
@@ -59,7 +65,9 @@ class UpdateInstallReceiver : BroadcastReceiver() {
         }
         val detail = if (message.isBlank()) text else "$text：$message"
         Diag.error("Install", "install failed status=$status message=$message")
-        Prefs.setUpdateInstallError(context, detail.take(300))
+        val trimmed = detail.take(300)
+        Prefs.setUpdateInstallError(context, trimmed)
         Prefs.setUpdateInProgress(context, false)
+        Updater.onInstallResult(success = false, message = trimmed)
     }
 }
